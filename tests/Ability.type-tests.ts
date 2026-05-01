@@ -106,6 +106,52 @@ export const invalidManageValue = Effect.gen(function* () {
   })
 })
 
+const aliasAbility = Ability.define<Subjects>()(
+  function* (ability) {
+    yield* ability.allow("modify", "Post", {
+      fields: ["title"],
+      when: (post) => post.authorId === "u1"
+    })
+  },
+  {
+    actionAliases: {
+      modify: ["update", "delete"]
+    } as const
+  }
+)
+
+export const aliasUsage = Effect.gen(function* () {
+  const post = {} as Post
+
+  yield* Ability.check(aliasAbility, {
+    action: "update",
+    subject: "Post",
+    value: post,
+    field: "title"
+  })
+})
+
+export const invalidReverseAliasUsage = Effect.gen(function* () {
+  const post = {} as Post
+  const reverseAliasAbility = Ability.define<Subjects>()(
+    function* (ability) {
+      yield* ability.allow(["update", "delete"], "Post")
+    },
+    {
+      actionAliases: {
+        modify: ["update", "delete"]
+      } as const
+    }
+  )
+
+  yield* Ability.check(reverseAliasAbility, {
+    // @ts-expect-error aliases are one-directional; update/delete rules do not imply modify
+    action: "modify",
+    subject: "Post",
+    value: post
+  })
+})
+
 export const typedSubjectUsage = Effect.gen(function* () {
   const post = {} as Post
 
@@ -133,11 +179,40 @@ const effectfulAbility = Ability.define<Subjects>()(function* (ability) {
   })
 })
 
+const effectfulAliasAbility = Ability.define<Subjects>()(
+  function* (ability) {
+    yield* ability.allow("modify", "Post", {
+      when: () => Effect.gen(function* () {
+        const service = yield* PolicyService
+        if (service.allowed) {
+          return true
+        }
+        return yield* Effect.fail(new PredicateError())
+      })
+    })
+  },
+  {
+    actionAliases: {
+      modify: ["update", "delete"]
+    } as const
+  }
+)
+
 export const predicateErrorProgram = Effect.gen(function* () {
   const post = {} as Post
 
   yield* Ability.check(effectfulAbility, {
     action: "read",
+    subject: "Post",
+    value: post
+  })
+})
+
+export const predicateAliasErrorProgram = Effect.gen(function* () {
+  const post = {} as Post
+
+  yield* Ability.check(effectfulAliasAbility, {
+    action: "update",
     subject: "Post",
     value: post
   })
@@ -150,3 +225,5 @@ type Expect<Condition extends true> = Condition
 export type PredicateErrorIsCarried = Expect<HasError<Effect.Error<typeof predicateErrorProgram>, PredicateError>>
 export type AuthorizationErrorIsCarried = Expect<HasError<Effect.Error<typeof predicateErrorProgram>, Ability.AuthorizationError>>
 export type PolicyServiceIsCarried = Expect<HasService<Effect.Services<typeof predicateErrorProgram>, PolicyService>>
+export type AliasPredicateErrorIsCarried = Expect<HasError<Effect.Error<typeof predicateAliasErrorProgram>, PredicateError>>
+export type AliasPolicyServiceIsCarried = Expect<HasService<Effect.Services<typeof predicateAliasErrorProgram>, PolicyService>>

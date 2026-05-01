@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { Ability, AbilityRef } from "../src/index"
+import { Ability, AbilityExtra, AbilityRef } from "../src/index"
 
 interface Comment {
   readonly authorId: string
@@ -50,6 +50,14 @@ const ability = Ability.define<Subjects>()(function* (ability) {
       comments: { $elemMatch: { authorId: "u1" } }
     }
   })
+  yield* ability.allow("changeTitle", "Post", {
+    fields: ["title"],
+    conditions: { authorId: "u1" }
+  })
+}, {
+  actionAliases: {
+    changeTitle: ["update"]
+  } as const
 })
 
 const program = Effect.gen(function* () {
@@ -80,6 +88,15 @@ const program = Effect.gen(function* () {
     fieldsFrom: (rule) => rule.fields ?? ["id", "authorId", "published", "title", "body", "tags", "comments"]
   })
 
+  const actions = yield* Ability.actionsFor(current, {
+    subject: "Post"
+  })
+  const defaultFields = yield* AbilityExtra.rulesToFields(current, {
+    action: "read",
+    subject: "Post"
+  })
+  const packedRules = AbilityExtra.packRules(yield* Ability.toRawRules(current, { strict: false }))
+
   yield* AbilityRef.update(ref, [
     {
       action: "read",
@@ -94,6 +111,9 @@ const program = Effect.gen(function* () {
   return {
     deleteResult,
     fields,
+    actions,
+    defaultFields,
+    packedRuleCount: packedRules.length,
     events
   }
 })

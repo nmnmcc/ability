@@ -7,7 +7,7 @@ The public API is a module of functions:
 - `Ability.define` synchronously builds an immutable ability from a generator DSL.
 - `Ability.check` is the only authorization check API and returns `Effect<void, AuthorizationError | PredicateError | ConditionError>`.
 - There is no synchronous `can` / `cannot` / `allows` API. Boolean checks are derived with Effect combinators.
-- Database query generation, ORM adapters, and `accessibleBy`-style helpers are intentionally out of scope.
+- ORM adapters and `accessibleBy`-style helpers are intentionally out of scope.
 
 ## Basic usage
 
@@ -106,6 +106,32 @@ yield* ability.allow("read", "Post", {
 
 `conditions` and `when` are combined with AND. Predicate failures remain typed Effect failures.
 
+Action aliases can expand one rule into several checkable actions:
+
+```ts
+const ability = Ability.define<Subjects>()(
+  function* (ability) {
+    yield* ability.allow("modify", "Post", {
+      fields: ["title", "body"]
+    })
+  },
+  {
+    actionAliases: {
+      modify: ["update", "delete"]
+    } as const
+  }
+)
+
+yield* Ability.check(ability, {
+  action: "update",
+  subject: "Post",
+  value: post,
+  field: "title"
+})
+```
+
+Aliases are one-directional: a `modify` rule matches `update`, but separate `update` and `delete` rules do not imply `modify`.
+
 ## Subjects and fields
 
 DTOs can be wrapped without mutation:
@@ -139,6 +165,26 @@ const fields = yield* Ability.permittedFields(ability, {
 })
 ```
 
+For debugging or extensions, inspect indexed rules as Effects:
+
+```ts
+const rules = yield* Ability.rulesFor(ability, {
+  action: "update",
+  subject: "Post",
+  field: "title"
+})
+
+const rule = yield* Ability.relevantRuleFor(ability, {
+  action: "delete",
+  subject: "Post",
+  value: post
+})
+
+const actions = yield* Ability.actionsFor(ability, {
+  subject: "Post"
+})
+```
+
 ## Raw rules and dynamic updates
 
 Raw rules are JSON-safe and do not include `when` predicates:
@@ -151,6 +197,34 @@ const ability = yield* Ability.fromRawRules<Subjects>([
 
 const rules = yield* Ability.toRawRules(ability)
 ```
+
+Use `AbilityExtra` for compact raw-rule transport and ORM-independent rule transforms:
+
+```ts
+import { AbilityExtra } from "ability"
+
+const packed = AbilityExtra.packRules(rules)
+const unpacked = AbilityExtra.unpackRules(packed)
+
+const defaults = yield* AbilityExtra.rulesToFields(ability, {
+  action: "read",
+  subject: "Post"
+})
+
+const condition = yield* AbilityExtra.rulesToCondition(
+  ability,
+  { action: "read", subject: "Post" },
+  (rule) => rule.conditions ?? {},
+  {
+    and: (conditions) => ({ $and: conditions }),
+    or: (conditions) => ({ $or: conditions }),
+    not: (condition) => ({ $not: condition }),
+    empty: () => ({})
+  }
+)
+```
+
+Rule transforms fail with `QueryGenerationError` when a relevant rule contains a `when` predicate, because function predicates cannot be serialized into a query.
 
 `Ability` stays immutable. Use `AbilityRef` when an application needs to replace the current ability:
 

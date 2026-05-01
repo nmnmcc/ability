@@ -20,6 +20,7 @@ export const SubjectTypeId: unique symbol = Symbol.for("@nmnmcc/ability/Subject"
 
 const anyAction = "manage"
 const anySubject = "all"
+const RuleIndexTypeId: unique symbol = Symbol.for("@nmnmcc/ability/Ability/ruleIndex") as never
 
 interface RuntimeRequest {
   readonly action: string
@@ -40,8 +41,22 @@ interface RuntimeRule {
   readonly reason?: string
 }
 
-interface RuntimeAbility extends Ability.Ability<Ability.SubjectMap, Ability.AnyRule> {
-  readonly options: Ability.AbilityOptions<Ability.SubjectMap>
+interface RuntimeSubjectRequest {
+  readonly subject: string
+  readonly value?: object
+}
+
+interface IndexedRule {
+  readonly rule: RuntimeRule
+  readonly index: number
+}
+
+interface RuleIndex {
+  readonly rulesBySubject: ReadonlyMap<string, ReadonlyMap<string, ReadonlyArray<IndexedRule>>>
+}
+
+type RuntimeAbility = Ability.Ability<Ability.SubjectMap, Ability.AnyRule, Ability.ActionAliases> & {
+  readonly options: Ability.AbilityOptions<Ability.SubjectMap, Ability.ActionAliases>
 }
 
 /**
@@ -94,6 +109,25 @@ export class SubjectDetectionError extends Data.TaggedError("SubjectDetectionErr
   readonly cause?: unknown
 }> {}
 
+/**
+ * @since 0.1.0
+ * @category Errors
+ */
+export class AliasError extends Data.TaggedError("AliasError")<{
+  readonly reason: string
+  readonly action?: string
+}> {}
+
+/**
+ * @since 0.1.0
+ * @category Errors
+ */
+export class QueryGenerationError extends Data.TaggedError("QueryGenerationError")<{
+  readonly reason: string
+  readonly ruleIndex?: number
+  readonly cause?: unknown
+}> {}
+
 const copyArray = <A>(value: ReadonlyArray<A>): ReadonlyArray<A> => Object.freeze(Array.from(value))
 
 const wrapArray = <A>(value: Ability.SingleOrReadonlyArray<A>): ReadonlyArray<A> =>
@@ -101,6 +135,115 @@ const wrapArray = <A>(value: Ability.SingleOrReadonlyArray<A>): ReadonlyArray<A>
 
 const normalizeArray = <A>(value: Ability.SingleOrReadonlyArray<A>): Ability.SingleOrReadonlyArray<A> =>
   Array.isArray(value) ? copyArray(value as ReadonlyArray<A>) : value
+
+const unique = <A>(values: Iterable<A>): ReadonlyArray<A> =>
+  Object.freeze(Array.from(new Set(values)))
+
+const aliasError = (reason: string, action?: string): AliasError => {
+  const error: {
+    reason: string
+    action?: string
+  } = {
+    reason
+  }
+  if (action !== undefined) {
+    error.action = action
+  }
+  return new AliasError(error)
+}
+
+const normalizeActionAliases = (
+  aliases: Ability.ActionAliases | undefined
+): Readonly<Record<string, ReadonlyArray<string>>> => {
+  if (aliases === undefined) {
+    return Object.freeze({})
+  }
+
+  const normalized: Record<string, ReadonlyArray<string>> = {}
+  for (const action of Object.keys(aliases)) {
+    if (action === anyAction) {
+      throw aliasError(`Cannot use "${anyAction}" as an action alias`, action)
+    }
+
+    const targets = wrapArray(aliases[action] as Ability.SingleOrReadonlyArray<string>)
+    if (targets.length === 0) {
+      throw aliasError("Action alias cannot target an empty action list", action)
+    }
+    for (const target of targets) {
+      if (target === anyAction) {
+        throw aliasError(`Cannot create an alias to reserved action "${anyAction}"`, action)
+      }
+    }
+    normalized[action] = copyArray(targets)
+  }
+
+  const visiting = new Set<string>()
+  const visited = new Set<string>()
+  const visit = (action: string, path: ReadonlyArray<string>): void => {
+    if (visited.has(action)) {
+      return
+    }
+    if (visiting.has(action)) {
+      throw aliasError(`Detected cyclic action alias: ${[...path, action].join(" -> ")}`, action)
+    }
+
+    const targets = normalized[action]
+    if (targets === undefined) {
+      return
+    }
+
+    visiting.add(action)
+    for (const target of targets) {
+      if (target === action) {
+        throw aliasError(`Action alias "${action}" cannot reference itself`, action)
+      }
+      visit(target, [...path, action])
+    }
+    visiting.delete(action)
+    visited.add(action)
+  }
+
+  for (const action of Object.keys(normalized)) {
+    visit(action, [])
+  }
+
+  return Object.freeze(normalized)
+}
+
+const expandAction = (
+  aliases: Readonly<Record<string, ReadonlyArray<string>>>,
+  action: string,
+  output: Set<string>
+): void => {
+  if (output.has(action)) {
+    return
+  }
+
+  output.add(action)
+  const targets = aliases[action]
+  if (targets === undefined) {
+    return
+  }
+  for (const target of targets) {
+    expandAction(aliases, target, output)
+  }
+}
+
+/**
+ * @internal
+ */
+export const createAliasResolver = <const Aliases extends Ability.ActionAliases>(
+  aliases: Aliases
+): Ability.ActionResolver => {
+  const normalized = normalizeActionAliases(aliases)
+  return (action) => {
+    const actions = new Set<string>()
+    for (const value of wrapArray(action)) {
+      expandAction(normalized, value, actions)
+    }
+    return unique(actions)
+  }
+}
 
 function* ruleIterator<Rule extends Ability.AnyRule>(rule: Rule): Generator<Rule, Rule, Rule> {
   return yield rule
@@ -157,7 +300,7 @@ const RuleProto = {
 const AbilityProto = {
   ...Pipeable.Prototype,
   [TypeId]: TypeId,
-  toJSON(this: Ability.Ability<Ability.SubjectMap, Ability.AnyRule>) {
+  toJSON(this: Ability.Ability<Ability.SubjectMap, Ability.AnyRule, Ability.ActionAliases>) {
     return {
       _id: "Ability",
       rules: this.rules
@@ -178,13 +321,17 @@ const SubjectProto = {
 }
 
 const freezeOptions = <Subjects extends Ability.SubjectMap>(
-  options: Ability.AbilityOptions<Subjects> | undefined
-): Ability.AbilityOptions<Subjects> => {
+  options: Ability.AbilityOptions<Subjects, Ability.ActionAliases> | undefined
+): Ability.AbilityOptions<Subjects, Ability.ActionAliases> => {
   const copy: {
     detectSubjectType?: Ability.DetectSubjectType<Subjects>
+    actionAliases?: Ability.ActionAliases
   } = {}
   if (options?.detectSubjectType !== undefined) {
     copy.detectSubjectType = options.detectSubjectType
+  }
+  if (options?.actionAliases !== undefined) {
+    copy.actionAliases = normalizeActionAliases(options.actionAliases)
   }
   return Object.freeze(copy)
 }
@@ -219,20 +366,88 @@ const freezeRule = <Rules extends Ability.AnyRule>(rule: Rules): Rules => {
   return Object.freeze(copy) as Rules
 }
 
+const addIndexedRule = (
+  index: Map<string, Map<string, Array<IndexedRule>>>,
+  subjectName: string,
+  action: string,
+  indexedRule: IndexedRule
+): void => {
+  let subjectIndex = index.get(subjectName)
+  if (subjectIndex === undefined) {
+    subjectIndex = new Map()
+    index.set(subjectName, subjectIndex)
+  }
+
+  let rules = subjectIndex.get(action)
+  if (rules === undefined) {
+    rules = []
+    subjectIndex.set(action, rules)
+  }
+  rules.push(indexedRule)
+}
+
+const freezeRuleIndex = (
+  index: Map<string, Map<string, Array<IndexedRule>>>
+): RuleIndex => {
+  const subjects = new Map<string, ReadonlyMap<string, ReadonlyArray<IndexedRule>>>()
+  for (const [subjectName, actions] of index) {
+    const actionIndex = new Map<string, ReadonlyArray<IndexedRule>>()
+    for (const [action, rules] of actions) {
+      actionIndex.set(action, Object.freeze(rules.slice().sort((a, b) => b.index - a.index)))
+    }
+    subjects.set(subjectName, actionIndex)
+  }
+  return Object.freeze({
+    rulesBySubject: subjects
+  })
+}
+
+const buildRuleIndex = (
+  rules: ReadonlyArray<RuntimeRule>,
+  aliases: Ability.ActionAliases | undefined
+): RuleIndex => {
+  const resolver = createAliasResolver(aliases ?? {})
+  const index = new Map<string, Map<string, Array<IndexedRule>>>()
+  let ruleIndex = 0
+
+  for (const rule of rules) {
+    const indexedRule: IndexedRule = {
+      rule,
+      index: ruleIndex
+    }
+    const actions = resolver(rule.action)
+    const subjects = wrapArray(rule.subject)
+
+    for (const subjectName of subjects) {
+      for (const action of actions) {
+        addIndexedRule(index, subjectName, action, indexedRule)
+      }
+    }
+    ruleIndex = ruleIndex + 1
+  }
+
+  return freezeRuleIndex(index)
+}
+
+const getRuleIndex = (self: RuntimeAbility): RuleIndex =>
+  (self as unknown as { readonly [RuleIndexTypeId]: RuleIndex })[RuleIndexTypeId]
+
 /**
  * @internal
  */
-export const make = <Subjects extends Ability.SubjectMap, Rules extends Ability.AnyRule>(
+export const make = <Subjects extends Ability.SubjectMap, Rules extends Ability.AnyRule, Aliases extends Ability.ActionAliases = {}>(
   rules: Iterable<Rules>,
-  options?: Ability.AbilityOptions<Subjects>
-): Ability.Ability<Subjects, Rules> => {
+  options?: Ability.AbilityOptions<Subjects, Aliases>
+): Ability.Ability<Subjects, Rules, Aliases> => {
   const self = Object.create(AbilityProto) as {
     rules: ReadonlyArray<Rules>
-    options: Ability.AbilityOptions<Subjects>
+    options: Ability.AbilityOptions<Subjects, Ability.ActionAliases>
+    [RuleIndexTypeId]: RuleIndex
   }
   self.rules = Object.freeze(Array.from(rules, freezeRule))
   self.options = freezeOptions(options)
-  return self as Ability.Ability<Subjects, Rules>
+  self[RuleIndexTypeId] = buildRuleIndex(self.rules as ReadonlyArray<RuntimeRule>, self.options.actionAliases)
+  return self as unknown as Ability.Ability<Subjects, Rules, Aliases>
 }
 
 const makeRule = <
@@ -285,11 +500,12 @@ const builder = <Subjects extends Ability.SubjectMap>(): Ability.Builder<Subject
 
 type Define = <Subjects extends Ability.SubjectMap>() => <
   Eff extends Ability.AnyRule,
-  A
+  A,
+  Aliases extends Ability.ActionAliases = {}
 >(
   body: (builder: Ability.Builder<Subjects>) => Generator<Eff, A, any>,
-  options?: Ability.AbilityOptions<Subjects>
-) => Ability.Ability<Subjects, Eff>
+  options?: Ability.AbilityOptions<Subjects, Aliases>
+) => Ability.Ability<Subjects, Eff, Aliases>
 
 /**
  * @internal
@@ -297,10 +513,11 @@ type Define = <Subjects extends Ability.SubjectMap>() => <
 export const define = (<Subjects extends Ability.SubjectMap>() =>
 <
   Eff extends Ability.AnyRule,
-  A
+  A,
+  Aliases extends Ability.ActionAliases = {}
 >(
   body: (builder: Ability.Builder<Subjects>) => Generator<Eff, A, any>,
-  options?: Ability.AbilityOptions<Subjects>
+  options?: Ability.AbilityOptions<Subjects, Aliases>
 ) => {
   const rules: Array<Eff> = []
   const iterator = body(builder<Subjects>())
@@ -311,7 +528,7 @@ export const define = (<Subjects extends Ability.SubjectMap>() =>
     state = iterator.next(state.value)
   }
 
-  return make<Subjects, Eff>(rules, options)
+  return make<Subjects, Eff, Aliases>(rules, options)
 }
 ) as Define
 
@@ -360,8 +577,8 @@ const detectFromConstructor = (value: object): string | undefined => {
 /**
  * @internal
  */
-export const detectSubjectType = Effect.fnUntraced(function*<Subjects extends Ability.SubjectMap, Rules extends Ability.AnyRule>(
-  self: Ability.Ability<Subjects, Rules>,
+export const detectSubjectType = Effect.fnUntraced(function*<Subjects extends Ability.SubjectMap, Rules extends Ability.AnyRule, Aliases extends Ability.ActionAliases>(
+  self: Ability.Ability<Subjects, Rules, Aliases>,
   value: object | Ability.TypedSubject<Ability.SubjectName<Subjects>, Ability.SubjectUnion<Subjects>>
 ): Effect.fn.Return<Ability.SubjectName<Subjects>, SubjectDetectionError> {
   if (isSubject(value)) {
@@ -418,7 +635,7 @@ const toRuntimeRequest = Effect.fnUntraced(function*(
     }))
   }
 
-  if (request.value !== undefined) {
+  if (hasOwnValue(request)) {
     runtime.value = unwrapSubject(request.value)
   }
   if (request.field !== undefined) {
@@ -428,18 +645,33 @@ const toRuntimeRequest = Effect.fnUntraced(function*(
   return runtime
 })
 
-const hasAny = (values: ReadonlyArray<string>, value: string): boolean =>
-  values.includes(value)
+const toRuntimeSubjectRequest = Effect.fnUntraced(function*(
+  self: RuntimeAbility,
+  request: { readonly subject?: string; readonly value?: object | Ability.TypedSubject<string, object> }
+): Effect.fn.Return<RuntimeSubjectRequest, SubjectDetectionError> {
+  const runtime: {
+    subject: string
+    value?: object
+  } = {
+    subject: ""
+  }
 
-const matchesAction = (rule: RuntimeRule, action: string): boolean => {
-  const actions = wrapArray(rule.action)
-  return hasAny(actions, action) || hasAny(actions, anyAction)
-}
+  if (hasOwnSubject(request)) {
+    runtime.subject = request.subject
+  } else if (hasOwnValue(request)) {
+    runtime.subject = yield* detectSubjectType(self, request.value)
+  } else {
+    return yield* Effect.fail(new SubjectDetectionError({
+      reason: "A subject query request must include either a subject or a value"
+    }))
+  }
 
-const matchesSubject = (rule: RuntimeRule, subjectName: string): boolean => {
-  const subjects = wrapArray(rule.subject)
-  return hasAny(subjects, subjectName) || hasAny(subjects, anySubject)
-}
+  if (hasOwnValue(request)) {
+    runtime.value = unwrapSubject(request.value)
+  }
+
+  return runtime
+})
 
 const regexpSpecialChars = /[-/\\^$+?.()|[\]{}]/g
 const regexpAny = /\.?\*+\.?/g
@@ -540,11 +772,11 @@ const matchesPredicate = (
   return Effect.isEffect(result) ? result : Effect.succeed(result)
 }
 
-const matchesRule = Effect.fnUntraced(function*(
+const matchesCandidateRule = Effect.fnUntraced(function*(
   rule: RuntimeRule,
   request: RuntimeRequest
 ): Effect.fn.Return<boolean, ConditionError | unknown, unknown> {
-  if (!matchesAction(rule, request.action) || !matchesSubject(rule, request.subject) || !matchesField(rule, request)) {
+  if (!matchesField(rule, request)) {
     return false
   }
 
@@ -556,26 +788,69 @@ const matchesRule = Effect.fnUntraced(function*(
   return yield* matchesPredicate(rule, request)
 })
 
-const possibleRulesFor = (
-  rules: ReadonlyArray<RuntimeRule>,
+const collectIndexedRules = (
+  self: RuntimeAbility,
+  request: RuntimeRequest,
+  order: "ascending" | "descending"
+): ReadonlyArray<RuntimeRule> => {
+  const collected = new Map<RuntimeRule, IndexedRule>()
+  const pairs: Array<readonly [string, string]> = [
+    [request.subject, request.action]
+  ]
+
+  if (request.action !== anyAction) {
+    pairs.push([request.subject, anyAction])
+  }
+  if (request.subject !== anySubject) {
+    pairs.push([anySubject, request.action])
+  }
+  if (request.subject !== anySubject && request.action !== anyAction) {
+    pairs.push([anySubject, anyAction])
+  }
+
+  for (const [subjectName, action] of pairs) {
+    const subjectIndex = getRuleIndex(self).rulesBySubject.get(subjectName)
+    const rules = subjectIndex?.get(action)
+    if (rules !== undefined) {
+      for (const indexedRule of rules) {
+        collected.set(indexedRule.rule, indexedRule)
+      }
+    }
+  }
+
+  const sorted = Array.from(collected.values()).sort((a, b) =>
+    order === "descending" ? b.index - a.index : a.index - b.index
+  )
+  return Object.freeze(sorted.map((indexedRule) => indexedRule.rule))
+}
+
+const possibleRulesForRequest = (
+  self: RuntimeAbility,
   request: RuntimeRequest
 ): ReadonlyArray<RuntimeRule> =>
-  rules.filter((rule) => matchesAction(rule, request.action) && matchesSubject(rule, request.subject))
+  collectIndexedRules(self, request, "descending")
+
+const possibleRulesForDefinitionOrder = (
+  self: RuntimeAbility,
+  request: RuntimeRequest
+): ReadonlyArray<RuntimeRule> =>
+  collectIndexedRules(self, request, "ascending")
 
 const relevantRuleForEffect = Effect.fnUntraced(function*(
-  rules: ReadonlyArray<RuntimeRule>,
+  self: RuntimeAbility,
   request: RuntimeRequest
 ): Effect.fn.Return<RuntimeRule | undefined, ConditionError | unknown, unknown> {
-  let index = rules.length - 1
-  while (index >= 0) {
+  const rules = possibleRulesForRequest(self, request)
+  let index = 0
+  while (index < rules.length) {
     const rule = rules[index]
     if (rule !== undefined) {
-      const matches = yield* matchesRule(rule, request)
+      const matches = yield* matchesCandidateRule(rule, request)
       if (matches) {
         return rule
       }
     }
-    index = index - 1
+    index = index + 1
   }
   return undefined
 })
@@ -609,7 +884,7 @@ const checkEffect = Effect.fnUntraced(function*(
   request: { readonly action: string; readonly subject?: string; readonly value?: object | Ability.TypedSubject<string, object>; readonly field?: string }
 ): Effect.fn.Return<void, AuthorizationError | ConditionError | SubjectDetectionError | unknown, unknown> {
   const runtimeRequest = yield* toRuntimeRequest(self, request)
-  const rule = yield* relevantRuleForEffect(self.rules as ReadonlyArray<RuntimeRule>, runtimeRequest)
+  const rule = yield* relevantRuleForEffect(self, runtimeRequest)
   if (rule?._tag === "Allow") {
     return undefined
   }
@@ -620,6 +895,73 @@ const checkEffect = Effect.fnUntraced(function*(
  * @internal
  */
 export const check = dual(2, checkEffect)
+
+const possibleRulesForEffect = Effect.fnUntraced(function*(
+  self: RuntimeAbility,
+  request: { readonly action: string; readonly subject?: string; readonly value?: object | Ability.TypedSubject<string, object>; readonly field?: string }
+): Effect.fn.Return<ReadonlyArray<RuntimeRule>, SubjectDetectionError> {
+  const runtimeRequest = yield* toRuntimeRequest(self, request)
+  return possibleRulesForRequest(self, runtimeRequest)
+})
+
+/**
+ * @internal
+ */
+export const possibleRulesFor = dual(2, possibleRulesForEffect)
+
+const rulesForEffect = Effect.fnUntraced(function*(
+  self: RuntimeAbility,
+  request: { readonly action: string; readonly subject?: string; readonly value?: object | Ability.TypedSubject<string, object>; readonly field?: string }
+): Effect.fn.Return<ReadonlyArray<RuntimeRule>, SubjectDetectionError> {
+  const runtimeRequest = yield* toRuntimeRequest(self, request)
+  return Object.freeze(possibleRulesForRequest(self, runtimeRequest).filter((rule) => matchesField(rule, runtimeRequest)))
+})
+
+/**
+ * @internal
+ */
+export const rulesFor = dual(2, rulesForEffect)
+
+const relevantRuleForAccessorEffect = Effect.fnUntraced(function*(
+  self: RuntimeAbility,
+  request: { readonly action: string; readonly subject?: string; readonly value?: object | Ability.TypedSubject<string, object>; readonly field?: string }
+): Effect.fn.Return<RuntimeRule | undefined, ConditionError | SubjectDetectionError | unknown, unknown> {
+  const runtimeRequest = yield* toRuntimeRequest(self, request)
+  return yield* relevantRuleForEffect(self, runtimeRequest)
+})
+
+/**
+ * @internal
+ */
+export const relevantRuleFor = dual(2, relevantRuleForAccessorEffect)
+
+const actionsForEffect = Effect.fnUntraced(function*(
+  self: RuntimeAbility,
+  request: { readonly subject?: string; readonly value?: object | Ability.TypedSubject<string, object> }
+): Effect.fn.Return<ReadonlyArray<string>, SubjectDetectionError> {
+  const runtimeRequest = yield* toRuntimeSubjectRequest(self, request)
+  const actions = new Set<string>()
+  const collect = (subjectName: string): void => {
+    const subjectIndex = getRuleIndex(self).rulesBySubject.get(subjectName)
+    if (subjectIndex !== undefined) {
+      for (const action of subjectIndex.keys()) {
+        actions.add(action)
+      }
+    }
+  }
+
+  collect(runtimeRequest.subject)
+  if (runtimeRequest.subject !== anySubject) {
+    collect(anySubject)
+  }
+
+  return unique(actions)
+})
+
+/**
+ * @internal
+ */
+export const actionsFor = dual(2, actionsForEffect)
 
 const rawRuleError = (reason: string, ruleIndex: number, cause?: unknown): RawRuleError => {
   const error: {
@@ -663,10 +1005,10 @@ const validateRawConditions = (
 /**
  * @internal
  */
-export const fromRawRules = Effect.fnUntraced(function*<Subjects extends Ability.SubjectMap>(
+export const fromRawRules = Effect.fnUntraced(function*<Subjects extends Ability.SubjectMap, Aliases extends Ability.ActionAliases = {}>(
   rules: Iterable<Ability.RawRule<string, Ability.RuleSubject<Subjects>, string, Ability.MongoCondition<Ability.SubjectUnion<Subjects>>>>,
-  options?: Ability.AbilityOptions<Subjects>
-): Effect.fn.Return<Ability.Ability<Subjects, Ability.AnyRule>, RawRuleError> {
+  options?: Ability.AbilityOptions<Subjects, Aliases>
+): Effect.fn.Return<Ability.Ability<Subjects, Ability.AnyRule, Aliases>, RawRuleError> {
   const built: Array<Ability.AnyRule> = []
   let index = 0
 
@@ -697,7 +1039,7 @@ export const fromRawRules = Effect.fnUntraced(function*<Subjects extends Ability
     index = index + 1
   }
 
-  return make<Subjects, Ability.AnyRule>(built, options)
+  return make<Subjects, Ability.AnyRule, Aliases>(built, options)
 })
 
 const ruleToRaw = (
@@ -732,8 +1074,8 @@ const ruleToRaw = (
 /**
  * @internal
  */
-export const toRawRules = Effect.fnUntraced(function*<Subjects extends Ability.SubjectMap, Rules extends Ability.AnyRule>(
-  self: Ability.Ability<Subjects, Rules>,
+export const toRawRules = Effect.fnUntraced(function*<Subjects extends Ability.SubjectMap, Rules extends Ability.AnyRule, Aliases extends Ability.ActionAliases>(
+  self: Ability.Ability<Subjects, Rules, Aliases>,
   options?: Ability.ToRawRulesOptions
 ): Effect.fn.Return<ReadonlyArray<Ability.RawRule>, SerializationError> {
   const strict = options?.strict !== false
@@ -766,7 +1108,7 @@ const permittedFieldsEffect = Effect.fnUntraced(function*(
   options: Ability.PermittedFieldsOptions<Ability.AnyRule>
 ): Effect.fn.Return<ReadonlyArray<string>, ConditionError | SubjectDetectionError | unknown, unknown> {
   const runtimeRequest = yield* toRuntimeRequest(self, request)
-  const rules = possibleRulesFor(self.rules as ReadonlyArray<RuntimeRule>, runtimeRequest)
+  const rules = possibleRulesForDefinitionOrder(self, runtimeRequest)
   const fields = new Set<string>()
   let index = 0
 

@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import { Data, Effect } from "effect";
-import { Ability, AbilityRef } from "../src/index";
+import { Ability, AbilityExtra, AbilityRef } from "../src/index";
 
 interface Comment {
   readonly authorId: string;
@@ -304,6 +304,251 @@ describe("Ability", () => {
         assert.strictEqual(rawRules[1]?.inverted, true);
         assert.strictEqual(strictError, "SerializationError");
       }),
+  );
+
+  it.effect("expands action aliases in one direction", () =>
+    Effect.gen(function* () {
+      const ability = Ability.define<Subjects>()(
+        function* (ability) {
+          yield* ability.allow("modify", "Post", {
+            conditions: { authorId: "u1" },
+          });
+        },
+        {
+          actionAliases: {
+            modify: ["update", "delete"],
+          } as const,
+        },
+      );
+
+      yield* Ability.check(ability, {
+        action: "update",
+        subject: "Post",
+        value: draftPost,
+      });
+
+      const relevantRule = yield* Ability.relevantRuleFor(ability, {
+        action: "delete",
+        subject: "Post",
+        value: draftPost,
+      });
+
+      const reverseAlias = yield* Ability.check(
+        Ability.define<Subjects>()(
+          function* (ability) {
+            yield* ability.allow(["update", "delete"], "Post");
+          },
+          {
+            actionAliases: {
+              modify: ["update", "delete"],
+            } as const,
+          },
+        ),
+        {
+          action: "modify" as never,
+          subject: "Post",
+          value: draftPost,
+        },
+      ).pipe(
+        Effect.catchTag("AuthorizationError", (error) =>
+          Effect.succeed(error._tag),
+        ),
+      );
+
+      assert.strictEqual(relevantRule?.action, "modify");
+      assert.strictEqual(reverseAlias, "AuthorizationError");
+    }),
+  );
+
+  it("rejects invalid action aliases", () => {
+    assert.throws(() =>
+      Ability.define<Subjects>()(
+        function* (ability) {
+          yield* ability.allow("read", "Post");
+        },
+        {
+          actionAliases: {
+            access: "access",
+          } as const,
+        },
+      ), Ability.AliasError);
+
+    assert.throws(() => Ability.createAliasResolver({ manage: "read" }), Ability.AliasError);
+  });
+
+  it.effect("exposes indexed rules and actions for introspection", () =>
+    Effect.gen(function* () {
+      const ability = Ability.define<Subjects>()(
+        function* (ability) {
+          yield* ability.allow("manage", "all");
+          yield* ability.allow("access", "Post", {
+            fields: ["title"],
+          });
+          yield* ability.deny("delete", "Post", {
+            reason: "No deletes",
+          });
+        },
+        {
+          actionAliases: {
+            access: ["read", "update"],
+          } as const,
+        },
+      );
+
+      const possibleRules = yield* Ability.possibleRulesFor(ability, {
+        action: "delete",
+        subject: "Post",
+      });
+      const fieldRules = yield* Ability.rulesFor(ability, {
+        action: "update",
+        subject: "Post",
+        field: "title",
+      });
+      const actions = yield* Ability.actionsFor(ability, {
+        subject: "Post",
+      });
+
+      assert.deepStrictEqual(possibleRules.map((rule) => rule._tag), [
+        "Deny",
+        "Allow",
+      ]);
+      assert.deepStrictEqual(fieldRules.map((rule) => rule.action), [
+        "access",
+        "manage",
+      ]);
+      assert.deepStrictEqual([...actions].sort(), [
+        "access",
+        "delete",
+        "manage",
+        "read",
+        "update",
+      ]);
+    }),
+  );
+});
+
+describe("AbilityExtra", () => {
+  it("packs and unpacks raw rules without comma-joining arrays", () => {
+    const rawRules: ReadonlyArray<Ability.RawRule> = [
+      {
+        action: ["read", "update"],
+        subject: "Post",
+        fields: ["title", "body"],
+        conditions: { authorId: "u1" },
+      },
+      {
+        action: "delete",
+        subject: "Post",
+        inverted: true,
+        reason: "No deletes",
+      },
+    ];
+
+    const packed = AbilityExtra.packRules(rawRules);
+    const unpacked = AbilityExtra.unpackRules(packed);
+
+    assert.deepStrictEqual(unpacked, rawRules);
+    assert.deepStrictEqual(packed[0]?.[0], ["read", "update"]);
+  });
+
+  it.effect("extracts scalar condition fields", () =>
+    Effect.gen(function* () {
+      const ability = Ability.define<Subjects>()(function* (ability) {
+        yield* ability.allow("create", "Post", {
+          conditions: {
+            authorId: "u1",
+            "address.city": "Shanghai",
+            title: { $regex: "^Draft" },
+          },
+        });
+      });
+
+      const fields = yield* AbilityExtra.rulesToFields(ability, {
+        action: "create",
+        subject: "Post",
+      });
+
+      assert.deepStrictEqual(fields, {
+        authorId: "u1",
+        address: {
+          city: "Shanghai",
+        },
+      });
+    }),
+  );
+
+  it.effect("converts rules to generic logical conditions", () =>
+    Effect.gen(function* () {
+      const ability = Ability.define<Subjects>()(function* (ability) {
+        yield* ability.allow("read", "Post", {
+          conditions: { authorId: "u1" },
+        });
+        yield* ability.allow("read", "Post", {
+          conditions: { published: true },
+        });
+        yield* ability.deny("read", "Post", {
+          conditions: { published: false },
+        });
+      });
+
+      const condition = yield* AbilityExtra.rulesToCondition(
+        ability,
+        {
+          action: "read",
+          subject: "Post",
+        },
+        (rule) => rule.conditions as Record<string, unknown>,
+        {
+          and: (conditions) => ({ $and: conditions }),
+          or: (conditions) => ({ $or: conditions }),
+          not: (condition) => ({ $not: condition }),
+          empty: () => ({}),
+        },
+      );
+
+      assert.deepStrictEqual(condition, {
+        $or: [
+          {
+            $and: [
+              { published: true },
+              { $not: { published: false } },
+            ],
+          },
+          {
+            $and: [
+              { authorId: "u1" },
+              { $not: { published: false } },
+            ],
+          },
+        ],
+      });
+    }),
+  );
+
+  it.effect("fails query generation for function predicates", () =>
+    Effect.gen(function* () {
+      const ability = Ability.define<Subjects>()(function* (ability) {
+        yield* ability.allow("read", "Post", {
+          conditions: { authorId: "u1" },
+          when: () => true,
+        });
+      });
+
+      const errorTag = yield* AbilityExtra.rulesToQuery(
+        ability,
+        {
+          action: "read",
+          subject: "Post",
+        },
+        (rule) => rule.conditions as Record<string, unknown>,
+      ).pipe(
+        Effect.catchTag("QueryGenerationError", (error) =>
+          Effect.succeed(error._tag),
+        ),
+      );
+
+      assert.strictEqual(errorTag, "QueryGenerationError");
+    }),
   );
 });
 

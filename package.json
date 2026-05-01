@@ -5,6 +5,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./Ability": "./src/Ability.ts",
+    "./AbilityExtra": "./src/AbilityExtra.ts",
     "./AbilityRef": "./src/AbilityRef.ts"
   },
   "scripts": {
