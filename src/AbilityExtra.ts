@@ -23,8 +23,8 @@
  */
 import * as Effect from "effect/Effect"
 import { dual } from "effect/Function"
-import * as Ability from "./Ability"
-import { cloneSerializable, isPlainObject } from "./internal/serializable"
+import * as Ability from "./Ability.js"
+import { cloneSerializable, isPlainObject } from "./internal/serializable.js"
 
 /**
  * @since 0.1.0

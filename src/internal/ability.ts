@@ -12,8 +12,8 @@ import * as Hash from "effect/Hash"
 import * as Inspectable from "effect/Inspectable"
 import * as Pipeable from "effect/Pipeable"
 import * as Predicate from "effect/Predicate"
-import type * as Ability from "../Ability"
-import { cloneSerializable } from "./serializable"
+import type * as Ability from "../Ability.js"
+import { cloneSerializable } from "./serializable.js"
 
 /**
  * @internal

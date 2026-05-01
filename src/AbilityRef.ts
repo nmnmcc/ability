@@ -29,7 +29,7 @@ import * as Hash from "effect/Hash"
 import * as Inspectable from "effect/Inspectable"
 import * as Pipeable from "effect/Pipeable"
 import * as Predicate from "effect/Predicate"
-import * as Ability from "./Ability"
+import * as Ability from "./Ability.js"
 
 /**
  * @since 0.1.0

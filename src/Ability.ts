@@ -29,7 +29,7 @@ import type * as Equal from "effect/Equal"
 import type * as Effect from "effect/Effect"
 import type * as Inspectable from "effect/Inspectable"
 import type * as Pipeable from "effect/Pipeable"
-import * as internal from "./internal/ability"
+import * as internal from "./internal/ability.js"
 
 /**
  * @since 0.1.0

@@ -1,6 +1,12 @@
-# ability
+# @nmnmcc/ability
 
 An Effect-style authorization library inspired by CASL.
+
+## Installation
+
+```sh
+yarn add @nmnmcc/ability
+```
 
 The public API is a module of functions:
 
@@ -13,7 +19,7 @@ The public API is a module of functions:
 
 ```ts
 import { Effect } from "effect"
-import { Ability } from "ability"
+import { Ability } from "@nmnmcc/ability"
 
 interface Post {
   readonly id: string
@@ -201,7 +207,7 @@ const rules = yield* Ability.toRawRules(ability)
 Use `AbilityExtra` for compact raw-rule transport and ORM-independent rule transforms:
 
 ```ts
-import { AbilityExtra } from "ability"
+import { AbilityExtra } from "@nmnmcc/ability"
 
 const packed = AbilityExtra.packRules(rules)
 const unpacked = AbilityExtra.unpackRules(packed)
@@ -229,7 +235,7 @@ Rule transforms fail with `QueryGenerationError` when a relevant rule contains a
 `Ability` stays immutable. Use `AbilityRef` when an application needs to replace the current ability:
 
 ```ts
-import { AbilityRef } from "ability"
+import { AbilityRef } from "@nmnmcc/ability"
 
 const ref = AbilityRef.make(ability)
 
