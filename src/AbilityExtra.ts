@@ -1,11 +1,30 @@
 /**
  * Extra helpers for serializing and transforming Ability rules.
  *
+ * Mental model:
+ * - `AbilityExtra` works with already-defined abilities and JSON-safe rules.
+ * - Packing preserves rule structure while reducing wire size.
+ * - Query helpers transform rule lists into caller-owned condition formats.
+ *
+ * Common tasks:
+ * - Compact raw rules with {@link packRules} and {@link unpackRules}.
+ * - Derive default fields from rule conditions with {@link rulesToFields}.
+ * - Convert matching rules to logical conditions with {@link rulesToCondition}
+ *   or {@link rulesToQuery}.
+ *
+ * Gotchas:
+ * - Query generation rejects function predicates because they cannot be
+ *   represented as static conditions.
+ * - Conversion callbacks may be synchronous or Effectful; synchronous throws are
+ *   converted to `QueryGenerationError`.
+ *
  * @since 0.1.0
  * @module
  */
 import * as Effect from "effect/Effect"
+import { dual } from "effect/Function"
 import * as Ability from "./Ability"
+import { cloneSerializable, isPlainObject } from "./internal/serializable"
 
 /**
  * @since 0.1.0
@@ -42,23 +61,6 @@ export type LogicalQuery<Query> = Query | {
 } | {
   readonly $not: LogicalQuery<Query>
 }
-
-const cloneSerializable = (value: unknown): unknown => {
-  if (Array.isArray(value)) {
-    return Object.freeze(value.map(cloneSerializable))
-  }
-  if (value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
-    const output: Record<string, unknown> = {}
-    for (const key of Object.keys(value)) {
-      output[key] = cloneSerializable((value as Record<string, unknown>)[key])
-    }
-    return Object.freeze(output)
-  }
-  return value
-}
-
-const isPlainObject = (value: unknown): value is Readonly<Record<string, unknown>> =>
-  value !== null && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype
 
 const forbiddenPathKeys = new Set(["__proto__", "constructor", "prototype"])
 
@@ -202,7 +204,7 @@ const assertSerializableRule = (
  * @since 0.1.0
  * @category Conversions
  */
-export const rulesToFields = Effect.fnUntraced(function*<
+const rulesToFieldsEffect = Effect.fnUntraced(function*<
   Subjects extends Ability.SubjectMap,
   Rules extends Ability.AnyRule,
   Aliases extends Ability.ActionAliases,
@@ -231,6 +233,34 @@ export const rulesToFields = Effect.fnUntraced(function*<
   return Object.freeze(fields)
 })
 
+/**
+ * Extracts scalar condition values as default fields.
+ *
+ * @since 0.1.0
+ * @category Conversions
+ */
+export const rulesToFields: {
+  <
+    Subjects extends Ability.SubjectMap,
+    Rules extends Ability.AnyRule,
+    Aliases extends Ability.ActionAliases,
+    const Request extends Ability.RuleQueryRequest<Subjects, Rules, Aliases>
+  >(
+    request: Request
+  ): (
+    self: Ability.Ability<Subjects, Rules, Aliases>
+  ) => Effect.Effect<Readonly<Record<string, unknown>>, Ability.QueryGenerationError | Ability.SubjectDetectionError>
+  <
+    Subjects extends Ability.SubjectMap,
+    Rules extends Ability.AnyRule,
+    Aliases extends Ability.ActionAliases,
+    const Request extends Ability.RuleQueryRequest<Subjects, Rules, Aliases>
+  >(
+    self: Ability.Ability<Subjects, Rules, Aliases>,
+    request: Request
+  ): Effect.Effect<Readonly<Record<string, unknown>>, Ability.QueryGenerationError | Ability.SubjectDetectionError>
+} = dual(2, rulesToFieldsEffect)
+
 const convertRule = <Rule extends Ability.AnyRule, Query, E, R>(
   rule: Rule,
   convert: (rule: Rule) => Query | Effect.Effect<Query, E, R>,
@@ -250,7 +280,7 @@ const convertRule = <Rule extends Ability.AnyRule, Query, E, R>(
  * @since 0.1.0
  * @category Conversions
  */
-export const rulesToCondition = Effect.fnUntraced(function*<
+const rulesToConditionEffect = Effect.fnUntraced(function*<
   Subjects extends Ability.SubjectMap,
   Rules extends Ability.AnyRule,
   Aliases extends Ability.ActionAliases,
@@ -309,12 +339,50 @@ export const rulesToCondition = Effect.fnUntraced(function*<
 })
 
 /**
+ * Converts rules into a caller-defined logical condition.
+ *
+ * @since 0.1.0
+ * @category Conversions
+ */
+export const rulesToCondition: {
+  <
+    Subjects extends Ability.SubjectMap,
+    Rules extends Ability.AnyRule,
+    Aliases extends Ability.ActionAliases,
+    const Request extends Ability.RuleQueryRequest<Subjects, Rules, Aliases>,
+    Query,
+    E = never,
+    R = never
+  >(
+    request: Request,
+    convert: (rule: Rules) => Query | Effect.Effect<Query, E, R>,
+    hooks: RulesToConditionHooks<Query>
+  ): (
+    self: Ability.Ability<Subjects, Rules, Aliases>
+  ) => Effect.Effect<Query | null, Ability.QueryGenerationError | Ability.SubjectDetectionError | E, R>
+  <
+    Subjects extends Ability.SubjectMap,
+    Rules extends Ability.AnyRule,
+    Aliases extends Ability.ActionAliases,
+    const Request extends Ability.RuleQueryRequest<Subjects, Rules, Aliases>,
+    Query,
+    E = never,
+    R = never
+  >(
+    self: Ability.Ability<Subjects, Rules, Aliases>,
+    request: Request,
+    convert: (rule: Rules) => Query | Effect.Effect<Query, E, R>,
+    hooks: RulesToConditionHooks<Query>
+  ): Effect.Effect<Query | null, Ability.QueryGenerationError | Ability.SubjectDetectionError | E, R>
+} = dual(4, rulesToConditionEffect)
+
+/**
  * Converts rules into a small generic logical query object.
  *
  * @since 0.1.0
  * @category Conversions
  */
-export const rulesToQuery = <
+const rulesToQueryEffect = Effect.fnUntraced(function*<
   Subjects extends Ability.SubjectMap,
   Rules extends Ability.AnyRule,
   Aliases extends Ability.ActionAliases,
@@ -326,16 +394,52 @@ export const rulesToQuery = <
   self: Ability.Ability<Subjects, Rules, Aliases>,
   request: Request,
   convert: (rule: Rules) => Query | Effect.Effect<Query, E, R>
-): Effect.Effect<LogicalQuery<Query> | null, Ability.SubjectDetectionError | Ability.QueryGenerationError | E, R> => {
+): Effect.fn.Return<LogicalQuery<Query> | null, Ability.SubjectDetectionError | Ability.QueryGenerationError | E, R> {
   const logicalConvert = (rule: Rules): LogicalQuery<Query> | Effect.Effect<LogicalQuery<Query>, E, R> => {
     const result = convert(rule)
     return Effect.isEffect(result) ? result as Effect.Effect<LogicalQuery<Query>, E, R> : result as LogicalQuery<Query>
   }
 
-  return rulesToCondition(self, request, logicalConvert, {
+  return yield* rulesToConditionEffect(self, request, logicalConvert, {
     and: (conditions) => ({ $and: conditions }),
     or: (conditions) => ({ $or: conditions }),
     not: (condition) => ({ $not: condition }),
     empty: () => ({}) as LogicalQuery<Query>
   })
-}
+})
+
+/**
+ * Converts rules into a small generic logical query object.
+ *
+ * @since 0.1.0
+ * @category Conversions
+ */
+export const rulesToQuery: {
+  <
+    Subjects extends Ability.SubjectMap,
+    Rules extends Ability.AnyRule,
+    Aliases extends Ability.ActionAliases,
+    const Request extends Ability.RuleQueryRequest<Subjects, Rules, Aliases>,
+    Query,
+    E = never,
+    R = never
+  >(
+    request: Request,
+    convert: (rule: Rules) => Query | Effect.Effect<Query, E, R>
+  ): (
+    self: Ability.Ability<Subjects, Rules, Aliases>
+  ) => Effect.Effect<LogicalQuery<Query> | null, Ability.QueryGenerationError | Ability.SubjectDetectionError | E, R>
+  <
+    Subjects extends Ability.SubjectMap,
+    Rules extends Ability.AnyRule,
+    Aliases extends Ability.ActionAliases,
+    const Request extends Ability.RuleQueryRequest<Subjects, Rules, Aliases>,
+    Query,
+    E = never,
+    R = never
+  >(
+    self: Ability.Ability<Subjects, Rules, Aliases>,
+    request: Request,
+    convert: (rule: Rules) => Query | Effect.Effect<Query, E, R>
+  ): Effect.Effect<LogicalQuery<Query> | null, Ability.QueryGenerationError | Ability.SubjectDetectionError | E, R>
+} = dual(3, rulesToQueryEffect)

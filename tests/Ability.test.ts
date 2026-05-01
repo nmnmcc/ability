@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
-import { Data, Effect } from "effect";
+import { Data, Effect, Equal, Hash } from "effect";
 import { Ability, AbilityExtra, AbilityRef } from "../src/index";
 
 interface Comment {
@@ -188,6 +188,30 @@ describe("Ability", () => {
     }),
   );
 
+  it.effect("captures synchronous predicate throws in the Effect error channel", () =>
+    Effect.gen(function* () {
+      const cause = new Error("boom");
+      const ability = Ability.define<Subjects>()(function* (ability) {
+        yield* ability.allow("read", "Post", {
+          when: () => {
+            throw cause;
+          },
+        });
+      });
+
+      const error = yield* Ability.check(ability, {
+        action: "read",
+        subject: "Post",
+        value: draftPost,
+      }).pipe(Effect.flip);
+
+      assert.strictEqual(error._tag, "PredicateEvaluationError");
+      if (error._tag === "PredicateEvaluationError") {
+        assert.strictEqual(error.cause, cause);
+      }
+    }),
+  );
+
   it.effect("uses pure subject wrappers without mutating values", () =>
     Effect.gen(function* () {
       const ability = Ability.define<Subjects>()(function* (ability) {
@@ -304,6 +328,26 @@ describe("Ability", () => {
         assert.strictEqual(rawRules[1]?.inverted, true);
         assert.strictEqual(strictError, "SerializationError");
       }),
+  );
+
+  it.effect("fails fromRawRules with AliasError for invalid aliases", () =>
+    Effect.gen(function* () {
+      const error = yield* Ability.fromRawRules<Subjects>(
+        [
+          {
+            action: "read",
+            subject: "Post",
+          },
+        ],
+        {
+          actionAliases: {
+            manage: "read",
+          } as const,
+        },
+      ).pipe(Effect.flip);
+
+      assert.strictEqual(error._tag, "AliasError");
+    }),
   );
 
   it.effect("expands action aliases in one direction", () =>
@@ -425,6 +469,38 @@ describe("Ability", () => {
       ]);
     }),
   );
+
+  it.effect("implements guards, equality, hashing, and inspection protocols", () =>
+    Effect.gen(function* () {
+      const ability = Ability.define<Subjects>()(function* (ability) {
+        yield* ability.allow("read", "Post");
+      });
+      const sameAbility = Ability.make<Subjects, (typeof ability.rules)[number]>(
+        ability.rules,
+        ability.options,
+      );
+      const rule = ability.rules[0]!;
+      const wrapped = Ability.subject("Post", draftPost);
+      const ref = AbilityRef.make(ability);
+
+      assert.strictEqual(Ability.isAbility(ability), true);
+      assert.strictEqual(Ability.isAbility(rule), false);
+      assert.strictEqual(Ability.isRule(rule), true);
+      assert.strictEqual(Ability.isRule(ability), false);
+      assert.strictEqual(Ability.isSubject(wrapped), true);
+      assert.strictEqual(AbilityRef.isAbilityRef(ref), true);
+      assert.strictEqual(AbilityRef.isAbilityRef(ability), false);
+      assert.strictEqual(Equal.equals(rule, rule), true);
+      assert.strictEqual(Equal.equals(wrapped, Ability.subject("Post", draftPost)), true);
+      assert.strictEqual(Equal.equals(ability, sameAbility), true);
+      assert.strictEqual(typeof Hash.hash(ability), "number");
+      assert.strictEqual(typeof Hash.hash(rule), "number");
+      assert.strictEqual(typeof Hash.hash(wrapped), "number");
+      assert.strictEqual(String(ability).includes("Ability"), true);
+      assert.strictEqual(String(rule).includes("Allow"), true);
+      assert.strictEqual(String(ref).includes("AbilityRef"), true);
+    }),
+  );
 });
 
 describe("AbilityExtra", () => {
@@ -474,6 +550,15 @@ describe("AbilityExtra", () => {
           city: "Shanghai",
         },
       });
+
+      const dataLastFields = yield* ability.pipe(
+        AbilityExtra.rulesToFields({
+          action: "create",
+          subject: "Post",
+        }),
+      );
+
+      assert.deepStrictEqual(dataLastFields, fields);
     }),
   );
 
@@ -522,6 +607,24 @@ describe("AbilityExtra", () => {
           },
         ],
       });
+
+      const dataLastCondition = yield* ability.pipe(
+        AbilityExtra.rulesToCondition(
+          {
+            action: "read",
+            subject: "Post",
+          },
+          (rule) => rule.conditions as Record<string, unknown>,
+          {
+            and: (conditions) => ({ $and: conditions }),
+            or: (conditions) => ({ $or: conditions }),
+            not: (condition) => ({ $not: condition }),
+            empty: () => ({}),
+          },
+        ),
+      );
+
+      assert.deepStrictEqual(dataLastCondition, condition);
     }),
   );
 
@@ -548,6 +651,21 @@ describe("AbilityExtra", () => {
       );
 
       assert.strictEqual(errorTag, "QueryGenerationError");
+
+      const dataLastQueryError = yield* ability.pipe(
+        AbilityExtra.rulesToQuery(
+          {
+            action: "read",
+            subject: "Post",
+          },
+          (rule) => rule.conditions as Record<string, unknown>,
+        ),
+        Effect.catchTag("QueryGenerationError", (error) =>
+          Effect.succeed(error._tag),
+        ),
+      );
+
+      assert.strictEqual(dataLastQueryError, "QueryGenerationError");
     }),
   );
 });
@@ -566,13 +684,15 @@ describe("AbilityRef", () => {
       const ref = AbilityRef.make(initial);
       const events: Array<string> = [];
 
-      const unsubscribe = yield* AbilityRef.on(ref, "updated", () =>
-        Effect.sync(() => {
-          events.push("updated");
-        }),
+      const unsubscribe = yield* ref.pipe(
+        AbilityRef.on("updated", () =>
+          Effect.sync(() => {
+            events.push("updated");
+          }),
+        ),
       );
 
-      yield* AbilityRef.set(ref, next);
+      yield* ref.pipe(AbilityRef.set(next));
       unsubscribe();
       yield* AbilityRef.set(ref, initial);
 

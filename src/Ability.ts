@@ -1,11 +1,33 @@
 /**
  * Functional authorization primitives inspired by Effect and CASL.
  *
+ * Mental model:
+ * - An `Ability` is an immutable set of ordered `Rule` values.
+ * - Rules are defined with generator syntax so `yield* ability.allow(...)` records
+ *   each rule while `Ability.define` still returns synchronously.
+ * - `Ability.check` is the only authorization decision API. It succeeds with
+ *   `void` or fails through the Effect error channel.
+ *
+ * Common tasks:
+ * - Define rules with {@link define}.
+ * - Check a request with {@link check}.
+ * - Wrap plain values with {@link subject} when runtime subject detection is not
+ *   available.
+ * - Serialize JSON-safe policies with {@link toRawRules} and {@link fromRawRules}.
+ *
+ * Gotchas:
+ * - Last matching rule wins.
+ * - Predicate callbacks can return booleans or Effects. Predicate failures are
+ *   preserved in the Effect error channel.
+ * - Function predicates cannot be serialized in strict mode.
+ *
  * @since 0.1.0
  * @module
  */
 import type { MongoQuery } from "@ucast/mongo2js"
+import type * as Equal from "effect/Equal"
 import type * as Effect from "effect/Effect"
+import type * as Inspectable from "effect/Inspectable"
 import type * as Pipeable from "effect/Pipeable"
 import * as internal from "./internal/ability"
 
@@ -13,7 +35,7 @@ import * as internal from "./internal/ability"
  * @since 0.1.0
  * @category Type Ids
  */
-export const TypeId = internal.TypeId
+export const TypeId: typeof internal.TypeId = internal.TypeId
 
 /**
  * @since 0.1.0
@@ -25,13 +47,27 @@ export type TypeId = typeof TypeId
  * @since 0.1.0
  * @category Type Ids
  */
-export const SubjectTypeId = internal.SubjectTypeId
+export const SubjectTypeId: typeof internal.SubjectTypeId = internal.SubjectTypeId
 
 /**
  * @since 0.1.0
  * @category Type Ids
  */
 export type SubjectTypeId = typeof SubjectTypeId
+
+/**
+ * Unique identifier for `Rule` values.
+ *
+ * @since 0.1.0
+ * @category Type Ids
+ */
+export const RuleTypeId: typeof internal.RuleTypeId = internal.RuleTypeId
+
+/**
+ * @since 0.1.0
+ * @category Type Ids
+ */
+export type RuleTypeId = typeof RuleTypeId
 
 /**
  * @since 0.1.0
@@ -87,7 +123,7 @@ export type RuleSubject<Subjects extends SubjectMap> = SubjectName<Subjects> | A
  */
 export type SubjectUnion<Subjects extends SubjectMap> = Subjects[SubjectName<Subjects>]
 
-type Primitive = string | number | boolean | bigint | symbol | null | undefined | Function | ReadonlyArray<any>
+type Primitive = string | number | boolean | bigint | symbol | null | undefined | Function | ReadonlyArray<unknown>
 type PreviousDepth = [never, 0, 1, 2, 3, 4, 5]
 type FieldPathInternal<Subject, Depth extends number> = [Depth] extends [never] ? never
   : Subject extends Primitive ? never
@@ -161,7 +197,8 @@ export interface Rule<
   Fields extends string,
   E,
   R
-> extends Pipeable.Pipeable, Effect.Yieldable<Rule<Kind, Action, Name, Subject, Fields, E, R>, Rule<Kind, Action, Name, Subject, Fields, E, R>> {
+> extends Equal.Equal, Inspectable.Inspectable, Pipeable.Pipeable, Effect.Yieldable<Rule<Kind, Action, Name, Subject, Fields, E, R>, Rule<Kind, Action, Name, Subject, Fields, E, R>> {
+  readonly [RuleTypeId]: RuleTypeId
   readonly _tag: Kind
   readonly action: SingleOrReadonlyArray<Action>
   readonly subject: SingleOrReadonlyArray<Name>
@@ -181,7 +218,7 @@ export type AnyRule = Rule<RuleKind, string, string, any, string, any, any>
  * @since 0.1.0
  * @category Models
  */
-export interface TypedSubject<Name extends string, Value extends object> extends Pipeable.Pipeable {
+export interface TypedSubject<Name extends string, Value extends object> extends Equal.Equal, Inspectable.Inspectable, Pipeable.Pipeable {
   readonly [SubjectTypeId]: SubjectTypeId
   readonly _tag: "Subject"
   readonly subject: Name
@@ -211,7 +248,7 @@ export interface Ability<
   Subjects extends SubjectMap,
   Rules extends AnyRule = never,
   Aliases extends ActionAliases = {}
-> extends Pipeable.Pipeable {
+> extends Equal.Equal, Inspectable.Inspectable, Pipeable.Pipeable {
   readonly [TypeId]: TypeId
   readonly rules: ReadonlyArray<Rules>
   readonly options: AbilityOptions<Subjects, Aliases>
@@ -289,11 +326,11 @@ export interface RawRule<
   readonly reason?: string
 }
 
-type RuleAction<Rules> = Rules extends Rule<any, infer Action, any, any, any, any, any> ? Action : never
-type RuleSubjectName<Rules> = Rules extends Rule<any, any, infer Name, any, any, any, any> ? Name : never
-type RuleFields<Rules> = Rules extends Rule<any, any, any, any, infer Fields, any, any> ? Fields : never
-type RuleError<Rules> = Rules extends Rule<any, any, any, any, any, infer E, any> ? E : never
-type RuleServices<Rules> = Rules extends Rule<any, any, any, any, any, any, infer R> ? R : never
+type RuleAction<Rules> = Rules extends Rule<infer _Kind, infer Action, infer _Name, infer _Subject, infer _Fields, infer _E, infer _R> ? Action : never
+type RuleSubjectName<Rules> = Rules extends Rule<infer _Kind, infer _Action, infer Name, infer _Subject, infer _Fields, infer _E, infer _R> ? Name : never
+type RuleFields<Rules> = Rules extends Rule<infer _Kind, infer _Action, infer _Name, infer _Subject, infer Fields, infer _E, infer _R> ? Fields : never
+type RuleError<Rules> = Rules extends Rule<infer _Kind, infer _Action, infer _Name, infer _Subject, infer _Fields, infer E, infer _R> ? E : never
+type RuleServices<Rules> = Rules extends Rule<infer _Kind, infer _Action, infer _Name, infer _Subject, infer _Fields, infer _E, infer R> ? R : never
 
 type ActionMatches<Rule, Action extends string, Aliases extends ActionAliases> = Rule extends AnyRule ? Action extends ExpandedAction<RuleAction<Rule> & string, Aliases> ? Rule
   : AnyAction extends RuleAction<Rule> ? Rule
@@ -416,7 +453,7 @@ export type SubjectQueryRequest<
 
 type RequestAction<Request> = Request extends { readonly action: infer Action } ? Action & string : string
 type RequestSubject<Request> = Request extends { readonly subject: infer Name } ? Name & string
-  : Request extends { readonly value: TypedSubject<infer Name, any> } ? Name & string
+  : Request extends { readonly value: TypedSubject<infer Name, object> } ? Name & string
   : string
 type MatchingRules<Rules, Request, Aliases extends ActionAliases> = RulesMatching<Rules, RequestAction<Request>, RequestSubject<Request>, Aliases>
 
@@ -459,6 +496,18 @@ export const ConditionError = internal.ConditionError
  * @category Errors
  */
 export type ConditionError = internal.ConditionError
+
+/**
+ * @since 0.1.0
+ * @category Errors
+ */
+export const PredicateEvaluationError = internal.PredicateEvaluationError
+
+/**
+ * @since 0.1.0
+ * @category Errors
+ */
+export type PredicateEvaluationError = internal.PredicateEvaluationError
 
 /**
  * @since 0.1.0
@@ -542,7 +591,7 @@ export const define: <Subjects extends SubjectMap>() => <
   A,
   const Aliases extends ActionAliases = {}
 >(
-  body: (builder: Builder<Subjects>) => Generator<Eff, A, any>,
+  body: (builder: Builder<Subjects>) => Generator<Eff, A, unknown>,
   options?: AbilityOptions<Subjects, Aliases>
 ) => Ability<Subjects, Eff, Aliases> =
   internal.define
@@ -567,7 +616,7 @@ export const make: <Subjects extends SubjectMap, Rules extends AnyRule, const Al
 export const fromRawRules: <Subjects extends SubjectMap, const Aliases extends ActionAliases = {}>(
   rules: Iterable<RawRule<string, RuleSubject<Subjects>, string, MongoCondition<SubjectUnion<Subjects>>>>,
   options?: AbilityOptions<Subjects, Aliases>
-) => Effect.Effect<Ability<Subjects, AnyRule, Aliases>, RawRuleError> =
+) => Effect.Effect<Ability<Subjects, AnyRule, Aliases>, AliasError | RawRuleError> =
   internal.fromRawRules
 
 /**
@@ -581,6 +630,24 @@ export const subject: <const Name extends string, Value extends object>(
   value: Value
 ) => TypedSubject<Name, Value> =
   internal.subject
+
+/**
+ * Returns whether a value is an Ability.
+ *
+ * @since 0.1.0
+ * @category Guards
+ */
+export const isAbility: (value: unknown) => value is Ability<SubjectMap, AnyRule, ActionAliases> =
+  internal.isAbility
+
+/**
+ * Returns whether a value is a rule.
+ *
+ * @since 0.1.0
+ * @category Guards
+ */
+export const isRule: (value: unknown) => value is AnyRule =
+  internal.isRule
 
 /**
  * Returns whether a value is a typed subject wrapper.
@@ -597,7 +664,7 @@ export const isSubject: (value: unknown) => value is TypedSubject<string, object
  * @since 0.1.0
  * @category Accessors
  */
-export const unwrapSubject: <Value>(value: Value) => Value extends TypedSubject<any, infer Subject> ? Subject : Value =
+export const unwrapSubject: <Value>(value: Value) => Value extends TypedSubject<infer _Name, infer Subject> ? Subject : Value =
   internal.unwrapSubject as never
 
 /**
@@ -698,7 +765,7 @@ export const relevantRuleFor: {
     self: Ability<Subjects, Rules, Aliases>
   ) => Effect.Effect<
     MatchingRules<Rules, Request, Aliases> | undefined,
-    ConditionError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
+    ConditionError | PredicateEvaluationError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
     RuleServices<MatchingRules<Rules, Request, Aliases>>
   >
   <
@@ -711,7 +778,7 @@ export const relevantRuleFor: {
     request: Request
   ): Effect.Effect<
     MatchingRules<Rules, Request, Aliases> | undefined,
-    ConditionError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
+    ConditionError | PredicateEvaluationError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
     RuleServices<MatchingRules<Rules, Request, Aliases>>
   >
 } = internal.relevantRuleFor
@@ -762,7 +829,7 @@ export const check: {
     self: Ability<Subjects, Rules, Aliases>
   ) => Effect.Effect<
     void,
-    AuthorizationError | ConditionError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
+    AuthorizationError | ConditionError | PredicateEvaluationError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
     RuleServices<MatchingRules<Rules, Request, Aliases>>
   >
   <
@@ -775,7 +842,7 @@ export const check: {
     request: Request
   ): Effect.Effect<
     void,
-    AuthorizationError | ConditionError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
+    AuthorizationError | ConditionError | PredicateEvaluationError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
     RuleServices<MatchingRules<Rules, Request, Aliases>>
   >
 } = internal.check
@@ -799,7 +866,7 @@ export const permittedFields: {
     self: Ability<Subjects, Rules, Aliases>
   ) => Effect.Effect<
     ReadonlyArray<string>,
-    ConditionError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
+    ConditionError | PredicateEvaluationError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
     RuleServices<MatchingRules<Rules, Request, Aliases>>
   >
   <
@@ -813,7 +880,7 @@ export const permittedFields: {
     options: PermittedFieldsOptions<Rules>
   ): Effect.Effect<
     ReadonlyArray<string>,
-    ConditionError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
+    ConditionError | PredicateEvaluationError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
     RuleServices<MatchingRules<Rules, Request, Aliases>>
   >
 } = internal.permittedFields

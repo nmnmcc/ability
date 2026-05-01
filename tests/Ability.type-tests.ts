@@ -1,5 +1,5 @@
 import { Context, Data, Effect } from "effect"
-import { Ability } from "../src/index"
+import { Ability, AbilityExtra, AbilityRef } from "../src/index"
 
 interface Address {
   readonly city: string
@@ -218,12 +218,61 @@ export const predicateAliasErrorProgram = Effect.gen(function* () {
   })
 })
 
+export const rawAliasProgram = Ability.fromRawRules<Subjects>(
+  [
+    {
+      action: "read",
+      subject: "Post"
+    }
+  ],
+  {
+    actionAliases: {
+      manage: "read"
+    } as const
+  }
+)
+
+export const abilityExtraDataLastProgram = Effect.gen(function* () {
+  yield* ability.pipe(
+    AbilityExtra.rulesToFields({
+      action: "read",
+      subject: "Post"
+    })
+  )
+  yield* ability.pipe(
+    AbilityExtra.rulesToQuery(
+      {
+        action: "read",
+        subject: "Post"
+      },
+      (rule) => rule.conditions ?? {}
+    )
+  )
+})
+
+export const abilityRefDataLastProgram = Effect.gen(function* () {
+  const ref = AbilityRef.make(ability)
+  const unsubscribe = yield* ref.pipe(AbilityRef.on("updated", () => undefined))
+  yield* ref.pipe(AbilityRef.set(ability))
+  yield* ref.pipe(AbilityRef.update([
+    {
+      action: "read",
+      subject: "Post"
+    }
+  ]))
+  unsubscribe()
+})
+
 type HasError<Errors, Error> = Extract<Errors, Error> extends never ? false : true
 type HasService<Services, Service> = Extract<Services, Service> extends never ? false : true
 type Expect<Condition extends true> = Condition
 
 export type PredicateErrorIsCarried = Expect<HasError<Effect.Error<typeof predicateErrorProgram>, PredicateError>>
+export type PredicateEvaluationErrorIsCarried = Expect<HasError<Effect.Error<typeof predicateErrorProgram>, Ability.PredicateEvaluationError>>
 export type AuthorizationErrorIsCarried = Expect<HasError<Effect.Error<typeof predicateErrorProgram>, Ability.AuthorizationError>>
 export type PolicyServiceIsCarried = Expect<HasService<Effect.Services<typeof predicateErrorProgram>, PolicyService>>
 export type AliasPredicateErrorIsCarried = Expect<HasError<Effect.Error<typeof predicateAliasErrorProgram>, PredicateError>>
 export type AliasPolicyServiceIsCarried = Expect<HasService<Effect.Services<typeof predicateAliasErrorProgram>, PolicyService>>
+export type RawAliasErrorIsCarried = Expect<HasError<Effect.Error<typeof rawAliasProgram>, Ability.AliasError>>
+export type AbilityExtraQueryErrorIsCarried = Expect<HasError<Effect.Error<typeof abilityExtraDataLastProgram>, Ability.QueryGenerationError>>
+export type AbilityRefAliasErrorIsCarried = Expect<HasError<Effect.Error<typeof abilityRefDataLastProgram>, Ability.AliasError>>
