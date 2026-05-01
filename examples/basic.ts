@@ -9,14 +9,8 @@ interface Post {
   readonly body: string
 }
 
-interface User {
-  readonly id: string
-  readonly role: "admin" | "editor" | "guest"
-}
-
 type Subjects = {
   readonly Post: Post
-  readonly User: User
 }
 
 const currentUser = {
@@ -24,7 +18,7 @@ const currentUser = {
   role: "editor"
 } as const
 
-const makeAbility = Ability.define<Subjects>()(function* (ability) {
+const ability = Ability.define<Subjects>()(function* (ability) {
   yield* ability.allow("read", "Post")
 
   yield* ability.allow("update", "Post", {
@@ -40,7 +34,6 @@ const makeAbility = Ability.define<Subjects>()(function* (ability) {
 })
 
 const program = Effect.gen(function* () {
-  const ability = yield* makeAbility
   const post: Post = {
     id: "p1",
     authorId: "u1",
@@ -49,22 +42,25 @@ const program = Effect.gen(function* () {
     body: "World"
   }
 
-  const canUpdateTitle = yield* Ability.allows(ability, {
+  const canUpdateTitle = yield* Ability.check(ability, {
     action: "update",
     subject: "Post",
     value: post,
     field: "title"
-  })
+  }).pipe(
+    Effect.match({
+      onFailure: () => false,
+      onSuccess: () => true
+    })
+  )
 
   const deleteResult = yield* Ability.check(ability, {
     action: "delete",
     subject: "Post",
     value: post
   }).pipe(
-    Effect.match({
-      onFailure: (error) => error._tag === "AuthorizationError" ? error.reason : "unknown",
-      onSuccess: () => "deleted"
-    })
+    Effect.catchTag("AuthorizationError", (error) => Effect.succeed(error.reason)),
+    Effect.catch(() => Effect.succeed("unexpected failure"))
   )
 
   return {
@@ -74,4 +70,3 @@ const program = Effect.gen(function* () {
 })
 
 console.log(Effect.runSync(program))
-

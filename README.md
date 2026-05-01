@@ -2,11 +2,14 @@
 
 An Effect-style authorization library inspired by CASL.
 
-The public API is a module of pure functions instead of mutable classes:
+The public API is a module of functions:
 
-- `Ability.define` builds an immutable ability from a generator DSL.
-- `Ability.check` returns an `Effect` that fails with a typed `AuthorizationError`.
-- `Ability.allows` returns an effectful boolean for predicates that may need services.
+- `Ability.define` synchronously builds an immutable ability from a generator DSL.
+- `Ability.check` is the only authorization check API and returns `Effect<void, AuthorizationError | PredicateError | ConditionError>`.
+- There is no synchronous `can` / `cannot` / `allows` API. Boolean checks are derived with Effect combinators.
+- Database query generation, ORM adapters, and `accessibleBy`-style helpers are intentionally out of scope.
+
+## Basic usage
 
 ```ts
 import { Effect } from "effect"
@@ -20,28 +23,16 @@ interface Post {
   readonly body: string
 }
 
-interface User {
-  readonly id: string
-  readonly role: "admin" | "editor" | "guest"
-}
-
 type Subjects = {
   readonly Post: Post
-  readonly User: User
 }
 
-const currentUser = {
-  id: "u1",
-  role: "editor"
-} as const
-
-const makeAbility = Ability.define<Subjects>()(function* (ability) {
+const ability = Ability.define<Subjects>()(function* (ability) {
   yield* ability.allow("read", "Post")
 
   yield* ability.allow("update", "Post", {
     fields: ["title", "body"],
-    when: (post) => post.authorId === currentUser.id,
-    reason: "Authors can edit their own draft content"
+    when: (post) => post.authorId === "u1"
   })
 
   yield* ability.deny("delete", "Post", {
@@ -51,29 +42,6 @@ const makeAbility = Ability.define<Subjects>()(function* (ability) {
 })
 
 const program = Effect.gen(function* () {
-  const ability = yield* makeAbility
-  const post: Post = {
-    id: "p1",
-    authorId: "u1",
-    published: false,
-    title: "Hello",
-    body: "World"
-  }
-
-  yield* Ability.check(ability, {
-    action: "update",
-    subject: "Post",
-    value: post,
-    field: "title"
-  })
-})
-```
-
-The ability is automatically typed from the rules yielded in `Ability.define`.
-
-```ts
-Effect.gen(function* () {
-  const ability = yield* makeAbility
   const post = {} as Post
 
   yield* Ability.check(ability, {
@@ -82,37 +50,122 @@ Effect.gen(function* () {
     value: post,
     field: "title"
   })
-
-  yield* Ability.check(ability, {
-    action: "publish",
-    subject: "Post",
-    value: post
-  })
-  // TypeScript error: "publish" was not defined by this ability.
 })
 ```
 
 Denied checks fail through the Effect error channel:
 
 ```ts
-const guarded = Effect.gen(function* () {
-  const ability = yield* makeAbility
-  yield* Ability.check(ability, {
-    action: "delete",
-    subject: "Post",
-    value: {
-      id: "p1",
-      authorId: "u1",
-      published: true,
-      title: "Hello",
-      body: "World"
-    }
-  })
+const guarded = Ability.check(ability, {
+  action: "delete",
+  subject: "Post",
+  value: {
+    id: "p1",
+    authorId: "u1",
+    published: true,
+    title: "Hello",
+    body: "World"
+  }
 }).pipe(
-  Effect.catchTag("AuthorizationError", (error) =>
-    Effect.succeed(error.reason)
-  )
+  Effect.catchTag("AuthorizationError", (error) => Effect.succeed(error.reason))
 )
 ```
 
-See [examples/basic.ts](./examples/basic.ts) for a runnable example and [tests/Ability.test.ts](./tests/Ability.test.ts) for `@effect/vitest` coverage.
+## CASL-style rules
+
+Use `manage` for any action and `all` for any subject:
+
+```ts
+const ability = Ability.define<Subjects>()(function* (ability) {
+  yield* ability.allow("manage", "all")
+  yield* ability.deny("delete", "Post", {
+    conditions: { published: true }
+  })
+})
+```
+
+`allow` and `deny` accept arrays:
+
+```ts
+yield* ability.allow(["read", "update"], "Post", {
+  fields: ["title", "body"],
+  conditions: { authorId: "u1" }
+})
+```
+
+`conditions` use Mongo-style object matching through `@ucast/mongo2js` for in-memory objects only:
+
+```ts
+yield* ability.allow("read", "Post", {
+  conditions: {
+    tags: { $in: ["effect"] },
+    comments: { $elemMatch: { authorId: "u1" } }
+  }
+})
+```
+
+`conditions` and `when` are combined with AND. Predicate failures remain typed Effect failures.
+
+## Subjects and fields
+
+DTOs can be wrapped without mutation:
+
+```ts
+yield* Ability.check(ability, {
+  action: "read",
+  value: Ability.subject("Post", post)
+})
+```
+
+You can also pass `detectSubjectType` to `define` or `make`.
+
+Fields support dot paths and CASL-style patterns:
+
+```ts
+yield* ability.allow("update", "Post", {
+  fields: ["title", "comments.**"]
+})
+```
+
+To filter request payloads, compute permitted fields as an Effect:
+
+```ts
+const fields = yield* Ability.permittedFields(ability, {
+  action: "update",
+  subject: "Post",
+  value: post
+}, {
+  fieldsFrom: (rule) => rule.fields ?? ["title", "body"]
+})
+```
+
+## Raw rules and dynamic updates
+
+Raw rules are JSON-safe and do not include `when` predicates:
+
+```ts
+const ability = yield* Ability.fromRawRules<Subjects>([
+  { action: "read", subject: "Post", conditions: { authorId: "u1" } },
+  { action: "delete", subject: "Post", inverted: true, reason: "No deletes" }
+])
+
+const rules = yield* Ability.toRawRules(ability)
+```
+
+`Ability` stays immutable. Use `AbilityRef` when an application needs to replace the current ability:
+
+```ts
+import { AbilityRef } from "ability"
+
+const ref = AbilityRef.make(ability)
+
+const unsubscribe = yield* AbilityRef.on(ref, "updated", () =>
+  Effect.sync(() => {
+    console.log("ability updated")
+  }))
+
+yield* AbilityRef.set(ref, nextAbility)
+unsubscribe()
+```
+
+See [examples/basic.ts](./examples/basic.ts), [examples/advanced.ts](./examples/advanced.ts), and [tests/Ability.test.ts](./tests/Ability.test.ts).
