@@ -16,4 +16,4 @@ node_modules
 #!.yarn/cache
 .pnp.*
 
-references
+/references/*
