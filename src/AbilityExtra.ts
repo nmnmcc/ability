@@ -221,15 +221,11 @@ const rulesToFieldsEffect = Effect.fnUntraced(function* <
  * @category Conversions
  */
 export const rulesToFields: {
-  <
-    Subjects extends Ability.SubjectMap,
-    Rules extends Ability.AnyRule,
-    Aliases extends Ability.ActionAliases,
-    const Request extends Ability.RuleQueryRequest<Subjects, Rules, Aliases>
-  >(
+  <const Request>(
     request: Request
-  ): (
-    self: Ability.Ability<Subjects, Rules, Aliases>
+  ): <Subjects extends Ability.SubjectMap, Rules extends Ability.AnyRule, Aliases extends Ability.ActionAliases>(
+    self: Ability.Ability<Subjects, Rules, Aliases> &
+      (Request extends Ability.RuleQueryRequest<Subjects, Rules, Aliases> ? unknown : never)
   ) => Effect.Effect<Readonly<Record<string, unknown>>, Ability.QueryGenerationError | Ability.SubjectDetectionError>
   <
     Subjects extends Ability.SubjectMap,
@@ -325,20 +321,13 @@ const rulesToConditionEffect = Effect.fnUntraced(function* <
  * @category Conversions
  */
 export const rulesToCondition: {
-  <
-    Subjects extends Ability.SubjectMap,
-    Rules extends Ability.AnyRule,
-    Aliases extends Ability.ActionAliases,
-    const Request extends Ability.RuleQueryRequest<Subjects, Rules, Aliases>,
-    Query,
-    E = never,
-    R = never
-  >(
+  <const Request, Query, E = never, R = never>(
     request: Request,
-    convert: (rule: Rules) => Query | Effect.Effect<Query, E, R>,
+    convert: (rule: Ability.AnyRule) => Query | Effect.Effect<Query, E, R>,
     hooks: RulesToConditionHooks<Query>
-  ): (
-    self: Ability.Ability<Subjects, Rules, Aliases>
+  ): <Subjects extends Ability.SubjectMap, Rules extends Ability.AnyRule, Aliases extends Ability.ActionAliases>(
+    self: Ability.Ability<Subjects, Rules, Aliases> &
+      (Request extends Ability.RuleQueryRequest<Subjects, Rules, Aliases> ? unknown : never)
   ) => Effect.Effect<Query | null, Ability.QueryGenerationError | Ability.SubjectDetectionError | E, R>
   <
     Subjects extends Ability.SubjectMap,
@@ -397,19 +386,12 @@ const rulesToQueryEffect = Effect.fnUntraced(function* <
  * @category Conversions
  */
 export const rulesToQuery: {
-  <
-    Subjects extends Ability.SubjectMap,
-    Rules extends Ability.AnyRule,
-    Aliases extends Ability.ActionAliases,
-    const Request extends Ability.RuleQueryRequest<Subjects, Rules, Aliases>,
-    Query,
-    E = never,
-    R = never
-  >(
+  <const Request, Query, E = never, R = never>(
     request: Request,
-    convert: (rule: Rules) => Query | Effect.Effect<Query, E, R>
-  ): (
-    self: Ability.Ability<Subjects, Rules, Aliases>
+    convert: (rule: Ability.AnyRule) => Query | Effect.Effect<Query, E, R>
+  ): <Subjects extends Ability.SubjectMap, Rules extends Ability.AnyRule, Aliases extends Ability.ActionAliases>(
+    self: Ability.Ability<Subjects, Rules, Aliases> &
+      (Request extends Ability.RuleQueryRequest<Subjects, Rules, Aliases> ? unknown : never)
   ) => Effect.Effect<LogicalQuery<Query> | null, Ability.QueryGenerationError | Ability.SubjectDetectionError | E, R>
   <
     Subjects extends Ability.SubjectMap,

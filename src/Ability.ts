@@ -354,12 +354,17 @@ type RulesMatching<Rules, Action extends string, Name extends string, Aliases ex
   Name
 >
 
-type AllowedActions<Rules, Aliases extends ActionAliases> =
-  AnyAction extends RuleAction<Rules> ? string : ExpandedAction<RuleAction<Rules> & string, Aliases>
-type AllowedSubjects<Subjects extends SubjectMap, Rules> =
-  AnySubject extends RuleSubjectName<Rules>
+type RuleAllowedActions<Rule, Aliases extends ActionAliases> = Rule extends AnyRule
+  ? AnyAction extends RuleAction<Rule>
+    ? string
+    : ExpandedAction<RuleAction<Rule> & string, Aliases>
+  : never
+type RuleAllowedSubjects<Subjects extends SubjectMap, Rule> =
+  AnySubject extends RuleSubjectName<Rule>
     ? SubjectName<Subjects>
-    : Extract<RuleSubjectName<Rules>, SubjectName<Subjects>>
+    : Extract<RuleSubjectName<Rule>, SubjectName<Subjects>>
+type AllowedActions<Rules, Aliases extends ActionAliases> = RuleAllowedActions<Rules, Aliases>
+type AllowedSubjects<Subjects extends SubjectMap, Rules> = RuleAllowedSubjects<Subjects, Rules>
 type FieldFor<
   Subjects extends SubjectMap,
   Rules,
@@ -369,17 +374,24 @@ type FieldFor<
 > =
   RuleFields<RulesMatching<Rules, Action, Name, Aliases>> extends infer Fields
     ? [Fields] extends [never]
-      ? FieldOf<Subjects[Name]>
-      : Extract<Fields, FieldPattern> extends never
-        ? Fields & string
-        : FieldOf<Subjects[Name]>
+      ? never
+      : string extends Fields & string
+        ? FieldOf<Subjects[Name]>
+        : Extract<Fields, FieldPattern> extends never
+          ? Extract<Fields & string, FieldOf<Subjects[Name]>>
+          : FieldOf<Subjects[Name]>
     : never
 
-type ExplicitCheckRequest<Subjects extends SubjectMap, Rules extends AnyRule, Aliases extends ActionAliases> =
-  AllowedSubjects<Subjects, Rules> extends infer Name
-    ? Name extends SubjectName<Subjects>
-      ? AllowedActions<Rules, Aliases> extends infer Action
-        ? Action extends string
+type ExplicitRuleCheckRequest<
+  Subjects extends SubjectMap,
+  Rules extends AnyRule,
+  Aliases extends ActionAliases,
+  Rule extends AnyRule
+> =
+  RuleAllowedActions<Rule, Aliases> extends infer Action
+    ? Action extends string
+      ? RuleAllowedSubjects<Subjects, Rule> extends infer Name
+        ? Name extends SubjectName<Subjects>
           ? {
               readonly action: Action
               readonly subject: Name
@@ -391,11 +403,22 @@ type ExplicitCheckRequest<Subjects extends SubjectMap, Rules extends AnyRule, Al
       : never
     : never
 
-type TypedSubjectCheckRequest<Subjects extends SubjectMap, Rules extends AnyRule, Aliases extends ActionAliases> =
-  AllowedSubjects<Subjects, Rules> extends infer Name
-    ? Name extends SubjectName<Subjects>
-      ? AllowedActions<Rules, Aliases> extends infer Action
-        ? Action extends string
+type ExplicitCheckRequest<
+  Subjects extends SubjectMap,
+  Rules extends AnyRule,
+  Aliases extends ActionAliases
+> = Rules extends AnyRule ? ExplicitRuleCheckRequest<Subjects, Rules, Aliases, Rules> : never
+
+type TypedSubjectRuleCheckRequest<
+  Subjects extends SubjectMap,
+  Rules extends AnyRule,
+  Aliases extends ActionAliases,
+  Rule extends AnyRule
+> =
+  RuleAllowedActions<Rule, Aliases> extends infer Action
+    ? Action extends string
+      ? RuleAllowedSubjects<Subjects, Rule> extends infer Name
+        ? Name extends SubjectName<Subjects>
           ? {
               readonly action: Action
               readonly subject?: never
@@ -407,12 +430,33 @@ type TypedSubjectCheckRequest<Subjects extends SubjectMap, Rules extends AnyRule
       : never
     : never
 
-type DetectedSubjectCheckRequest<Subjects extends SubjectMap, Rules extends AnyRule, Aliases extends ActionAliases> = {
-  readonly action: AllowedActions<Rules, Aliases>
-  readonly subject?: never
-  readonly value: SubjectUnion<Subjects>
-  readonly field?: string
-}
+type TypedSubjectCheckRequest<
+  Subjects extends SubjectMap,
+  Rules extends AnyRule,
+  Aliases extends ActionAliases
+> = Rules extends AnyRule ? TypedSubjectRuleCheckRequest<Subjects, Rules, Aliases, Rules> : never
+
+type DetectedSubjectRuleCheckRequest<Subjects extends SubjectMap, Aliases extends ActionAliases, Rule extends AnyRule> =
+  RuleAllowedActions<Rule, Aliases> extends infer Action
+    ? Action extends string
+      ? RuleAllowedSubjects<Subjects, Rule> extends infer Name
+        ? Name extends SubjectName<Subjects>
+          ? {
+              readonly action: Action
+              readonly subject?: never
+              readonly value: Subjects[Name]
+              readonly field?: string
+            }
+          : never
+        : never
+      : never
+    : never
+
+type DetectedSubjectCheckRequest<
+  Subjects extends SubjectMap,
+  Rules extends AnyRule,
+  Aliases extends ActionAliases
+> = Rules extends AnyRule ? DetectedSubjectRuleCheckRequest<Subjects, Aliases, Rules> : never
 
 /**
  * @since 0.1.0

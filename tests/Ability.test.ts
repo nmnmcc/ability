@@ -1,6 +1,7 @@
 import {assert, describe, it} from "@effect/vitest"
+import {AbilityBuilder, createMongoAbility, subject} from "@casl/ability"
 import {Effect, Equal, Hash} from "effect"
-import {Ability, AbilityExtra, Casl} from "../src/index"
+import {Ability, AbilityExtra} from "../src/index"
 
 interface Comment {
   readonly authorId: string
@@ -430,31 +431,17 @@ describe("Ability", () => {
     })
   )
 
-  it.effect("converts JSON-safe abilities to official CASL Mongo abilities", () =>
-    Effect.gen(function* () {
-      const ability = Ability.define<Subjects>()(
-        function* (ability) {
-          yield* ability.allow("access", "Post", {
-            fields: ["title"],
-            conditions: {authorId: "u1"}
-          })
-        },
-        {
-          actionAliases: {
-            access: ["read", "update"]
-          } as const
-        }
-      )
+  it("uses official CASL APIs through the peer dependency", () => {
+    const {can, cannot, build} = new AbilityBuilder(createMongoAbility)
 
-      const caslAbility = yield* Casl.toMongoAbility(ability)
+    can("read", "Post")
+    cannot("delete", "Post", {published: true})
 
-      assert.strictEqual(caslAbility.can("update", Casl.subject("Post", draftPost), "title"), true)
-      assert.strictEqual(
-        caslAbility.can("update", Casl.subject("Post", {...draftPost, authorId: "u2"}), "title"),
-        false
-      )
-    })
-  )
+    const caslAbility = build()
+
+    assert.strictEqual(caslAbility.can("read", subject("Post", draftPost)), true)
+    assert.strictEqual(caslAbility.can("delete", subject("Post", publishedPost)), false)
+  })
 
   it.effect("implements guards, equality, hashing, and inspection protocols", () =>
     Effect.gen(function* () {

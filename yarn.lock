@@ -428,10 +428,12 @@ __metadata:
     effect: "npm:^4.0.0-beta.59"
     prettier: "npm:^3.8.3"
     tsdown: "npm:^0.21.10"
+    tstyche: "npm:^7.1.0"
     tsx: "npm:^4.21.0"
     typescript: "npm:^6.0.3"
     vitest: "npm:4.1.4"
   peerDependencies:
+    "@casl/ability": ^6.8.1
     effect: ^4.0.0-beta.59
   languageName: unknown
   linkType: soft
@@ -1658,6 +1660,20 @@ __metadata:
   version: 2.8.1
   resolution: "tslib@npm:2.8.1"
   checksum: 10c0/9c4759110a19c53f992d9aae23aac5ced636e99887b51b9e61def52611732872ff7668757d4e4c61f19691e36f4da981cd9485e869b4a7408d689f6bf1f14e62
+  languageName: node
+  linkType: hard
+
+"tstyche@npm:^7.1.0":
+  version: 7.1.0
+  resolution: "tstyche@npm:7.1.0"
+  peerDependencies:
+    typescript: ">=5.4"
+  peerDependenciesMeta:
+    typescript:
+      optional: true
+  bin:
+    tstyche: ./dist/bin.js
+  checksum: 10c0/de2c063750482503fe05e9238047f9c8a8acefb6e4c859a7d993627dc73cb1a6b59d4e7ddae2de40ea596915fa29cbd6c213828329061c5b2df7105fb39daac8
   languageName: node
   linkType: hard
 

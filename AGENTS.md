@@ -44,6 +44,8 @@ to change it:
 - Prefer immutable data structures for rules and abilities.
 - Keep rule matching behavior explicit. The current behavior is last matching rule
   wins, implemented by scanning rules from the end.
+- Use the code under `references/` as reference material for implementation
+  patterns, especially when aligning with Effect-style APIs and conventions.
 - Follow existing local style before introducing abstractions.
 - Keep changes narrowly scoped to the user's request.
 - Do not manually edit generated or third-party reference material.

@@ -1000,14 +1000,7 @@ export const fromRawRules = Effect.fnUntraced(function* <
   Subjects extends Ability.SubjectMap,
   Aliases extends Ability.ActionAliases = {}
 >(
-  rules: Iterable<
-    Ability.RawRule<
-      string,
-      Ability.RuleSubject<Subjects>,
-      string,
-      Ability.MongoCondition<any>
-    >
-  >,
+  rules: Iterable<Ability.RawRule<string, Ability.RuleSubject<Subjects>, string, Ability.MongoCondition<any>>>,
   options?: Ability.AbilityOptions<Subjects, Aliases>
 ): Effect.fn.Return<Ability.Ability<Subjects, Ability.AnyRule, Aliases>, AliasError | RawRuleError> {
   const built: Array<Ability.AnyRule> = []
@@ -1053,14 +1046,7 @@ const updateEffect = <
   Aliases extends Ability.ActionAliases
 >(
   self: Ability.Ability<Subjects, Rules, Aliases>,
-  rules: Iterable<
-    Ability.RawRule<
-      string,
-      Ability.RuleSubject<Subjects>,
-      string,
-      Ability.MongoCondition<any>
-    >
-  >
+  rules: Iterable<Ability.RawRule<string, Ability.RuleSubject<Subjects>, string, Ability.MongoCondition<any>>>
 ): Effect.Effect<Ability.Ability<Subjects, Ability.AnyRule, Aliases>, AliasError | RawRuleError> =>
   fromRawRules<Subjects, Aliases>(rules, self.options)
 

@@ -4,8 +4,7 @@ export default defineConfig({
   entry: {
     index: "src/index.ts",
     Ability: "src/Ability.ts",
-    AbilityExtra: "src/AbilityExtra.ts",
-    Casl: "src/Casl.ts"
+    AbilityExtra: "src/AbilityExtra.ts"
   },
   format: "esm",
   unbundle: true,
