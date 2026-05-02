@@ -17,14 +17,11 @@
  *
  * Gotchas:
  * - Last matching rule wins.
- * - Predicate callbacks can return booleans or Effects. Predicate failures are
- *   preserved in the Effect error channel.
- * - Function predicates cannot be serialized in strict mode.
  *
  * @since 0.1.0
  * @module
  */
-import type { MongoQuery } from "@ucast/mongo2js"
+import type {MongoQuery} from "@casl/ability"
 import type * as Equal from "effect/Equal"
 import type * as Effect from "effect/Effect"
 import type * as Inspectable from "effect/Inspectable"
@@ -125,13 +122,17 @@ export type SubjectUnion<Subjects extends SubjectMap> = Subjects[SubjectName<Sub
 
 type Primitive = string | number | boolean | bigint | symbol | null | undefined | Function | ReadonlyArray<unknown>
 type PreviousDepth = [never, 0, 1, 2, 3, 4, 5]
-type FieldPathInternal<Subject, Depth extends number> = [Depth] extends [never] ? never
-  : Subject extends Primitive ? never
-  : Subject extends object ? {
-      [Key in keyof Subject & string]: Subject[Key] extends Primitive ? Key
-        : Key | `${Key}.${FieldPathInternal<Subject[Key], PreviousDepth[Depth]>}`
-    }[keyof Subject & string]
-  : never
+type FieldPathInternal<Subject, Depth extends number> = [Depth] extends [never]
+  ? never
+  : Subject extends Primitive
+    ? never
+    : Subject extends object
+      ? {
+          [Key in keyof Subject & string]: Subject[Key] extends Primitive
+            ? Key
+            : Key | `${Key}.${FieldPathInternal<Subject[Key], PreviousDepth[Depth]>}`
+        }[keyof Subject & string]
+      : never
 
 /**
  * Dot-path field names for a subject. The recursion depth is intentionally
@@ -154,11 +155,7 @@ export type FieldPattern = `${string}*${string}`
  */
 export type FieldOf<Subject> = string & (FieldPath<Subject> | FieldPattern)
 
-/**
- * @since 0.1.0
- * @category Models
- */
-export type MongoCondition<Subject extends object> = MongoQuery<Subject> & Readonly<Record<string, unknown>>
+export type MongoCondition<Subject extends object> = MongoQuery<Subject>
 
 /**
  * @since 0.1.0
@@ -170,18 +167,9 @@ export type RuleKind = "Allow" | "Deny"
  * @since 0.1.0
  * @category Models
  */
-export type Predicate<Subject, E = never, R = never> = (
-  subject: Subject
-) => boolean | Effect.Effect<boolean, E, R>
-
-/**
- * @since 0.1.0
- * @category Models
- */
-export interface RuleOptions<Subject extends object, Fields extends string, E = never, R = never> {
+export interface RuleOptions<Subject extends object, Fields extends string> {
   readonly fields?: SingleOrReadonlyArray<Fields>
   readonly conditions?: MongoCondition<Subject>
-  readonly when?: Predicate<Subject, E, R>
   readonly reason?: string
 }
 
@@ -194,17 +182,19 @@ export interface Rule<
   Action extends string,
   Name extends string,
   Subject extends object,
-  Fields extends string,
-  E,
-  R
-> extends Equal.Equal, Inspectable.Inspectable, Pipeable.Pipeable, Effect.Yieldable<Rule<Kind, Action, Name, Subject, Fields, E, R>, Rule<Kind, Action, Name, Subject, Fields, E, R>> {
+  Fields extends string
+>
+  extends
+    Equal.Equal,
+    Inspectable.Inspectable,
+    Pipeable.Pipeable,
+    Effect.Yieldable<Rule<Kind, Action, Name, Subject, Fields>, Rule<Kind, Action, Name, Subject, Fields>> {
   readonly [RuleTypeId]: RuleTypeId
   readonly _tag: Kind
   readonly action: SingleOrReadonlyArray<Action>
   readonly subject: SingleOrReadonlyArray<Name>
   readonly fields?: ReadonlyArray<Fields>
   readonly conditions?: MongoCondition<Subject>
-  readonly when?: Predicate<Subject, E, R>
   readonly reason?: string
 }
 
@@ -212,13 +202,14 @@ export interface Rule<
  * @since 0.1.0
  * @category Models
  */
-export type AnyRule = Rule<RuleKind, string, string, any, string, any, any>
+export type AnyRule = Rule<RuleKind, string, string, any, string>
 
 /**
  * @since 0.1.0
  * @category Models
  */
-export interface TypedSubject<Name extends string, Value extends object> extends Equal.Equal, Inspectable.Inspectable, Pipeable.Pipeable {
+export interface TypedSubject<Name extends string, Value extends object>
+  extends Equal.Equal, Inspectable.Inspectable, Pipeable.Pipeable {
   readonly [SubjectTypeId]: SubjectTypeId
   readonly _tag: "Subject"
   readonly subject: Name
@@ -244,11 +235,8 @@ export interface AbilityOptions<Subjects extends SubjectMap, Aliases extends Act
  * @since 0.1.0
  * @category Models
  */
-export interface Ability<
-  Subjects extends SubjectMap,
-  Rules extends AnyRule = never,
-  Aliases extends ActionAliases = {}
-> extends Equal.Equal, Inspectable.Inspectable, Pipeable.Pipeable {
+export interface Ability<Subjects extends SubjectMap, Rules extends AnyRule = never, Aliases extends ActionAliases = {}>
+  extends Equal.Equal, Inspectable.Inspectable, Pipeable.Pipeable {
   readonly [TypeId]: TypeId
   readonly rules: ReadonlyArray<Rules>
   readonly options: AbilityOptions<Subjects, Aliases>
@@ -258,9 +246,11 @@ export interface Ability<
 }
 
 type ElementOf<A> = A extends ReadonlyArray<infer B> ? B : A
-type SubjectFor<Subjects extends SubjectMap, Name> = Name extends AnySubject ? SubjectUnion<Subjects>
-  : Name extends SubjectName<Subjects> ? Subjects[Name]
-  : never
+type SubjectFor<Subjects extends SubjectMap, Name> = Name extends AnySubject
+  ? SubjectUnion<Subjects>
+  : Name extends SubjectName<Subjects>
+    ? Subjects[Name]
+    : never
 type PreviousAliasDepth = [never, 0, 1, 2, 3, 4, 5]
 
 /**
@@ -270,13 +260,13 @@ type PreviousAliasDepth = [never, 0, 1, 2, 3, 4, 5]
  * @since 0.1.0
  * @category Models
  */
-export type ExpandedAction<
-  Action extends string,
-  Aliases extends ActionAliases,
-  Depth extends number = 5
-> = Action | ([Depth] extends [0] ? never
-  : Action extends keyof Aliases & string ? ExpandedAction<ElementOf<Aliases[Action]> & string, Aliases, PreviousAliasDepth[Depth]>
-  : never)
+export type ExpandedAction<Action extends string, Aliases extends ActionAliases, Depth extends number = 5> =
+  | Action
+  | ([Depth] extends [0]
+      ? never
+      : Action extends keyof Aliases & string
+        ? ExpandedAction<ElementOf<Aliases[Action]> & string, Aliases, PreviousAliasDepth[Depth]>
+        : never)
 
 /**
  * @since 0.1.0
@@ -286,26 +276,38 @@ export interface Builder<Subjects extends SubjectMap> {
   readonly allow: <
     const Action extends SingleOrReadonlyArray<string>,
     const Name extends SingleOrReadonlyArray<RuleSubject<Subjects>>,
-    const Fields extends FieldOf<SubjectFor<Subjects, ElementOf<Name>> & object> = FieldOf<SubjectFor<Subjects, ElementOf<Name>> & object>,
-    E = never,
-    R = never
+    const Fields extends FieldOf<SubjectFor<Subjects, ElementOf<Name>> & object> = FieldOf<
+      SubjectFor<Subjects, ElementOf<Name>> & object
+    >
   >(
     action: Action,
     subject: Name,
-    options?: RuleOptions<SubjectFor<Subjects, ElementOf<Name>> & object, Fields, E, R>
-  ) => Rule<"Allow", ElementOf<Action> & string, ElementOf<Name> & string, SubjectFor<Subjects, ElementOf<Name>> & object, Fields, E, R>
+    options?: RuleOptions<SubjectFor<Subjects, ElementOf<Name>> & object, Fields>
+  ) => Rule<
+    "Allow",
+    ElementOf<Action> & string,
+    ElementOf<Name> & string,
+    SubjectFor<Subjects, ElementOf<Name>> & object,
+    Fields
+  >
 
   readonly deny: <
     const Action extends SingleOrReadonlyArray<string>,
     const Name extends SingleOrReadonlyArray<RuleSubject<Subjects>>,
-    const Fields extends FieldOf<SubjectFor<Subjects, ElementOf<Name>> & object> = FieldOf<SubjectFor<Subjects, ElementOf<Name>> & object>,
-    E = never,
-    R = never
+    const Fields extends FieldOf<SubjectFor<Subjects, ElementOf<Name>> & object> = FieldOf<
+      SubjectFor<Subjects, ElementOf<Name>> & object
+    >
   >(
     action: Action,
     subject: Name,
-    options?: RuleOptions<SubjectFor<Subjects, ElementOf<Name>> & object, Fields, E, R>
-  ) => Rule<"Deny", ElementOf<Action> & string, ElementOf<Name> & string, SubjectFor<Subjects, ElementOf<Name>> & object, Fields, E, R>
+    options?: RuleOptions<SubjectFor<Subjects, ElementOf<Name>> & object, Fields>
+  ) => Rule<
+    "Deny",
+    ElementOf<Action> & string,
+    ElementOf<Name> & string,
+    SubjectFor<Subjects, ElementOf<Name>> & object,
+    Fields
+  >
 }
 
 /**
@@ -326,73 +328,86 @@ export interface RawRule<
   readonly reason?: string
 }
 
-type RuleAction<Rules> = Rules extends Rule<infer _Kind, infer Action, infer _Name, infer _Subject, infer _Fields, infer _E, infer _R> ? Action : never
-type RuleSubjectName<Rules> = Rules extends Rule<infer _Kind, infer _Action, infer Name, infer _Subject, infer _Fields, infer _E, infer _R> ? Name : never
-type RuleFields<Rules> = Rules extends Rule<infer _Kind, infer _Action, infer _Name, infer _Subject, infer Fields, infer _E, infer _R> ? Fields : never
-type RuleError<Rules> = Rules extends Rule<infer _Kind, infer _Action, infer _Name, infer _Subject, infer _Fields, infer E, infer _R> ? E : never
-type RuleServices<Rules> = Rules extends Rule<infer _Kind, infer _Action, infer _Name, infer _Subject, infer _Fields, infer _E, infer R> ? R : never
+type RuleAction<Rules> =
+  Rules extends Rule<infer _Kind, infer Action, infer _Name, infer _Subject, infer _Fields> ? Action : never
+type RuleSubjectName<Rules> =
+  Rules extends Rule<infer _Kind, infer _Action, infer Name, infer _Subject, infer _Fields> ? Name : never
+type RuleFields<Rules> =
+  Rules extends Rule<infer _Kind, infer _Action, infer _Name, infer _Subject, infer Fields> ? Fields : never
 
-type ActionMatches<Rule, Action extends string, Aliases extends ActionAliases> = Rule extends AnyRule ? Action extends ExpandedAction<RuleAction<Rule> & string, Aliases> ? Rule
-  : AnyAction extends RuleAction<Rule> ? Rule
+type ActionMatches<Rule, Action extends string, Aliases extends ActionAliases> = Rule extends AnyRule
+  ? Action extends ExpandedAction<RuleAction<Rule> & string, Aliases>
+    ? Rule
+    : AnyAction extends RuleAction<Rule>
+      ? Rule
+      : never
   : never
+type SubjectMatches<Rule, Name extends string> = Rule extends AnyRule
+  ? Name extends RuleSubjectName<Rule>
+    ? Rule
+    : AnySubject extends RuleSubjectName<Rule>
+      ? Rule
+      : never
   : never
-type SubjectMatches<Rule, Name extends string> = Rule extends AnyRule ? Name extends RuleSubjectName<Rule> ? Rule
-  : AnySubject extends RuleSubjectName<Rule> ? Rule
-  : never
-  : never
-type RulesMatching<Rules, Action extends string, Name extends string, Aliases extends ActionAliases> = SubjectMatches<ActionMatches<Rules, Action, Aliases>, Name>
+type RulesMatching<Rules, Action extends string, Name extends string, Aliases extends ActionAliases> = SubjectMatches<
+  ActionMatches<Rules, Action, Aliases>,
+  Name
+>
 
-type AllowedActions<Rules, Aliases extends ActionAliases> = AnyAction extends RuleAction<Rules> ? string : ExpandedAction<RuleAction<Rules> & string, Aliases>
-type AllowedSubjects<Subjects extends SubjectMap, Rules> = AnySubject extends RuleSubjectName<Rules> ? SubjectName<Subjects>
-  : Extract<RuleSubjectName<Rules>, SubjectName<Subjects>>
+type AllowedActions<Rules, Aliases extends ActionAliases> =
+  AnyAction extends RuleAction<Rules> ? string : ExpandedAction<RuleAction<Rules> & string, Aliases>
+type AllowedSubjects<Subjects extends SubjectMap, Rules> =
+  AnySubject extends RuleSubjectName<Rules>
+    ? SubjectName<Subjects>
+    : Extract<RuleSubjectName<Rules>, SubjectName<Subjects>>
 type FieldFor<
   Subjects extends SubjectMap,
   Rules,
   Aliases extends ActionAliases,
   Action extends string,
   Name extends SubjectName<Subjects>
-> = RuleFields<RulesMatching<Rules, Action, Name, Aliases>> extends infer Fields ? [Fields] extends [never] ? FieldOf<Subjects[Name]>
-  : Extract<Fields, FieldPattern> extends never ? Fields & string
-  : FieldOf<Subjects[Name]>
-  : never
+> =
+  RuleFields<RulesMatching<Rules, Action, Name, Aliases>> extends infer Fields
+    ? [Fields] extends [never]
+      ? FieldOf<Subjects[Name]>
+      : Extract<Fields, FieldPattern> extends never
+        ? Fields & string
+        : FieldOf<Subjects[Name]>
+    : never
 
-type ExplicitCheckRequest<
-  Subjects extends SubjectMap,
-  Rules extends AnyRule,
-  Aliases extends ActionAliases
-> = AllowedSubjects<Subjects, Rules> extends infer Name ? Name extends SubjectName<Subjects>
-    ? AllowedActions<Rules, Aliases> extends infer Action ? Action extends string ? {
-          readonly action: Action
-          readonly subject: Name
-          readonly value?: Subjects[Name] | TypedSubject<Name, Subjects[Name]>
-          readonly field?: FieldFor<Subjects, Rules, Aliases, Action, Name>
-        }
-      : never
+type ExplicitCheckRequest<Subjects extends SubjectMap, Rules extends AnyRule, Aliases extends ActionAliases> =
+  AllowedSubjects<Subjects, Rules> extends infer Name
+    ? Name extends SubjectName<Subjects>
+      ? AllowedActions<Rules, Aliases> extends infer Action
+        ? Action extends string
+          ? {
+              readonly action: Action
+              readonly subject: Name
+              readonly value?: Subjects[Name] | TypedSubject<Name, Subjects[Name]>
+              readonly field?: FieldFor<Subjects, Rules, Aliases, Action, Name>
+            }
+          : never
+        : never
       : never
     : never
-  : never
 
-type TypedSubjectCheckRequest<
-  Subjects extends SubjectMap,
-  Rules extends AnyRule,
-  Aliases extends ActionAliases
-> = AllowedSubjects<Subjects, Rules> extends infer Name ? Name extends SubjectName<Subjects>
-    ? AllowedActions<Rules, Aliases> extends infer Action ? Action extends string ? {
-          readonly action: Action
-          readonly subject?: never
-          readonly value: TypedSubject<Name, Subjects[Name]>
-          readonly field?: FieldFor<Subjects, Rules, Aliases, Action, Name>
-        }
-      : never
+type TypedSubjectCheckRequest<Subjects extends SubjectMap, Rules extends AnyRule, Aliases extends ActionAliases> =
+  AllowedSubjects<Subjects, Rules> extends infer Name
+    ? Name extends SubjectName<Subjects>
+      ? AllowedActions<Rules, Aliases> extends infer Action
+        ? Action extends string
+          ? {
+              readonly action: Action
+              readonly subject?: never
+              readonly value: TypedSubject<Name, Subjects[Name]>
+              readonly field?: FieldFor<Subjects, Rules, Aliases, Action, Name>
+            }
+          : never
+        : never
       : never
     : never
-  : never
 
-type DetectedSubjectCheckRequest<
-  Subjects extends SubjectMap,
-  Rules extends AnyRule,
-  Aliases extends ActionAliases
-> = {
+type DetectedSubjectCheckRequest<Subjects extends SubjectMap, Rules extends AnyRule, Aliases extends ActionAliases> = {
   readonly action: AllowedActions<Rules, Aliases>
   readonly subject?: never
   readonly value: SubjectUnion<Subjects>
@@ -403,11 +418,10 @@ type DetectedSubjectCheckRequest<
  * @since 0.1.0
  * @category Models
  */
-export type CheckRequest<
-  Subjects extends SubjectMap,
-  Rules extends AnyRule,
-  Aliases extends ActionAliases = {}
-> = ExplicitCheckRequest<Subjects, Rules, Aliases> | TypedSubjectCheckRequest<Subjects, Rules, Aliases> | DetectedSubjectCheckRequest<Subjects, Rules, Aliases>
+export type CheckRequest<Subjects extends SubjectMap, Rules extends AnyRule, Aliases extends ActionAliases = {}> =
+  | ExplicitCheckRequest<Subjects, Rules, Aliases>
+  | TypedSubjectCheckRequest<Subjects, Rules, Aliases>
+  | DetectedSubjectCheckRequest<Subjects, Rules, Aliases>
 
 /**
  * @since 0.1.0
@@ -419,51 +433,50 @@ export type RuleQueryRequest<
   Aliases extends ActionAliases = {}
 > = CheckRequest<Subjects, Rules, Aliases>
 
-type ExplicitSubjectQueryRequest<
-  Subjects extends SubjectMap,
-  Rules extends AnyRule
-> = AllowedSubjects<Subjects, Rules> extends infer Name ? Name extends SubjectName<Subjects> ? {
-      readonly subject: Name
-      readonly value?: Subjects[Name] | TypedSubject<Name, Subjects[Name]>
-    }
-  : never
-  : never
+type ExplicitSubjectQueryRequest<Subjects extends SubjectMap, Rules extends AnyRule> =
+  AllowedSubjects<Subjects, Rules> extends infer Name
+    ? Name extends SubjectName<Subjects>
+      ? {
+          readonly subject: Name
+          readonly value?: Subjects[Name] | TypedSubject<Name, Subjects[Name]>
+        }
+      : never
+    : never
 
-type TypedSubjectQueryRequest<
-  Subjects extends SubjectMap,
-  Rules extends AnyRule
-> = AllowedSubjects<Subjects, Rules> extends infer Name ? Name extends SubjectName<Subjects> ? {
+type TypedSubjectQueryRequest<Subjects extends SubjectMap, Rules extends AnyRule> =
+  AllowedSubjects<Subjects, Rules> extends infer Name
+    ? Name extends SubjectName<Subjects>
+      ? {
+          readonly subject?: never
+          readonly value: TypedSubject<Name, Subjects[Name]>
+        }
+      : never
+    : never
+
+/**
+ * @since 0.1.0
+ * @category Models
+ */
+export type SubjectQueryRequest<Subjects extends SubjectMap, Rules extends AnyRule> =
+  | ExplicitSubjectQueryRequest<Subjects, Rules>
+  | TypedSubjectQueryRequest<Subjects, Rules>
+  | {
       readonly subject?: never
-      readonly value: TypedSubject<Name, Subjects[Name]>
+      readonly value: SubjectUnion<Subjects>
     }
-  : never
-  : never
 
-/**
- * @since 0.1.0
- * @category Models
- */
-export type SubjectQueryRequest<
-  Subjects extends SubjectMap,
-  Rules extends AnyRule
-> = ExplicitSubjectQueryRequest<Subjects, Rules> | TypedSubjectQueryRequest<Subjects, Rules> | {
-  readonly subject?: never
-  readonly value: SubjectUnion<Subjects>
-}
-
-type RequestAction<Request> = Request extends { readonly action: infer Action } ? Action & string : string
-type RequestSubject<Request> = Request extends { readonly subject: infer Name } ? Name & string
-  : Request extends { readonly value: TypedSubject<infer Name, object> } ? Name & string
-  : string
-type MatchingRules<Rules, Request, Aliases extends ActionAliases> = RulesMatching<Rules, RequestAction<Request>, RequestSubject<Request>, Aliases>
-
-/**
- * @since 0.1.0
- * @category Models
- */
-export interface ToRawRulesOptions {
-  readonly strict?: boolean
-}
+type RequestAction<Request> = Request extends {readonly action: infer Action} ? Action & string : string
+type RequestSubject<Request> = Request extends {readonly subject: infer Name}
+  ? Name & string
+  : Request extends {readonly value: TypedSubject<infer Name, object>}
+    ? Name & string
+    : string
+type MatchingRules<Rules, Request, Aliases extends ActionAliases> = RulesMatching<
+  Rules,
+  RequestAction<Request>,
+  RequestSubject<Request>,
+  Aliases
+>
 
 /**
  * @since 0.1.0
@@ -496,30 +509,6 @@ export const ConditionError = internal.ConditionError
  * @category Errors
  */
 export type ConditionError = internal.ConditionError
-
-/**
- * @since 0.1.0
- * @category Errors
- */
-export const PredicateEvaluationError = internal.PredicateEvaluationError
-
-/**
- * @since 0.1.0
- * @category Errors
- */
-export type PredicateEvaluationError = internal.PredicateEvaluationError
-
-/**
- * @since 0.1.0
- * @category Errors
- */
-export const SerializationError = internal.SerializationError
-
-/**
- * @since 0.1.0
- * @category Errors
- */
-export type SerializationError = internal.SerializationError
 
 /**
  * @since 0.1.0
@@ -575,9 +564,7 @@ export type QueryGenerationError = internal.QueryGenerationError
  * @since 0.1.0
  * @category Constructors
  */
-export const createAliasResolver: <const Aliases extends ActionAliases>(
-  aliases: Aliases
-) => ActionResolver =
+export const createAliasResolver: <const Aliases extends ActionAliases>(aliases: Aliases) => ActionResolver =
   internal.createAliasResolver
 
 /**
@@ -593,8 +580,7 @@ export const define: <Subjects extends SubjectMap>() => <
 >(
   body: (builder: Builder<Subjects>) => Generator<Eff, A, unknown>,
   options?: AbilityOptions<Subjects, Aliases>
-) => Ability<Subjects, Eff, Aliases> =
-  internal.define
+) => Ability<Subjects, Eff, Aliases> = internal.define
 
 /**
  * Constructs an Ability directly from rules.
@@ -614,10 +600,27 @@ export const make: <Subjects extends SubjectMap, Rules extends AnyRule, const Al
  * @category Constructors
  */
 export const fromRawRules: <Subjects extends SubjectMap, const Aliases extends ActionAliases = {}>(
-  rules: Iterable<RawRule<string, RuleSubject<Subjects>, string, MongoCondition<SubjectUnion<Subjects>>>>,
+  rules: Iterable<RawRule<string, RuleSubject<Subjects>, string, MongoCondition<any>>>,
   options?: AbilityOptions<Subjects, Aliases>
-) => Effect.Effect<Ability<Subjects, AnyRule, Aliases>, AliasError | RawRuleError> =
-  internal.fromRawRules
+) => Effect.Effect<Ability<Subjects, AnyRule, Aliases>, AliasError | RawRuleError> = internal.fromRawRules
+
+/**
+ * Returns a new Ability from raw rules using an existing Ability's options.
+ *
+ * @since 0.1.0
+ * @category Constructors
+ */
+export const update: {
+  <Subjects extends SubjectMap, Rules extends AnyRule, Aliases extends ActionAliases>(
+    rules: Iterable<RawRule<string, RuleSubject<Subjects>, string, MongoCondition<any>>>
+  ): (
+    self: Ability<Subjects, Rules, Aliases>
+  ) => Effect.Effect<Ability<Subjects, AnyRule, Aliases>, AliasError | RawRuleError>
+  <Subjects extends SubjectMap, Rules extends AnyRule, Aliases extends ActionAliases>(
+    self: Ability<Subjects, Rules, Aliases>,
+    rules: Iterable<RawRule<string, RuleSubject<Subjects>, string, MongoCondition<any>>>
+  ): Effect.Effect<Ability<Subjects, AnyRule, Aliases>, AliasError | RawRuleError>
+} = internal.update
 
 /**
  * Creates a pure typed subject wrapper without mutating the wrapped value.
@@ -628,8 +631,7 @@ export const fromRawRules: <Subjects extends SubjectMap, const Aliases extends A
 export const subject: <const Name extends string, Value extends object>(
   name: Name,
   value: Value
-) => TypedSubject<Name, Value> =
-  internal.subject
+) => TypedSubject<Name, Value> = internal.subject
 
 /**
  * Returns whether a value is an Ability.
@@ -637,8 +639,7 @@ export const subject: <const Name extends string, Value extends object>(
  * @since 0.1.0
  * @category Guards
  */
-export const isAbility: (value: unknown) => value is Ability<SubjectMap, AnyRule, ActionAliases> =
-  internal.isAbility
+export const isAbility: (value: unknown) => value is Ability<SubjectMap, AnyRule, ActionAliases> = internal.isAbility
 
 /**
  * Returns whether a value is a rule.
@@ -646,8 +647,7 @@ export const isAbility: (value: unknown) => value is Ability<SubjectMap, AnyRule
  * @since 0.1.0
  * @category Guards
  */
-export const isRule: (value: unknown) => value is AnyRule =
-  internal.isRule
+export const isRule: (value: unknown) => value is AnyRule = internal.isRule
 
 /**
  * Returns whether a value is a typed subject wrapper.
@@ -655,8 +655,7 @@ export const isRule: (value: unknown) => value is AnyRule =
  * @since 0.1.0
  * @category Guards
  */
-export const isSubject: (value: unknown) => value is TypedSubject<string, object> =
-  internal.isSubject
+export const isSubject: (value: unknown) => value is TypedSubject<string, object> = internal.isSubject
 
 /**
  * Unwraps a typed subject wrapper.
@@ -664,8 +663,9 @@ export const isSubject: (value: unknown) => value is TypedSubject<string, object
  * @since 0.1.0
  * @category Accessors
  */
-export const unwrapSubject: <Value>(value: Value) => Value extends TypedSubject<infer _Name, infer Subject> ? Subject : Value =
-  internal.unwrapSubject as never
+export const unwrapSubject: <Value>(
+  value: Value
+) => Value extends TypedSubject<infer _Name, infer Subject> ? Subject : Value = internal.unwrapSubject as never
 
 /**
  * Detects a subject name for a value using an Ability's detection strategy.
@@ -676,8 +676,7 @@ export const unwrapSubject: <Value>(value: Value) => Value extends TypedSubject<
 export const detectSubjectType: <Subjects extends SubjectMap, Rules extends AnyRule, Aliases extends ActionAliases>(
   self: Ability<Subjects, Rules, Aliases>,
   value: object | TypedSubject<SubjectName<Subjects>, SubjectUnion<Subjects>>
-) => Effect.Effect<SubjectName<Subjects>, SubjectDetectionError> =
-  internal.detectSubjectType
+) => Effect.Effect<SubjectName<Subjects>, SubjectDetectionError> = internal.detectSubjectType
 
 /**
  * Converts an Ability to JSON-safe raw rules.
@@ -686,13 +685,11 @@ export const detectSubjectType: <Subjects extends SubjectMap, Rules extends AnyR
  * @category Conversions
  */
 export const toRawRules: <Subjects extends SubjectMap, Rules extends AnyRule, Aliases extends ActionAliases>(
-  self: Ability<Subjects, Rules, Aliases>,
-  options?: ToRawRulesOptions
-) => Effect.Effect<ReadonlyArray<RawRule>, SerializationError> =
-  internal.toRawRules
+  self: Ability<Subjects, Rules, Aliases>
+) => Effect.Effect<ReadonlyArray<RawRule>> = internal.toRawRules
 
 /**
- * Returns rules that may apply for a request before field, condition and predicate checks.
+ * Returns rules that may apply for a request before field and condition checks.
  *
  * @since 0.1.0
  * @category Accessors
@@ -763,11 +760,7 @@ export const relevantRuleFor: {
     request: Request
   ): (
     self: Ability<Subjects, Rules, Aliases>
-  ) => Effect.Effect<
-    MatchingRules<Rules, Request, Aliases> | undefined,
-    ConditionError | PredicateEvaluationError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
-    RuleServices<MatchingRules<Rules, Request, Aliases>>
-  >
+  ) => Effect.Effect<MatchingRules<Rules, Request, Aliases> | undefined, ConditionError | SubjectDetectionError>
   <
     Subjects extends SubjectMap,
     Rules extends AnyRule,
@@ -776,11 +769,7 @@ export const relevantRuleFor: {
   >(
     self: Ability<Subjects, Rules, Aliases>,
     request: Request
-  ): Effect.Effect<
-    MatchingRules<Rules, Request, Aliases> | undefined,
-    ConditionError | PredicateEvaluationError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
-    RuleServices<MatchingRules<Rules, Request, Aliases>>
-  >
+  ): Effect.Effect<MatchingRules<Rules, Request, Aliases> | undefined, ConditionError | SubjectDetectionError>
 } = internal.relevantRuleFor
 
 /**
@@ -827,11 +816,7 @@ export const check: {
     request: Request
   ): (
     self: Ability<Subjects, Rules, Aliases>
-  ) => Effect.Effect<
-    void,
-    AuthorizationError | ConditionError | PredicateEvaluationError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
-    RuleServices<MatchingRules<Rules, Request, Aliases>>
-  >
+  ) => Effect.Effect<void, AuthorizationError | ConditionError | SubjectDetectionError>
   <
     Subjects extends SubjectMap,
     Rules extends AnyRule,
@@ -840,11 +825,7 @@ export const check: {
   >(
     self: Ability<Subjects, Rules, Aliases>,
     request: Request
-  ): Effect.Effect<
-    void,
-    AuthorizationError | ConditionError | PredicateEvaluationError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
-    RuleServices<MatchingRules<Rules, Request, Aliases>>
-  >
+  ): Effect.Effect<void, AuthorizationError | ConditionError | SubjectDetectionError>
 } = internal.check
 
 /**
@@ -864,11 +845,7 @@ export const permittedFields: {
     options: PermittedFieldsOptions<Rules>
   ): (
     self: Ability<Subjects, Rules, Aliases>
-  ) => Effect.Effect<
-    ReadonlyArray<string>,
-    ConditionError | PredicateEvaluationError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
-    RuleServices<MatchingRules<Rules, Request, Aliases>>
-  >
+  ) => Effect.Effect<ReadonlyArray<string>, ConditionError | SubjectDetectionError>
   <
     Subjects extends SubjectMap,
     Rules extends AnyRule,
@@ -878,9 +855,5 @@ export const permittedFields: {
     self: Ability<Subjects, Rules, Aliases>,
     request: Request,
     options: PermittedFieldsOptions<Rules>
-  ): Effect.Effect<
-    ReadonlyArray<string>,
-    ConditionError | PredicateEvaluationError | SubjectDetectionError | RuleError<MatchingRules<Rules, Request, Aliases>>,
-    RuleServices<MatchingRules<Rules, Request, Aliases>>
-  >
+  ): Effect.Effect<ReadonlyArray<string>, ConditionError | SubjectDetectionError>
 } = internal.permittedFields

@@ -1,0 +1,9 @@
+{
+  "printWidth": 120,
+  "arrowParens": "always",
+  "bracketSameLine": true,
+  "bracketSpacing": false,
+  "endOfLine": "lf",
+  "semi": false,
+  "trailingComma": "none"
+}

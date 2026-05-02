@@ -1,7 +1,7 @@
 {
   "name": "@nmnmcc/ability",
   "version": "0.1.0",
-  "description": "An Effect-style authorization library inspired by CASL.",
+  "description": "An Effect-style authorization library backed by CASL.",
   "license": "Apache-2.0",
   "type": "module",
   "packageManager": "yarn@4.14.1",
@@ -36,10 +36,10 @@
       "import": "./dist/AbilityExtra.js",
       "default": "./dist/AbilityExtra.js"
     },
-    "./AbilityRef": {
-      "types": "./dist/AbilityRef.d.ts",
-      "import": "./dist/AbilityRef.js",
-      "default": "./dist/AbilityRef.js"
+    "./Casl": {
+      "types": "./dist/Casl.d.ts",
+      "import": "./dist/Casl.js",
+      "default": "./dist/Casl.js"
     },
     "./package.json": "./package.json"
   },
@@ -48,6 +48,7 @@
     "prepack": "yarn build",
     "prepublishOnly": "yarn typecheck && yarn test",
     "release:check": "yarn typecheck && yarn test && yarn pack --dry-run",
+    "format": "prettier . -w",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "npm": "YARN_NPM_REGISTRY_SERVER=https://registry.npmjs.org yarn npm"
@@ -61,6 +62,7 @@
     "@effect/vitest": "4.0.0-beta.59",
     "@types/node": "^25.6.0",
     "effect": "^4.0.0-beta.59",
+    "prettier": "^3.8.3",
     "tsdown": "^0.21.10",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
@@ -70,6 +72,6 @@
     "effect": "^4.0.0-beta.59"
   },
   "dependencies": {
-    "@ucast/mongo2js": "^2.0.0"
+    "@casl/ability": "^6.8.1"
   }
 }

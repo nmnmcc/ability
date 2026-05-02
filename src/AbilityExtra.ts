@@ -13,8 +13,6 @@
  *   or {@link rulesToQuery}.
  *
  * Gotchas:
- * - Query generation rejects function predicates because they cannot be
- *   represented as static conditions.
  * - Conversion callbacks may be synchronous or Effectful; synchronous throws are
  *   converted to `QueryGenerationError`.
  *
@@ -22,9 +20,9 @@
  * @module
  */
 import * as Effect from "effect/Effect"
-import { dual } from "effect/Function"
+import {dual} from "effect/Function"
 import * as Ability from "./Ability.js"
-import { cloneSerializable, isPlainObject } from "./internal/serializable.js"
+import {cloneSerializable, isPlainObject} from "./internal/serializable.js"
 
 /**
  * @since 0.1.0
@@ -54,21 +52,21 @@ export interface RulesToConditionHooks<Query> {
  * @since 0.1.0
  * @category Models
  */
-export type LogicalQuery<Query> = Query | {
-  readonly $and: ReadonlyArray<LogicalQuery<Query>>
-} | {
-  readonly $or: ReadonlyArray<LogicalQuery<Query>>
-} | {
-  readonly $not: LogicalQuery<Query>
-}
+export type LogicalQuery<Query> =
+  | Query
+  | {
+      readonly $and: ReadonlyArray<LogicalQuery<Query>>
+    }
+  | {
+      readonly $or: ReadonlyArray<LogicalQuery<Query>>
+    }
+  | {
+      readonly $not: LogicalQuery<Query>
+    }
 
 const forbiddenPathKeys = new Set(["__proto__", "constructor", "prototype"])
 
-const setByPath = (
-  object: Record<string, unknown>,
-  path: string,
-  value: unknown
-): void => {
+const setByPath = (object: Record<string, unknown>, path: string, value: unknown): void => {
   const keys = path.split(".")
   let cursor = object
   let index = 0
@@ -106,7 +104,10 @@ const packRule = <Rule extends Ability.RawRule>(rule: Rule): PackRule<Rule> => {
     rule.reason ?? ""
   ]
 
-  while (packed.length > 2 && (packed[packed.length - 1] === 0 || packed[packed.length - 1] === "" || packed[packed.length - 1] === undefined)) {
+  while (
+    packed.length > 2 &&
+    (packed[packed.length - 1] === 0 || packed[packed.length - 1] === "" || packed[packed.length - 1] === undefined)
+  ) {
     packed.pop()
   }
 
@@ -119,14 +120,10 @@ const packRule = <Rule extends Ability.RawRule>(rule: Rule): PackRule<Rule> => {
  * @since 0.1.0
  * @category Conversions
  */
-export const packRules = <Rule extends Ability.RawRule>(
-  rules: Iterable<Rule>
-): ReadonlyArray<PackRule<Rule>> =>
+export const packRules = <Rule extends Ability.RawRule>(rules: Iterable<Rule>): ReadonlyArray<PackRule<Rule>> =>
   Object.freeze(Array.from(rules, packRule))
 
-const unpackRule = <Rule extends Ability.RawRule>(
-  packed: PackRule<Rule>
-): Rule => {
+const unpackRule = <Rule extends Ability.RawRule>(packed: PackRule<Rule>): Rule => {
   const [action, subject, conditions, inverted, fields, reason] = packed
   const rule: {
     action: Rule["action"]
@@ -164,14 +161,9 @@ const unpackRule = <Rule extends Ability.RawRule>(
  */
 export const unpackRules = <Rule extends Ability.RawRule = Ability.RawRule>(
   rules: Iterable<PackRule<Rule>>
-): ReadonlyArray<Rule> =>
-  Object.freeze(Array.from(rules, unpackRule))
+): ReadonlyArray<Rule> => Object.freeze(Array.from(rules, unpackRule))
 
-const queryGenerationError = (
-  reason: string,
-  ruleIndex?: number,
-  cause?: unknown
-): Ability.QueryGenerationError => {
+const queryGenerationError = (reason: string, ruleIndex?: number, cause?: unknown): Ability.QueryGenerationError => {
   const error: {
     reason: string
     ruleIndex?: number
@@ -188,23 +180,13 @@ const queryGenerationError = (
   return new Ability.QueryGenerationError(error)
 }
 
-const assertSerializableRule = (
-  rule: Ability.AnyRule,
-  ruleIndex: number
-): Effect.Effect<void, Ability.QueryGenerationError> => {
-  if (rule.when !== undefined) {
-    return Effect.fail(queryGenerationError("Cannot transform rules with function predicates", ruleIndex))
-  }
-  return Effect.void
-}
-
 /**
  * Extracts scalar condition values as default fields.
  *
  * @since 0.1.0
  * @category Conversions
  */
-const rulesToFieldsEffect = Effect.fnUntraced(function*<
+const rulesToFieldsEffect = Effect.fnUntraced(function* <
   Subjects extends Ability.SubjectMap,
   Rules extends Ability.AnyRule,
   Aliases extends Ability.ActionAliases,
@@ -218,7 +200,6 @@ const rulesToFieldsEffect = Effect.fnUntraced(function*<
   let index = 0
 
   for (const rule of rules) {
-    yield* assertSerializableRule(rule, index)
     if (rule._tag === "Allow" && rule.conditions !== undefined) {
       for (const key of Object.keys(rule.conditions as Record<string, unknown>)) {
         const value = (rule.conditions as Record<string, unknown>)[key]
@@ -271,7 +252,7 @@ const convertRule = <Rule extends Ability.AnyRule, Query, E, R>(
       try: () => convert(rule),
       catch: (cause) => queryGenerationError("Rule conversion failed", ruleIndex, cause)
     }),
-    (result) => Effect.isEffect(result) ? result : Effect.succeed(result)
+    (result) => (Effect.isEffect(result) ? result : Effect.succeed(result))
   )
 
 /**
@@ -280,7 +261,7 @@ const convertRule = <Rule extends Ability.AnyRule, Query, E, R>(
  * @since 0.1.0
  * @category Conversions
  */
-const rulesToConditionEffect = Effect.fnUntraced(function*<
+const rulesToConditionEffect = Effect.fnUntraced(function* <
   Subjects extends Ability.SubjectMap,
   Rules extends Ability.AnyRule,
   Aliases extends Ability.ActionAliases,
@@ -302,7 +283,6 @@ const rulesToConditionEffect = Effect.fnUntraced(function*<
 
   while (index < rules.length) {
     const rule = rules[index] as Rules
-    yield* assertSerializableRule(rule, index)
 
     if (rule._tag === "Deny") {
       if (rule.conditions === undefined) {
@@ -382,7 +362,7 @@ export const rulesToCondition: {
  * @since 0.1.0
  * @category Conversions
  */
-const rulesToQueryEffect = Effect.fnUntraced(function*<
+const rulesToQueryEffect = Effect.fnUntraced(function* <
   Subjects extends Ability.SubjectMap,
   Rules extends Ability.AnyRule,
   Aliases extends Ability.ActionAliases,
@@ -397,13 +377,15 @@ const rulesToQueryEffect = Effect.fnUntraced(function*<
 ): Effect.fn.Return<LogicalQuery<Query> | null, Ability.SubjectDetectionError | Ability.QueryGenerationError | E, R> {
   const logicalConvert = (rule: Rules): LogicalQuery<Query> | Effect.Effect<LogicalQuery<Query>, E, R> => {
     const result = convert(rule)
-    return Effect.isEffect(result) ? result as Effect.Effect<LogicalQuery<Query>, E, R> : result as LogicalQuery<Query>
+    return Effect.isEffect(result)
+      ? (result as Effect.Effect<LogicalQuery<Query>, E, R>)
+      : (result as LogicalQuery<Query>)
   }
 
   return yield* rulesToConditionEffect(self, request, logicalConvert, {
-    and: (conditions) => ({ $and: conditions }),
-    or: (conditions) => ({ $or: conditions }),
-    not: (condition) => ({ $not: condition }),
+    and: (conditions) => ({$and: conditions}),
+    or: (conditions) => ({$or: conditions}),
+    not: (condition) => ({$not: condition}),
     empty: () => ({}) as LogicalQuery<Query>
   })
 })

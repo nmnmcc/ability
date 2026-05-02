@@ -3,4 +3,4 @@
  */
 export * as Ability from "./Ability.js"
 export * as AbilityExtra from "./AbilityExtra.js"
-export * as AbilityRef from "./AbilityRef.js"
+export * as Casl from "./Casl.js"

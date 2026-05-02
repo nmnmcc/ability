@@ -1,5 +1,5 @@
-import { Effect } from "effect"
-import { Ability } from "../src/index"
+import {Effect} from "effect"
+import {Ability} from "../src/index"
 
 interface Post {
   readonly id: string
@@ -13,22 +13,17 @@ type Subjects = {
   readonly Post: Post
 }
 
-const currentUser = {
-  id: "u1",
-  role: "editor"
-} as const
-
 const ability = Ability.define<Subjects>()(function* (ability) {
   yield* ability.allow("read", "Post")
 
   yield* ability.allow("update", "Post", {
     fields: ["title", "body"],
-    when: (post) => post.authorId === currentUser.id,
+    conditions: {authorId: "u1"},
     reason: "Authors can edit their own draft content"
   })
 
   yield* ability.deny("delete", "Post", {
-    when: (post) => post.published,
+    conditions: {published: true},
     reason: "Published posts cannot be deleted"
   })
 })

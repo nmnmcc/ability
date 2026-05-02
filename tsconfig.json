@@ -1,6 +1,6 @@
 {
   "compilerOptions": {
-    "plugins": [{ "name": "@effect/language-service" }],
+    "plugins": [{"name": "@effect/language-service"}],
 
     "module": "esnext",
     "moduleResolution": "bundler",

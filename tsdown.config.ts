@@ -1,11 +1,11 @@
-import { defineConfig } from "tsdown"
+import {defineConfig} from "tsdown"
 
 export default defineConfig({
   entry: {
     index: "src/index.ts",
     Ability: "src/Ability.ts",
     AbilityExtra: "src/AbilityExtra.ts",
-    AbilityRef: "src/AbilityRef.ts"
+    Casl: "src/Casl.ts"
   },
   format: "esm",
   unbundle: true,

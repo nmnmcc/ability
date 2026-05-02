@@ -1,5 +1,5 @@
-import { Context, Data, Effect } from "effect"
-import { Ability, AbilityExtra, AbilityRef } from "../src/index"
+import {Effect} from "effect"
+import {Ability, AbilityExtra, Casl} from "../src/index"
 
 interface Address {
   readonly city: string
@@ -12,6 +12,7 @@ interface Post {
   readonly published: boolean
   readonly title: string
   readonly body: string
+  readonly tags: ReadonlyArray<string>
   readonly address: Address
 }
 
@@ -28,11 +29,10 @@ type Subjects = {
 const ability = Ability.define<Subjects>()(function* (ability) {
   yield* ability.allow(["read", "update"], "Post", {
     fields: ["title", "address.city"],
-    conditions: { authorId: "u1" },
-    when: (post) => post.authorId === "u1"
+    conditions: {authorId: "u1"}
   })
   yield* ability.deny("delete", "Post", {
-    when: (post) => post.published
+    conditions: {published: true}
   })
 })
 
@@ -45,6 +45,13 @@ export const validUsage = Effect.gen(function* () {
     value: post,
     field: "address.city"
   })
+})
+
+export const caslAdapterUsage = Effect.gen(function* () {
+  const post = {} as Post
+  const caslAbility = yield* Casl.toMongoAbility(ability)
+
+  caslAbility.can("read", Casl.subject("Post", post))
 })
 
 export const invalidAction = Effect.gen(function* () {
@@ -110,7 +117,7 @@ const aliasAbility = Ability.define<Subjects>()(
   function* (ability) {
     yield* ability.allow("modify", "Post", {
       fields: ["title"],
-      when: (post) => post.authorId === "u1"
+      conditions: {authorId: "u1"}
     })
   },
   {
@@ -161,60 +168,18 @@ export const typedSubjectUsage = Effect.gen(function* () {
   })
 })
 
-class PredicateError extends Data.TaggedError("PredicateError")<{}> {}
-
-class PolicyService extends Context.Service<PolicyService, {
-  readonly allowed: boolean
-}>()("PolicyService") {}
-
-const effectfulAbility = Ability.define<Subjects>()(function* (ability) {
+export const strictCaslConditionTypes = Ability.define<Subjects>()(function* (ability) {
   yield* ability.allow("read", "Post", {
-    when: () => Effect.gen(function* () {
-      const service = yield* PolicyService
-      if (service.allowed) {
-        return true
-      }
-      return yield* Effect.fail(new PredicateError())
-    })
+    conditions: {
+      published: {$eq: false}
+    }
   })
-})
 
-const effectfulAliasAbility = Ability.define<Subjects>()(
-  function* (ability) {
-    yield* ability.allow("modify", "Post", {
-      when: () => Effect.gen(function* () {
-        const service = yield* PolicyService
-        if (service.allowed) {
-          return true
-        }
-        return yield* Effect.fail(new PredicateError())
-      })
-    })
-  },
-  {
-    actionAliases: {
-      modify: ["update", "delete"]
-    } as const
-  }
-)
-
-export const predicateErrorProgram = Effect.gen(function* () {
-  const post = {} as Post
-
-  yield* Ability.check(effectfulAbility, {
-    action: "read",
-    subject: "Post",
-    value: post
-  })
-})
-
-export const predicateAliasErrorProgram = Effect.gen(function* () {
-  const post = {} as Post
-
-  yield* Ability.check(effectfulAliasAbility, {
-    action: "update",
-    subject: "Post",
-    value: post
+  yield* ability.allow("read", "Post", {
+    conditions: {
+      // @ts-expect-error CASL MongoQuery does not accept scalar $in values for array fields
+      tags: {$in: ["effect"]}
+    }
   })
 })
 
@@ -231,6 +196,26 @@ export const rawAliasProgram = Ability.fromRawRules<Subjects>(
     } as const
   }
 )
+
+export const updateProgram = Effect.gen(function* () {
+  const next = yield* Ability.update(ability, [
+    {
+      action: "read",
+      subject: "Post"
+    }
+  ])
+
+  yield* ability.pipe(
+    Ability.update([
+      {
+        action: "read",
+        subject: "Post"
+      }
+    ])
+  )
+
+  return next
+})
 
 export const abilityExtraDataLastProgram = Effect.gen(function* () {
   yield* ability.pipe(
@@ -250,29 +235,12 @@ export const abilityExtraDataLastProgram = Effect.gen(function* () {
   )
 })
 
-export const abilityRefDataLastProgram = Effect.gen(function* () {
-  const ref = AbilityRef.make(ability)
-  const unsubscribe = yield* ref.pipe(AbilityRef.on("updated", () => undefined))
-  yield* ref.pipe(AbilityRef.set(ability))
-  yield* ref.pipe(AbilityRef.update([
-    {
-      action: "read",
-      subject: "Post"
-    }
-  ]))
-  unsubscribe()
-})
-
 type HasError<Errors, Error> = Extract<Errors, Error> extends never ? false : true
-type HasService<Services, Service> = Extract<Services, Service> extends never ? false : true
 type Expect<Condition extends true> = Condition
 
-export type PredicateErrorIsCarried = Expect<HasError<Effect.Error<typeof predicateErrorProgram>, PredicateError>>
-export type PredicateEvaluationErrorIsCarried = Expect<HasError<Effect.Error<typeof predicateErrorProgram>, Ability.PredicateEvaluationError>>
-export type AuthorizationErrorIsCarried = Expect<HasError<Effect.Error<typeof predicateErrorProgram>, Ability.AuthorizationError>>
-export type PolicyServiceIsCarried = Expect<HasService<Effect.Services<typeof predicateErrorProgram>, PolicyService>>
-export type AliasPredicateErrorIsCarried = Expect<HasError<Effect.Error<typeof predicateAliasErrorProgram>, PredicateError>>
-export type AliasPolicyServiceIsCarried = Expect<HasService<Effect.Services<typeof predicateAliasErrorProgram>, PolicyService>>
+export type AuthorizationErrorIsCarried = Expect<HasError<Effect.Error<typeof validUsage>, Ability.AuthorizationError>>
 export type RawAliasErrorIsCarried = Expect<HasError<Effect.Error<typeof rawAliasProgram>, Ability.AliasError>>
-export type AbilityExtraQueryErrorIsCarried = Expect<HasError<Effect.Error<typeof abilityExtraDataLastProgram>, Ability.QueryGenerationError>>
-export type AbilityRefAliasErrorIsCarried = Expect<HasError<Effect.Error<typeof abilityRefDataLastProgram>, Ability.AliasError>>
+export type UpdateAliasErrorIsCarried = Expect<HasError<Effect.Error<typeof updateProgram>, Ability.AliasError>>
+export type AbilityExtraQueryErrorIsCarried = Expect<
+  HasError<Effect.Error<typeof abilityExtraDataLastProgram>, Ability.QueryGenerationError>
+>
