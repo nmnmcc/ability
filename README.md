@@ -190,8 +190,8 @@ _.allow("read", "*", {
   as the scope of a grant. Give its Schema to `Domain.make({ meta })`.
 
 An allow rule with fields covers a request for the whole value: "may update some
-fields" is a yes. A deny rule with fields does not stop a request for the whole
-value.
+fields" is a yes. This is true only for a kind that has one of these fields. A
+deny rule with fields does not stop a request for the whole value.
 
 ## Conditions
 
@@ -253,7 +253,8 @@ Put policies together:
 
 A policy tree may have at most 256 levels. A combinator throws an error for a
 deeper tree, and the policy Schema does not decode one. A deeper tree could fill
-the stack of a check.
+the stack of a check. The JSON form of a policy may have at most 1000 levels of
+objects and arrays, so a deep input fails to decode before it fills the stack.
 
 For example, a user token may never do more than its member, and the platform
 has deny rules for everyone:

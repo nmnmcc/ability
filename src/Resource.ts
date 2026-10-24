@@ -166,7 +166,7 @@ export interface Options<
 	 */
 	readonly path?: (fields: {
 		readonly [K in keyof Fields & string]: FieldRef<K>
-	}) => ReadonlyArray<PathSegment>
+	}) => ReadonlyArray<string | FieldRef<keyof Fields & string>>
 }
 
 /**
@@ -847,6 +847,34 @@ const lazy = <A>(make: () => A): (() => A) => {
 	}
 }
 
+/**
+ * Checks each part of the path of a resource: a string, or a reference to a
+ * top-level field of the resource. A reference to another field would read
+ * nothing, and a rule on the path could then match a value by mistake.
+ */
+const checkPath = (
+	kind: string,
+	fields: Schema.Struct.Fields,
+	path: ReadonlyArray<unknown>,
+): ReadonlyArray<PathSegment> =>
+	Arr.map(path, (segment): PathSegment => {
+		if (typeof segment === "string") {
+			return segment
+		}
+		if (
+			hasProperty(segment, "_tag") &&
+			segment._tag === "Field" &&
+			hasProperty(segment, "field") &&
+			typeof segment.field === "string" &&
+			Object.hasOwn(fields, segment.field)
+		) {
+			return { _tag: "Field", field: segment.field }
+		}
+		throw new globalThis.Error(
+			`A part of the path of "${kind}" is not a string or a field of the resource`,
+		)
+	})
+
 const makeDescriptor = (
 	kind: string,
 	options: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
@@ -875,7 +903,10 @@ const makeDescriptor = (
 	return new ResourceDescriptor({
 		kind,
 		actions: [...options.actions],
-		path: options.path === undefined ? undefined : [...options.path(refs)],
+		path:
+			options.path === undefined
+				? undefined
+				: checkPath(kind, options.fields, options.path(refs)),
 		fieldPaths: Arr.dedupe(Arr.map(leaves, (visit) => visit.path)),
 		openPaths: Arr.dedupe(Arr.map(open, (visit) => visit.path)),
 		schema: Schema.TaggedStruct(kind, options.fields),

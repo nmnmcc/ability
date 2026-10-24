@@ -407,6 +407,49 @@ describe("Policy", () => {
 			assert.isTrue(Equal.equals(decoded, policy))
 		})
 
+		it("keeps the JSON form of meta in JSON.stringify", () => {
+			const Counted = Domain.make({
+				principal: Caller,
+				resources: [Bot],
+				meta: Schema.FiniteFromString,
+			})
+			const policy = Policy.define(Counted)(function* (_) {
+				yield* _.allow("read", Bot, { meta: 5 })
+			})
+			const CountedSchema = Policy.schema(Counted)
+			const json = JSON.parse(JSON.stringify(policy))
+			assert.deepStrictEqual(json, Schema.encodeSync(CountedSchema)(policy))
+			assert.isTrue(
+				Equal.equals(Schema.decodeUnknownSync(CountedSchema)(json), policy),
+			)
+		})
+
+		it("does not fill the stack with deep JSON", () => {
+			const one = Schema.encodeSync(PolicySchema)(
+				Policy.define(App)(function* (_) {
+					yield* _.allow("read", Bot)
+				}),
+			) as unknown
+			const deep = Arr.reduce(Arr.range(1, 5000), one, (inner) => ({
+				_tag: "All",
+				policies: [inner],
+			}))
+			const exit = Schema.decodeUnknownExit(PolicySchema)(deep)
+			assert.isTrue(Exit.isFailure(exit))
+			assert.include(String(Exit.isFailure(exit) ? exit.cause : ""), "levels")
+			const when = Arr.reduce(
+				Arr.range(1, 900),
+				{ _tag: "True" } as unknown,
+				(inner) => ({ _tag: "Not", condition: inner }),
+			)
+			const exitWhen = Schema.decodeUnknownExit(PolicySchema)({
+				_tag: "Rules",
+				algorithm: "denyOverrides",
+				rules: [{ _tag: "Allow", actions: ["read"], resources: ["Bot"], when }],
+			})
+			assert.isTrue(Exit.isSuccess(exitWhen))
+		})
+
 		const decodeMessage = (rule: Policy.EncodedRule) => {
 			const result = Schema.decodeExit(PolicySchema)({
 				_tag: "Rules",
@@ -1686,6 +1729,48 @@ describe("Policy", () => {
 				resource: Team.make({ users: { owner: Owner.make({ id: "admin" }) } }),
 			})._tag,
 			"Allow",
+		)
+	})
+
+	it("does not grant fields that the kind does not have", () => {
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", "*", { fields: ["settings.*"] })
+		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: aliceBot,
+			})._tag,
+			"Allow",
+		)
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: aliceTrigger,
+			})._tag,
+			"NotApplicable",
+		)
+		assert.strictEqual(
+			Policy.coverage(policy, {
+				principal: alice,
+				action: "read",
+				kind: "Trigger",
+			})._tag,
+			"None",
+		)
+	})
+
+	it("does not take a path part that is not a field of the resource", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { ownerId: Schema.String },
+			path: () => ["owner", { _tag: "Field", field: "ownerID" } as never],
+		})
+		assert.throws(
+			() => Domain.make({ principal: Caller, resources: [Note] }),
+			/not a string or a field/,
 		)
 	})
 

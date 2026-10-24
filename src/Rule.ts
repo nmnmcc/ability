@@ -515,12 +515,32 @@ export const matchesInside = (pattern: string, field: string): boolean =>
 	HashSet.size(run(tokensOf(pattern), `${field}.`)) > 0
 
 /**
+ * Tests if a field pattern may match a field of a kind: a field in its list, a
+ * part inside one, such as a key of a record, or a path that the Schema has,
+ * such as a getter.
+ */
+const fitsSomeField = (
+	pattern: string,
+	descriptor: Resource.Descriptor,
+): boolean =>
+	Arr.some(
+		descriptor.fieldPaths,
+		(field) => matchesField(pattern, field) || matchesInside(pattern, field),
+	) ||
+	(!pattern.includes("*") &&
+		(Resource.hasPath(descriptor.schema, pattern) ||
+			Resource.hasGetter(descriptor.schema, pattern)))
+
+/**
  * Tests the parts of a rule that do not need the resource value: the action,
  * the kind and the field.
  *
  * A rule with an empty list of fields covers no request. A rule with fields
  * covers a request with no field only when it is an allow rule. So "may update some fields" is a yes. A deny rule for some fields does
- * not stop a request for the whole value.
+ * not stop a request for the whole value. With the `descriptor` of the kind,
+ * such an allow rule covers the request only when one of its patterns may
+ * match a field of the kind. A grant of fields that the kind does not have is
+ * not a grant of some fields.
  *
  * @stability stable
  * @category predicates
@@ -532,6 +552,7 @@ export const matchesTarget = (
 		readonly action: string
 		readonly kind: string
 		readonly field?: string | undefined
+		readonly descriptor?: Resource.Descriptor | undefined
 	},
 ): boolean => {
 	if (!rule.actions.includes("*") && !rule.actions.includes(target.action)) {
@@ -549,7 +570,12 @@ export const matchesTarget = (
 		return false
 	}
 	if (target.field === undefined) {
-		return rule._tag === "Allow"
+		const descriptor = target.descriptor
+		return (
+			rule._tag === "Allow" &&
+			(descriptor === undefined ||
+				Arr.some(rule.fields, (pattern) => fitsSomeField(pattern, descriptor)))
+		)
 	}
 	const field = target.field
 	return rule.fields.some((pattern) => matchesField(pattern, field))

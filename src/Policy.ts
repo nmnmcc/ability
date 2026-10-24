@@ -426,23 +426,34 @@ const encodeNode = (node: Node): EncodedNode => {
  * The tree of a policy as a value that `JSON.stringify` keeps with no loss.
  * See `Condition.toJsonValue`.
  */
-const jsonNode = (node: EncodedNode): unknown => {
+const jsonNode = (node: EncodedNode, meta: Schema.Top | undefined): unknown => {
+	const json = (child: EncodedNode) => jsonNode(child, meta)
 	switch (node._tag) {
 		case "Rules":
 			return {
 				...node,
-				rules: Arr.map(node.rules, (value) =>
-					value.when === undefined
-						? value
-						: { ...value, when: Condition.toJsonValue(value.when as Ast) },
-				),
+				rules: Arr.map(node.rules, (value) => ({
+					...value,
+					...(value.when === undefined
+						? {}
+						: { when: Condition.toJsonValue(value.when as Ast) }),
+					// The `meta` of a rule is a decoded value. Its JSON form comes
+					// from the `meta` Schema of the domain, as in `schema`.
+					...(value.meta === undefined || meta === undefined
+						? {}
+						: {
+								meta: Schema.encodeUnknownSync(
+									meta as Schema.Codec<unknown, unknown>,
+								)(value.meta),
+							}),
+				})),
 			}
 		case "All":
 		case "Any":
 		case "FirstOf":
-			return { ...node, policies: Arr.map(node.policies, jsonNode) }
+			return { ...node, policies: Arr.map(node.policies, json) }
 		case "Ceiling":
-			return { ...node, cap: jsonNode(node.cap), policy: jsonNode(node.policy) }
+			return { ...node, cap: json(node.cap), policy: json(node.policy) }
 	}
 }
 
@@ -455,7 +466,7 @@ class PolicyData extends Data.Class<{
 	readonly node: Node
 }> {
 	toJSON(): unknown {
-		return jsonNode(encodeNode(this.node))
+		return jsonNode(encodeNode(this.node), this.domain.meta)
 	}
 }
 
@@ -800,6 +811,8 @@ interface DecideContext {
 	readonly kind: string
 	readonly field: string | undefined
 	readonly input: Condition.Input
+	/** The resource of the kind, for the fields that a rule may grant. */
+	readonly descriptor: Resource.Descriptor
 	/** The rules that were tested, for {@link explain}. */
 	readonly trace: Ref.Ref<ReadonlyArray<Step>> | undefined
 	readonly predicates: Map<Node, boolean>
@@ -1071,6 +1084,7 @@ const makeContext = (
 			principal: request.principal,
 			path: descriptor.path,
 		},
+		descriptor,
 		trace,
 		predicates: new Map(),
 		decisions: new Map(),
@@ -1434,6 +1448,8 @@ interface ResidualContext {
 		readonly principal: object
 		readonly path: Condition.Input["path"]
 	}
+	/** The resource of the kind, for the fields that a rule may grant. */
+	readonly descriptor: Resource.Descriptor
 	/**
 	 * The work done on each node. One node may be a child of many nodes, so
 	 * the work on it is done only one time.
@@ -1723,6 +1739,7 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 		kind: request.kind,
 		field: request.field,
 		input,
+		descriptor,
 		pairs: new Map(),
 		predicates: new Map(),
 		build,
@@ -1758,6 +1775,7 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 					principal: request.principal,
 					path: descriptor.path,
 				},
+				descriptor,
 				trace: undefined,
 				predicates: new Map(),
 				decisions: new Map(),
@@ -2049,6 +2067,24 @@ const encodedRuleSchema = (meta: Schema.Top | undefined) =>
 		),
 	})
 
+/**
+ * The most levels of objects and arrays in the JSON form of a policy. The
+ * Schema of a policy calls itself for each level, so a much deeper input
+ * could fill the stack before the checks of the policy run. A policy tree of
+ * `maxDepth` levels with deep conditions stays well below this.
+ */
+const maxJsonDepth = 1000
+
+/**
+ * Tests if a value has at most `levels` levels of objects and arrays. The walk
+ * stops at that depth, so it does not fill the stack itself.
+ */
+const nestedWithin = (input: unknown, levels: number): boolean =>
+	typeof input !== "object" ||
+	input === null ||
+	(levels > 0 &&
+		Arr.every(Object.values(input), (child) => nestedWithin(child, levels - 1)))
+
 const encodedNodeSchema = (
 	meta: Schema.Top | undefined,
 ): Schema.Codec<EncodedNode> => {
@@ -2283,7 +2319,23 @@ export const isPolicy = (u: unknown): u is Any => u instanceof PolicyData
 export const schema = <D extends Domain.Any>(
 	domain: D,
 ): Schema.Codec<Policy<D>, EncodedNode> =>
-	encodedNodeSchema(domain.meta).pipe(
+	// The input is any value until the checks of `encodedNodeSchema` run, so
+	// this guard says yes to every object.
+	Schema.declare(
+		(input): input is EncodedNode =>
+			typeof input === "object" && input !== null,
+	).pipe(
+		Schema.check(
+			Schema.makeFilter((input) =>
+				nestedWithin(input, maxJsonDepth)
+					? true
+					: `A policy may have at most ${String(maxJsonDepth)} levels of JSON`,
+			),
+		),
+		Schema.decodeTo(
+			encodedNodeSchema(domain.meta),
+			SchemaTransformation.passthrough(),
+		),
 		Schema.check(Schema.makeFilter((node) => validate(domain, node))),
 		Schema.decodeTo(
 			// A policy with a predicate is not a plain policy, and it can not

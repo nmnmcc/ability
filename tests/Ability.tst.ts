@@ -33,6 +33,19 @@ describe("Resource", () => {
 		expect(Schema.decodeUnknownSync(Bot)({})).type.toBe<Bot>()
 	})
 
+	it("takes only fields of the resource in a path", () => {
+		expect(Resource.make).type.not.toBeCallableWith("Note", {
+			actions: ["read"],
+			fields: { ownerId: Schema.String },
+			path: () => [{ _tag: "Field" as const, field: "ownerID" as const }],
+		})
+		expect(Resource.make).type.toBeCallableWith("Note", {
+			actions: ["read"],
+			fields: { ownerId: Schema.String },
+			path: () => [{ _tag: "Field" as const, field: "ownerId" as const }],
+		})
+	})
+
 	it("makes plain values with a tag", () => {
 		expect(aliceTrigger._tag).type.toBe<"Trigger">()
 		expect(Trigger.make).type.not.toBeCallableWith({ id: "t" })
