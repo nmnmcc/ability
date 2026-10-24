@@ -428,9 +428,23 @@ type Token = string
  * are never next to each other.
  */
 const tokensOf = (pattern: string): ReadonlyArray<Token> =>
-	Arr.map(pattern.match(/\*+|[^*]/gu) ?? [], (part) =>
+	Arr.map(normalize(pattern).match(/\*+|[^*]/gu) ?? [], (part) =>
 		part.startsWith("*") ? (part.length === 1 ? "*" : "**") : part,
 	)
+
+/**
+ * Puts each run of whole `**` parts together into one part. `a.**.**` matches
+ * what `a.**` matches, and with one part the rule of {@link skips} for no
+ * parts covers the whole run.
+ */
+const normalize = (pattern: string): string =>
+	Arr.dedupeAdjacentWith(
+		pattern.split("."),
+		(left, right) => isGlobstar(left) && isGlobstar(right),
+	).join(".")
+
+/** Tests if a part of a pattern is only stars, two or more of them. */
+const isGlobstar = (part: string): boolean => /^\*{2,}$/u.test(part)
 
 const isStar = (token: Token | undefined): boolean =>
 	token === "*" || token === "**"
@@ -463,17 +477,25 @@ const skips = (
 	]
 }
 
-/** Adds the places that a match may reach with no input. See {@link skips}. */
-const close = (tokens: ReadonlyArray<Token>, states: States): States => {
+/**
+ * Adds the places that a match may reach with no input. See {@link skips}.
+ * Each step reads only the places that the step before found, so each place
+ * is read one time.
+ */
+const close = (
+	tokens: ReadonlyArray<Token>,
+	states: States,
+	found: States = states,
+): States => {
 	const after = HashSet.filter(
 		HashSet.fromIterable(
-			Arr.flatMap(Array.from(states), (state) => skips(tokens, state)),
+			Arr.flatMap(Array.from(found), (state) => skips(tokens, state)),
 		),
 		(state) => !HashSet.has(states, state),
 	)
 	return HashSet.size(after) === 0
 		? states
-		: close(tokens, HashSet.union(states, after))
+		: close(tokens, HashSet.union(states, after), after)
 }
 
 /**

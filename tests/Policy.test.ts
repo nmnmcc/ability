@@ -1771,6 +1771,11 @@ describe("Policy", () => {
 		)
 		assert.isFalse(Rule.matchesField("**.secret", "notsecret"))
 		assert.isFalse(Rule.matchesField("settings.**", "settingsx"))
+		assert.isTrue(Rule.matchesField("secret.**.**", "secret"))
+		assert.isTrue(Rule.matchesField("**.**.secret", "secret"))
+		const start = Date.now()
+		assert.isTrue(Rule.matchesField(`${"**.".repeat(5000)}secret`, "secret"))
+		assert.isBelow(Date.now() - start, 1000)
 		const policy = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot)
 			yield* _.deny("read", Bot, { fields: ["**.model"] })
