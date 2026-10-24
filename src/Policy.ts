@@ -1800,7 +1800,7 @@ export type Coverage<
 	}
 	Unknown: {
 		readonly condition: Condition.Condition<E, R, O, I>
-		readonly reason: "predicate" | "budget" | "union"
+		readonly reason: "predicate" | "budget" | "schema"
 	}
 }>
 
@@ -1815,7 +1815,7 @@ type AnyCoverage = Data.TaggedEnum<{
 	}
 	Unknown: {
 		readonly condition: Ast
-		readonly reason: "predicate" | "budget" | "union"
+		readonly reason: "predicate" | "budget" | "schema"
 	}
 }>
 
@@ -1886,7 +1886,10 @@ export const scopeIsEmpty = (policy: Any, request: ScopedRequest): boolean => {
  * The answer comes from {@link Condition.satisfiable} with the Schema of the
  * resource, so it is exact for the values of the Schema. Schema checks other
  * than finite and integer checks are left out, so `All` may be missed where
- * such a check stops the other values, but `All` is never given wrongly.
+ * such a check stops the other values, but `All` is never given wrongly. When
+ * a condition tests a field that is not a plain scalar (see
+ * `Resource.isPlainField`), the answer is `Unknown`, and a check on the kind
+ * says no.
  *
  * `Some` means that some value of the Schema is allowed. It does not mean that
  * such a value is in your database. To know that, run `condition` as a query.

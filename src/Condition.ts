@@ -1857,7 +1857,7 @@ export interface Example {
 export type Satisfiability = Data.TaggedEnum<{
 	Satisfiable: { readonly example: Example }
 	Unsatisfiable: {}
-	Unknown: { readonly reason: "predicate" | "budget" | "union" }
+	Unknown: { readonly reason: "predicate" | "budget" | "schema" }
 }>
 
 const satisfiability = Data.taggedEnum<Satisfiability>()
@@ -2359,20 +2359,6 @@ const constantsOf = (
 		}
 	})
 
-/**
- * Tests if two fields that a search set are below one choice of the Schema.
- * See `Resource.choicesOf`.
- */
-const tiedFields = (
-	schema: Schema.Top,
-	assignment: ReadonlyArray<readonly [string, unknown]>,
-): boolean => {
-	const choices = Arr.flatMap(assignment, ([field]) =>
-		Resource.choicesOf(schema, field),
-	)
-	return Arr.dedupe(choices).length < choices.length
-}
-
 const satisfiableAst = (
 	ast: Ast,
 	options: SatisfiableOptions = {},
@@ -2380,8 +2366,17 @@ const satisfiableAst = (
 	if (hasPredicate(ast)) {
 		return satisfiability.Unknown({ reason: "predicate" })
 	}
-	const constants = constantsOf(ast)
 	const schema = options.schema
+	// The model of the values of a field is exact only for a plain scalar
+	// field. For another field, a value may have data that the Schema does not
+	// show, so the search can not say.
+	if (
+		schema !== undefined &&
+		!Arr.every(fields(ast), (field) => Resource.isPlainField(schema, field))
+	) {
+		return satisfiability.Unknown({ reason: "schema" })
+	}
+	const constants = constantsOf(ast)
 	// The cells of each field. A field name is a string, so an Effect map
 	// finds it.
 	const cells = MutableHashMap.empty<string, ReadonlyArray<unknown>>()
@@ -2422,13 +2417,7 @@ const satisfiableAst = (
 		return Option.match(found.assignment, {
 			onNone: () => satisfiability.Unsatisfiable(),
 			onSome: (assignment) =>
-				// The search sets each field on its own. Below a union, or below a
-				// field that may be missing, two fields go together, so values that
-				// it set on their own may make a value that the Schema does not
-				// have. Then it can not say.
-				schema !== undefined && tiedFields(schema, assignment)
-					? satisfiability.Unknown({ reason: "union" })
-					: satisfiability.Satisfiable({ example: exampleOf(assignment) }),
+				satisfiability.Satisfiable({ example: exampleOf(assignment) }),
 		})
 	} catch (error) {
 		if (error instanceof OutOfBudget) {
@@ -2443,6 +2432,12 @@ const satisfiableAst = (
  *
  * Call {@link partial} first: the condition must have no principal fields and
  * no `Under` nodes. A condition with a predicate gives `Unknown`.
+ *
+ * With `options.schema`, each field of the condition must be a plain scalar
+ * field of the Schema (see `Resource.isPlainField`). Else the answer is
+ * `Unknown` with the reason `"schema"`: for another field, a value may have
+ * data that the Schema does not show, so the model of its values is not
+ * exact.
  *
  * The answer is exact. Each test of a condition compares one field with
  * constants, so the constants cut the values of each field into a few cells.

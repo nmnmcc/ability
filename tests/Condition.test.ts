@@ -370,26 +370,30 @@ describe("Condition", () => {
 		})
 
 		it("makes the fields below a missing struct missing", () => {
-			assert.strictEqual(
-				tagOf(_.and(_.exists("box.label"), _.not(loose.exists("box")))),
-				"Unsatisfiable",
-			)
+			// With no Schema, a field may have any value, and the search still
+			// knows that the fields below a missing struct are missing.
+			const missing = _.and(_.exists("box.label"), _.not(loose.exists("box")))
+			assert.strictEqual(Condition.satisfiable(missing)._tag, "Unsatisfiable")
+			const present = _.and(_.eq("box.label", "x"), loose.exists("box"))
+			const answer = Condition.satisfiable(present)
 			assert.deepStrictEqual(
-				example(_.and(_.eq("box.label", "x"), loose.exists("box"))),
+				answer._tag === "Satisfiable" ? answer.example : undefined,
 				{ box: { label: "x" } },
 			)
 		})
 
-		it("knows that a value with parts is equal to no scalar", () => {
-			assert.strictEqual(
-				tagOf(_.and(_.exists("when"), _.not(loose.ne("when", "x")))),
-				"Unsatisfiable",
-			)
-		})
-
-		it("has no value for a field of the type never", () => {
-			assert.strictEqual(tagOf(_.exists("nothing")), "Unsatisfiable")
-			assert.strictEqual(tagOf(_.not(_.exists("nothing"))), "Unsatisfiable")
+		it("can not say for a field that is not a plain scalar", () => {
+			const reasonOf = (condition: Plain) => {
+				const answer = Condition.satisfiable(condition, { schema: Shape })
+				return answer._tag === "Unknown" ? answer.reason : answer._tag
+			}
+			// A field below a nullable struct, a date, and a field of the type
+			// never are not plain scalars.
+			assert.strictEqual(reasonOf(_.exists("box.label")), "schema")
+			assert.strictEqual(reasonOf(loose.ne("when", "x")), "schema")
+			assert.strictEqual(reasonOf(_.exists("nothing")), "schema")
+			// A plain field next to them is still exact.
+			assert.strictEqual(tagOf(_.eq("name", "a")), "Satisfiable")
 		})
 
 		it("lets a field have any value with no Schema", () => {

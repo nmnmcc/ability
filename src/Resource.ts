@@ -421,82 +421,61 @@ const walkFields = (
 export const fieldPaths = (schema: Schema.Top): ReadonlyArray<string> =>
 	Arr.dedupe(Arr.map(walkFields(schema.ast), (visit) => visit.path))
 
+/** Tests if a Schema holds only plain scalars: see {@link isPlainField}. */
+const isPlainScalar = (ast: SchemaAST.AST): boolean => {
+	switch (ast._tag) {
+		case "String":
+		case "Number":
+		case "Boolean":
+		case "Literal":
+		case "Null":
+		case "Undefined":
+			return true
+		case "Union":
+			return Arr.every(ast.types, isPlainScalar)
+		default:
+			return false
+	}
+}
+
 /**
- * Gives the choices in a Schema that a path goes past, as the paths of the
- * fields that hold them. A choice is a union, or a field that may be missing
- * or `null`. Two fields below one choice go together: the fields of one
- * branch of a union, or the fields of a parent that is there or not. A search
- * that sets each of them on its own may then make a value that the Schema does
- * not have. A field that holds the choice itself is not below it.
+ * Tests if a path names a plain scalar field of a Schema: a string, a number,
+ * a boolean, a literal, `null`, or an optional field or a union of these. On
+ * the way, each part must be a required field of a plain struct, with a name
+ * that is not a name of `Object.prototype`.
+ *
+ * `Policy.coverage` and `Condition.satisfiable` answer `All`, `None` or
+ * `Some` only when each field of the condition is such a field. Their model of
+ * the values of a field is exact for these Schemas. For other Schemas, such as
+ * classes, records, unions of structs or declarations, a value may have data
+ * that the Schema does not show, and the answer is `Unknown`.
  *
  * @stability stable
- * @category getters
+ * @category predicates
  * @since 0.5.0
  */
-export const choicesOf = (
-	schema: Schema.Top,
-	path: string,
-): ReadonlyArray<string> =>
-	Arr.dedupe(choicesAt(schema.ast, path.split("."), 0, new Set()))
+export const isPlainField = (schema: Schema.Top, path: string): boolean =>
+	plainAt(schema.ast, path.split("."))
 
-const choicesAt = (
-	ast: SchemaAST.AST,
-	names: ReadonlyArray<string>,
-	index: number,
-	open: ReadonlySet<SchemaAST.AST>,
-): ReadonlyArray<string> => {
-	// Only a node that the path goes past is a choice for it.
-	if (index >= names.length) {
-		return []
+const plainAt = (ast: SchemaAST.AST, names: ReadonlyArray<string>): boolean => {
+	const [name, ...rest] = names
+	if (
+		name === undefined ||
+		ast._tag !== "Objects" ||
+		ast.indexSignatures.length > 0 ||
+		name in Object.prototype
+	) {
+		return false
 	}
-	const here = names.slice(0, index).join(".")
-	const name = names[index]!
-	switch (ast._tag) {
-		case "Objects": {
-			const property = ast.propertySignatures.find(
-				(signature) => signature.name === name,
-			)
-			if (property === undefined) {
-				return Arr.flatMap(ast.indexSignatures, (signature) =>
-					choicesAt(signature.type, names, index + 1, new Set()),
-				)
-			}
-			// A parent that may be missing is a choice for the fields below it.
-			const field = names.slice(0, index + 1).join(".")
-			return [
-				...(SchemaAST.isOptional(property.type) && index + 1 < names.length
-					? [field]
-					: []),
-				...choicesAt(property.type, names, index + 1, new Set()),
-			]
-		}
-		case "Union": {
-			// Two struct branches, or a struct branch and a branch with no
-			// fields, such as `null`, make a choice.
-			const structs = Arr.filter(
-				ast.types,
-				(type) => structsOf(type, open).length > 0,
-			).length
-			return [
-				...(structs > 1 || (structs > 0 && structs < ast.types.length)
-					? [here]
-					: []),
-				...Arr.flatMap(ast.types, (type) =>
-					choicesAt(type, names, index, open),
-				),
-			]
-		}
-		case "Suspend":
-			return open.has(ast)
-				? []
-				: choicesAt(ast.thunk(), names, index, new Set([...open, ast]))
-		case "Declaration": {
-			const inner = classStruct(ast)
-			return inner === undefined ? [] : choicesAt(inner, names, index, open)
-		}
-		default:
-			return []
+	const property = ast.propertySignatures.find(
+		(signature) => signature.name === name,
+	)
+	if (property === undefined) {
+		return false
 	}
+	return rest.length === 0
+		? isPlainScalar(property.type)
+		: !SchemaAST.isOptional(property.type) && plainAt(property.type, rest)
 }
 
 /**

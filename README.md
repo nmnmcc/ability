@@ -327,7 +327,8 @@ list query for the scope:
   so a scope with a mistake never gives a "yes".
 - `Some`: the policy allows some values and not others. It gives an example of
   each, `allowed` and `refused`.
-- `Unknown`: the policy has a predicate, or the search went past its budget.
+- `Unknown`: the policy has a predicate, a condition tests a field that is not a
+  plain scalar, or the search went past its budget.
 
 The answer is exact. Each test in a condition compares one field with fixed
 values, so these values cut the values of the field into a few parts, and every
@@ -337,6 +338,13 @@ Schema of the resource: its literals, `null` for a nullable or optional field,
 and finite or integer numbers. It does not use other Schema checks, such as a
 minimum length. So it may say "not all" where such a check stops the other
 values, but it never says "all" wrongly.
+
+The search answers only for plain scalar fields: a string, a number, a boolean,
+a literal, `null`, or an optional field or a union of these, on a path of
+required fields of plain structs. For another field, such as a class, a record,
+a union of structs, a date or a field of `Schema.declare`, a value may have data
+that the Schema does not show, so the answer is `Unknown`. A check on a kind
+then says no. `Resource.isPlainField` tells if a field is plain.
 
 "Some" means that some value of the Schema is allowed. It does not mean that
 such a value is in your database. To know that, run the condition as a query.

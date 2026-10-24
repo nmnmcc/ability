@@ -1778,6 +1778,58 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 3000)
 	})
 
+	it("gives exact coverage only for plain scalar fields", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: {
+				name: Schema.String,
+				level: Schema.optionalKey(Schema.Finite),
+				tags: Schema.Record(Schema.String, Schema.String),
+				when: Schema.Date,
+			},
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const coverage = (when: Condition.Ast) =>
+			Policy.coverage(
+				Policy.rules(Notes, [
+					Rule.make({
+						_tag: "Allow",
+						actions: ["read"],
+						resources: ["Note"],
+						when: when as Condition.Condition,
+					}),
+				]),
+				{ principal: alice, action: "read", kind: "Note" },
+			)
+		const $ = Condition.builder<
+			{
+				readonly name: string
+				readonly level: number | null
+				readonly tags: { readonly [key: string]: string }
+				readonly when: string | null
+			},
+			unknown,
+			unknown
+		>()
+		assert.strictEqual(
+			coverage($.or($.eq("name", "a"), $.ne("name", "a")))._tag,
+			"All",
+		)
+		assert.strictEqual(coverage($.gte("level", 0))._tag, "Some")
+		const unknown = (when: Condition.Ast) => {
+			const covered = coverage(when)
+			return covered._tag === "Unknown" ? covered.reason : covered._tag
+		}
+		assert.strictEqual(unknown($.exists("tags.a")), "schema")
+		assert.strictEqual(unknown($.exists("when")), "schema")
+		assert.isFalse(
+			Resource.isPlainField(Resource.descriptor(Note).schema, "tags.a"),
+		)
+		assert.isTrue(
+			Resource.isPlainField(Resource.descriptor(Note).schema, "level"),
+		)
+	})
+
 	it("searches many values of one field without a deep stack", () => {
 		const ids = Array.from({ length: 4000 }, (_, index) => `b${String(index)}`)
 		const policy = Policy.define(App)(function* (_) {
