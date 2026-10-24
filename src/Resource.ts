@@ -206,7 +206,10 @@ const innerSchemas = (schema: unknown): ReadonlyArray<unknown> =>
  * `Schema.Class` or a `Principal.Class`, at its root or in a nested field. A
  * condition reads such a field, and the types of a condition take it, so the
  * check of a policy takes it too. It reads the Schema objects, because the
- * class with the getter is not in the Schema nodes.
+ * class with the getter is not in the Schema nodes. It goes into the fields of
+ * a struct and the values of a record. It can not go into `Schema.suspend`: a
+ * suspended Schema keeps only its node, so the class is lost, and the check
+ * says no.
  *
  * @stability stable
  * @category predicates
@@ -230,12 +233,25 @@ const getterAt = (schema: unknown, names: ReadonlyArray<string>): boolean => {
 		) {
 			return true
 		}
+		if (rest.length === 0) {
+			return false
+		}
+		// A record, such as `Schema.Record(Schema.String, Owner)`, keeps the
+		// Schema of its keys and of its values.
+		if (
+			hasProperty(inner, "key") &&
+			hasProperty(inner, "value") &&
+			Schema.isSchema(inner.key) &&
+			Schema.isSchema(inner.value) &&
+			Schema.is(Schema.toType(inner.key))(name)
+		) {
+			return getterAt(inner.value, rest)
+		}
 		const fields: unknown = hasProperty(inner, "fields")
 			? inner.fields
 			: undefined
 		return (
 			hasProperty(fields, name) &&
-			rest.length > 0 &&
 			getterAt((fields as Record<string, unknown>)[name], rest)
 		)
 	})

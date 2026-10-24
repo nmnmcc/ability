@@ -588,10 +588,50 @@ const sameDomain = (policies: ReadonlyArray<Any>): Domain.Any => {
 	return domain
 }
 
+/**
+ * The most levels in a policy tree. A walk over a tree calls itself for each
+ * level, so a much deeper tree could fill the stack and stop a check.
+ */
+const maxDepth = 256
+
+/** The number of levels of a policy tree. */
+const heightOf = (node: Node, memo: Map<Node, number> = new Map()): number =>
+	remember(memo, node, () => {
+		const height = (child: Node) => heightOf(child, memo)
+		switch (node._tag) {
+			case "Rules":
+				return 1
+			case "All":
+			case "Any":
+			case "FirstOf":
+				return (
+					1 +
+					Arr.reduce(node.policies, 0, (top, child) =>
+						Math.max(top, height(child)),
+					)
+				)
+			case "Ceiling":
+				return 1 + Math.max(height(node.cap), height(node.policy))
+		}
+	})
+
+/**
+ * Makes a policy from a new node. Its children come from policies, so each
+ * has at most `maxDepth` levels, and the walk of `heightOf` is safe.
+ */
+const fromCombined = (domain: Domain.Any, node: Node): any => {
+	if (heightOf(node) > maxDepth) {
+		throw new globalThis.Error(
+			`A policy tree may have at most ${maxDepth} levels`,
+		)
+	}
+	return fromNode(domain, node)
+}
+
 const combine =
 	(tag: "All" | "Any" | "FirstOf") =>
 	(policies: ReadonlyArray<Any>): any =>
-		fromNode(
+		fromCombined(
 			sameDomain(policies),
 			nodes[tag]({ policies: policies.map(nodeOf) }),
 		)
@@ -653,7 +693,7 @@ export const ceiling: {
 		cap: Policy<D, E2, R2, O2>,
 	): Policy<D, E | E2, R | R2, O | O2>
 } = dual(2, (policy: Any, cap: Any): any =>
-	fromNode(
+	fromCombined(
 		sameDomain([policy, cap]),
 		nodes.Ceiling({ cap: nodeOf(cap), policy: nodeOf(policy) }),
 	),
@@ -2132,7 +2172,13 @@ const validate = (
 	const issuesOf = (
 		node: EncodedNode,
 		path: ReadonlyArray<PropertyKey>,
+		level: number,
 	): ReadonlyArray<Issue> => {
+		if (level > maxDepth) {
+			return [
+				{ path, issue: `A policy tree may have at most ${maxDepth} levels` },
+			]
+		}
 		switch (node._tag) {
 			case "Rules":
 				return Arr.flatMap(node.rules, (value, index) =>
@@ -2142,16 +2188,16 @@ const validate = (
 			case "Any":
 			case "FirstOf":
 				return Arr.flatMap(node.policies, (child, index) =>
-					issuesOf(child, [...path, "policies", index]),
+					issuesOf(child, [...path, "policies", index], level + 1),
 				)
 			case "Ceiling":
 				return [
-					...issuesOf(node.cap, [...path, "cap"]),
-					...issuesOf(node.policy, [...path, "policy"]),
+					...issuesOf(node.cap, [...path, "cap"], level + 1),
+					...issuesOf(node.policy, [...path, "policy"], level + 1),
 				]
 		}
 	}
-	return issuesOf(root, [])
+	return issuesOf(root, [], 1)
 }
 
 /**

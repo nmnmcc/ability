@@ -1661,6 +1661,63 @@ describe("Policy", () => {
 		)
 	})
 
+	it("takes a getter of a class in the values of a record", () => {
+		class Owner extends Schema.Class<Owner>("Owner")({
+			id: Schema.String,
+		}) {
+			get name() {
+				return this.id
+			}
+		}
+		const Team = Resource.make("Team", {
+			actions: ["read"],
+			fields: { users: Schema.Record(Schema.String, Owner) },
+		})
+		const Teams = Domain.make({ principal: Caller, resources: [Team] })
+		const policy = Policy.define(Teams)(function* (_) {
+			yield* _.allow("read", Team, {
+				when: ($) => $.eq("users.owner.name", "admin"),
+			})
+		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: Team.make({ users: { owner: Owner.make({ id: "admin" }) } }),
+			})._tag,
+			"Allow",
+		)
+	})
+
+	it("does not make a policy tree that would fill the stack", () => {
+		const one = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot)
+		})
+		const deep = (levels: number) =>
+			Arr.reduce(
+				Arr.range(1, levels),
+				one as Policy.Policy<typeof App>,
+				(inner) => Policy.all([inner]),
+			)
+		assert.strictEqual(
+			Policy.decideSync(deep(255), {
+				principal: alice,
+				action: "read",
+				resource: aliceBot,
+			})._tag,
+			"Allow",
+		)
+		assert.throws(() => deep(2500), /at most 256 levels/)
+		const json = Arr.reduce(
+			Arr.range(1, 300),
+			Schema.encodeSync(Policy.schema(App))(one) as unknown,
+			(inner) => ({ _tag: "All", policies: [inner] }),
+		)
+		assert.isTrue(
+			Exit.isFailure(Schema.decodeUnknownExit(Policy.schema(App))(json)),
+		)
+	})
+
 	it("takes a getter of a class inside a codec", () => {
 		class Member extends Schema.Class<Member>("Member")({
 			id: Schema.String,

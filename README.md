@@ -251,6 +251,10 @@ Put policies together:
 | `Policy.firstOf([a, b])`      | The first policy that allows or denies.                          |
 | `Policy.ceiling(policy, cap)` | A deny from `cap` always wins. An allow from `cap` does nothing. |
 
+A policy tree may have at most 256 levels. A combinator throws an error for a
+deeper tree, and the policy Schema does not decode one. A deeper tree could fill
+the stack of a check.
+
 For example, a user token may never do more than its member, and the platform
 has deny rules for everyone:
 

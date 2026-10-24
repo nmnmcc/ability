@@ -32,6 +32,7 @@ import type * as Chunk from "effect/Chunk"
 import type * as DateTime from "effect/DateTime"
 import type * as Duration from "effect/Duration"
 import type * as Redacted from "effect/Redacted"
+import type * as Result from "effect/Result"
 import type * as Context from "effect/Context"
 import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
@@ -429,10 +430,16 @@ export type ReadsOf<C> = [C] extends [
  * @category utility types
  * @since 0.5.0
  */
-export type Checked<C> =
+export type Checked<C> = [NotChecked<C>] extends [never] ? unknown : never
+
+/**
+ * The members of a union of conditions that do not fit their own type fields.
+ * Each member is checked alone, so a good member does not hide a bad one.
+ */
+type NotChecked<C> =
 	C extends Condition<Error<C>, Services<C>, OpaqueOf<C>, ReadsOf<C>>
-		? unknown
-		: never
+		? never
+		: C
 
 /** Each condition, checked with {@link Checked}. */
 type Consistent<Cs extends ReadonlyArray<Any>> = {
@@ -473,6 +480,9 @@ type Whole =
 	| Redacted.Redacted<unknown>
 	| Chunk.Chunk<unknown>
 	| Cause.Cause<unknown>
+	| Result.Result<unknown, unknown>
+	| File
+	| FormData
 	| RegExp
 type PreviousDepth = [never, 0, 1, 2, 3]
 type FieldPathInternal<T, Depth extends number, Arrays extends boolean> = [

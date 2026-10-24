@@ -393,6 +393,9 @@ describe("Policy", () => {
 		if (base._tag === "And") {
 			const spread = { ...base, conditions: [named] }
 			expect(Condition.and).type.not.toBeCallableWith(spread)
+			expect(Condition.and).type.not.toBeCallableWith(
+				spread as typeof spread | typeof Condition.always,
+			)
 		}
 	})
 
@@ -406,6 +409,28 @@ describe("Policy", () => {
 		expect(_.deny).type.toBeCallableWith("read", Price, { fields: ["cost"] })
 		expect(_.deny).type.not.toBeCallableWith("read", Price, {
 			fields: ["cost.scale"],
+		})
+	})
+
+	it("takes a result, a file and form data as one field", () => {
+		const Item = Resource.make("Item", {
+			actions: ["read"],
+			fields: {
+				result: Schema.Result(Schema.String, Schema.String),
+				file: Schema.File,
+				form: Schema.FormData,
+			},
+		})
+		const Items = Domain.make({ principal: Caller, resources: [Item] })
+		const _ = Rule.builder(Items)
+		expect(_.deny).type.toBeCallableWith("read", Item, {
+			fields: ["result", "file", "form"],
+		})
+		expect(_.deny).type.not.toBeCallableWith("read", Item, {
+			fields: ["result._tag"],
+		})
+		expect(_.deny).type.not.toBeCallableWith("read", Item, {
+			fields: ["file.name"],
 		})
 	})
 
