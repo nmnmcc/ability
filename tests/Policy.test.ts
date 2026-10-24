@@ -32,6 +32,8 @@ const guest = {
 	role: "guest",
 } as unknown as Caller
 
+const PolicySchemaOfApp = Policy.schema(App)
+
 describe("Policy", () => {
 	describe("algorithms", () => {
 		const rules = (_: Rule.Builder<App>) => [
@@ -1760,6 +1762,45 @@ describe("Policy", () => {
 			})._tag,
 			"None",
 		)
+	})
+
+	it("does not take a test with a value of another type than its field", () => {
+		assert.throws(
+			() =>
+				Policy.define(App)(function* (_) {
+					yield* _.allow("read", Bot)
+					yield* _.deny("read", Bot, {
+						when: ($) => ({
+							...$.eq("level", 3),
+							value: { _tag: "Literal", value: "3" } as const,
+						}),
+					})
+				}),
+			/can not hold the value "3"/,
+		)
+	})
+
+	it("makes the residual of a very wide condition", () => {
+		const policy = Schema.decodeUnknownSync(PolicySchemaOfApp)({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Bot"],
+					when: {
+						_tag: "And",
+						conditions: Array.from({ length: 150_000 }, () => ({
+							_tag: "True",
+						})),
+					},
+				},
+			],
+		})
+		const request = { principal: alice, action: "read", kind: "Bot" } as const
+		assert.strictEqual(Policy.residual(policy, request)._tag, "True")
+		assert.strictEqual(Policy.coverage(policy, request)._tag, "All")
 	})
 
 	it("lets ** match no parts of a field path", () => {

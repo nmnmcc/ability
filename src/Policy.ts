@@ -1371,8 +1371,10 @@ class TooLarge {}
  * steps keep their work for the parts they have seen, for this residual only.
  */
 interface Build {
-	readonly and: (...values: ReadonlyArray<Ast>) => Ast
-	readonly or: (...values: ReadonlyArray<Ast>) => Ast
+	// A list goes in as an array, not as arguments: a call may take only so
+	// many arguments, and a policy may have more rules.
+	readonly and: (values: ReadonlyArray<Ast>) => Ast
+	readonly or: (values: ReadonlyArray<Ast>) => Ast
 	readonly not: (value: Ast) => Ast
 }
 
@@ -1427,10 +1429,10 @@ const makeBuild = (): Build => {
 	// These steps work on nodes with no types, so they leave out the type
 	// field of a condition.
 	return {
-		and: (...values) =>
-			limit(simplify(Condition.and(...(values as ReadonlyArray<never>)))),
-		or: (...values) =>
-			limit(simplify(Condition.or(...(values as ReadonlyArray<never>)))),
+		and: (values) =>
+			limit(simplify(Condition.andAll(values as ReadonlyArray<never>))),
+		or: (values) =>
+			limit(simplify(Condition.orAll(values as ReadonlyArray<never>))),
 		not: (value) => limit(simplify(Condition.not(value as never))),
 	}
 }
@@ -1486,12 +1488,16 @@ const firstApplicableResidual = (
 		runs,
 		{ allow: never, deny: never },
 		(rest: Pair, run): Pair => {
-			const applies = or(
-				...Arr.map(run, (value) => ruleCondition(value, context)),
-			)
+			const applies = or(Arr.map(run, (value) => ruleCondition(value, context)))
 			return run[0]._tag === "Allow"
-				? { allow: or(applies, rest.allow), deny: and(not(applies), rest.deny) }
-				: { allow: and(not(applies), rest.allow), deny: or(applies, rest.deny) }
+				? {
+						allow: or([applies, rest.allow]),
+						deny: and([not(applies), rest.deny]),
+					}
+				: {
+						allow: and([not(applies), rest.allow]),
+						deny: or([applies, rest.deny]),
+					}
 		},
 	)
 }
@@ -1506,34 +1512,34 @@ const residualOnce = (node: Node, context: ResidualContext): Pair => {
 			switch (node.algorithm) {
 				case "denyOverrides": {
 					const deny = or(
-						...node.rules
+						node.rules
 							.filter((value) => value._tag === "Deny")
 							.map((value) => ruleCondition(value, context)),
 					)
-					const allow = and(
+					const allow = and([
 						not(deny),
 						or(
-							...node.rules
+							node.rules
 								.filter((value) => value._tag === "Allow")
 								.map((value) => ruleCondition(value, context)),
 						),
-					)
+					])
 					return { allow, deny }
 				}
 				case "permitOverrides": {
 					const allow = or(
-						...node.rules
+						node.rules
 							.filter((value) => value._tag === "Allow")
 							.map((value) => ruleCondition(value, context)),
 					)
-					const deny = and(
+					const deny = and([
 						not(allow),
 						or(
-							...node.rules
+							node.rules
 								.filter((value) => value._tag === "Deny")
 								.map((value) => ruleCondition(value, context)),
 						),
-					)
+					])
 					return { allow, deny }
 				}
 				case "firstApplicable":
@@ -1548,14 +1554,14 @@ const residualOnce = (node: Node, context: ResidualContext): Pair => {
 				return { allow: never, deny: never }
 			}
 			const pairs = node.policies.map((child) => residualNode(child, context))
-			const deny = or(...pairs.map((pair) => pair.deny))
-			const allow = and(...pairs.map((pair) => pair.allow), not(deny))
+			const deny = or(pairs.map((pair) => pair.deny))
+			const allow = and([...pairs.map((pair) => pair.allow), not(deny)])
 			return { allow, deny }
 		}
 		case "Any": {
 			const pairs = node.policies.map((child) => residualNode(child, context))
-			const allow = or(...pairs.map((pair) => pair.allow))
-			const deny = and(not(allow), or(...pairs.map((pair) => pair.deny)))
+			const allow = or(pairs.map((pair) => pair.allow))
+			const deny = and([not(allow), or(pairs.map((pair) => pair.deny))])
 			return { allow, deny }
 		}
 		case "FirstOf": {
@@ -1566,8 +1572,8 @@ const residualOnce = (node: Node, context: ResidualContext): Pair => {
 				(rest: Pair, child): Pair => {
 					const pair = residualNode(child, context)
 					return {
-						allow: or(pair.allow, and(not(pair.deny), rest.allow)),
-						deny: or(pair.deny, and(not(pair.allow), rest.deny)),
+						allow: or([pair.allow, and([not(pair.deny), rest.allow])]),
+						deny: or([pair.deny, and([not(pair.allow), rest.deny])]),
 					}
 				},
 			)
@@ -1576,8 +1582,8 @@ const residualOnce = (node: Node, context: ResidualContext): Pair => {
 			const cap = residualNode(node.cap, context)
 			const inner = residualNode(node.policy, context)
 			return {
-				allow: and(not(cap.deny), inner.allow),
-				deny: or(cap.deny, inner.deny),
+				allow: and([not(cap.deny), inner.allow]),
+				deny: or([cap.deny, inner.deny]),
 			}
 		}
 	}
@@ -1728,8 +1734,8 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 	const and = build.and
 	const inScope = (pair: Pair): Scoped => ({
 		scope,
-		allow: and(scope, pair.allow),
-		deny: and(scope, pair.deny),
+		allow: and([scope, pair.allow]),
+		deny: and([scope, pair.deny]),
 		schema: descriptor.schema,
 	})
 	if (scope._tag === "False") {
@@ -2171,6 +2177,70 @@ interface Issue {
 	readonly issue: string
 }
 
+/** A test of a field with a fixed value, as in `eq("level", 3)`. */
+type LiteralTest = readonly [field: string, value: Condition.Scalar]
+
+const literalTests = (node: ConditionNode): ReadonlyArray<LiteralTest> =>
+	Arr.map(
+		Array.from(literalTestsIn(node, new Map())),
+		(text) => JSON.parse(text) as LiteralTest,
+	)
+
+/**
+ * The tests of fields with fixed values in a node, each as the JSON text of a
+ * {@link LiteralTest}. A set of texts keeps each test one time, so a node
+ * with many shared parts gives a small set. A shared node is visited one time.
+ */
+const literalTestsIn = (
+	node: ConditionNode,
+	memo: Map<ConditionNode, HashSet.HashSet<string>>,
+): HashSet.HashSet<string> =>
+	remember(memo, node, () => {
+		const tests = (
+			field: string,
+			operands: ReadonlyArray<Condition.Operand>,
+		): HashSet.HashSet<string> =>
+			HashSet.fromIterable(
+				Arr.flatMap(operands, (operand) =>
+					operand._tag === "Literal"
+						? [JSON.stringify([field, operand.value])]
+						: [],
+				),
+			)
+		switch (node._tag) {
+			case "Compare":
+				return tests(node.field, [node.value])
+			case "In":
+				return tests(node.field, node.values)
+			case "And":
+			case "Or":
+				return Arr.reduce(
+					node.conditions as ReadonlyArray<ConditionNode>,
+					HashSet.empty<string>(),
+					(all, child) => HashSet.union(all, literalTestsIn(child, memo)),
+				)
+			case "Not":
+				return literalTestsIn(node.condition, memo)
+			default:
+				return HashSet.empty()
+		}
+	})
+
+/**
+ * Tests if a field with this domain may hold a value of the type of `value`.
+ * `null` always fits: a test with `null` is a test that the field is missing.
+ */
+const fitsDomain = (
+	domain: Resource.FieldDomain,
+	value: Condition.Scalar,
+): boolean =>
+	value === null ||
+	domain.object ||
+	domain.literals.includes(value) ||
+	(typeof value === "string" && domain.string) ||
+	(typeof value === "boolean" && domain.boolean) ||
+	(typeof value === "number" && domain.number !== "none")
+
 /**
  * Checks the names in an encoded policy against the domain. It gives one
  * message for each problem.
@@ -2254,6 +2324,27 @@ const validate = (
 				(ref): Issue => ({
 					path: [...at, "when"],
 					issue: `The principal has no field "${ref}"`,
+				}),
+			),
+			// A test with a value of another type than the field never matches.
+			// The types stop it in a typed rule, so here it is a mistake, and in
+			// a deny rule it would let values through.
+			...Arr.map(
+				Arr.filter(
+					value.when === undefined ? [] : literalTests(value.when),
+					([field, literal]) =>
+						Arr.some(
+							descriptors,
+							(descriptor) =>
+								!fitsDomain(
+									Resource.domainOf(descriptor.schema, field),
+									literal,
+								),
+						),
+				),
+				([field, literal]): Issue => ({
+					path: [...at, "when"],
+					issue: `The field "${field}" can not hold the value ${JSON.stringify(literal)}`,
 				}),
 			),
 		]

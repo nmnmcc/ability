@@ -748,11 +748,15 @@ const compare =
 	(field: string, value: unknown): Compare =>
 		nodes.Compare({ op, field, value: toOperand(value) })
 
-const makeAnd = (...conditions: ReadonlyArray<Ast>): Ast =>
-	nodes.And({ conditions })
+// A list of conditions goes in as an array, not as arguments: a call may take
+// only so many arguments, and a decoded condition may have more children.
+const andOf = (conditions: ReadonlyArray<Ast>): Ast => nodes.And({ conditions })
 
-const makeOr = (...conditions: ReadonlyArray<Ast>): Ast =>
-	nodes.Or({ conditions })
+const orOf = (conditions: ReadonlyArray<Ast>): Ast => nodes.Or({ conditions })
+
+const makeAnd = (...conditions: ReadonlyArray<Ast>): Ast => andOf(conditions)
+
+const makeOr = (...conditions: ReadonlyArray<Ast>): Ast => orOf(conditions)
 
 const makeNot = (condition: Ast): Ast => nodes.Not({ condition })
 
@@ -836,6 +840,30 @@ export const and: <const Cs extends ReadonlyArray<Any>>(
 	OpaqueOf<Cs[number]>,
 	ReadsOf<Cs[number]>
 > = makeAnd as never
+
+/**
+ * The same as {@link and}, for a list of conditions of one type. Use it for a
+ * long list: a function call may take only so many arguments.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.5.0
+ */
+export const andAll: <C extends Any>(
+	conditions: ReadonlyArray<C & Checked<C>>,
+) => Condition<Error<C>, Services<C>, OpaqueOf<C>, ReadsOf<C>> = andOf as never
+
+/**
+ * The same as {@link or}, for a list of conditions of one type. Use it for a
+ * long list: a function call may take only so many arguments.
+ *
+ * @stability stable
+ * @category combinators
+ * @since 0.5.0
+ */
+export const orAll: <C extends Any>(
+	conditions: ReadonlyArray<C & Checked<C>>,
+) => Condition<Error<C>, Services<C>, OpaqueOf<C>, ReadsOf<C>> = orOf as never
 
 /**
  * True when one of the conditions is true. With no conditions, it is false.
@@ -1068,9 +1096,9 @@ const provideAst = (
 							Effect.provideContext(ast.run(value, principal), context),
 						)
 					case "And":
-						return makeAnd(...Arr.map(ast.conditions, provide))
+						return andOf(Arr.map(ast.conditions, provide))
 					case "Or":
-						return makeOr(...Arr.map(ast.conditions, provide))
+						return orOf(Arr.map(ast.conditions, provide))
 					case "Not":
 						return makeNot(provide(ast.condition))
 					default:
@@ -1413,8 +1441,8 @@ const shortCircuit = (
 		return constant
 	}
 	return tag === "And"
-		? makeAnd(...before, constant)
-		: makeOr(...before, constant)
+		? andOf([...before, constant])
+		: orOf([...before, constant])
 }
 
 const simplifyIn = (ast: Ast, memo: Memo): Ast =>
@@ -1450,8 +1478,8 @@ const simplifyJunction = (
 					: unique.length === 1
 						? unique[0]!
 						: tag === "And"
-							? makeAnd(...unique)
-							: makeOr(...unique)
+							? andOf(unique)
+							: orOf(unique)
 			},
 		},
 	)
@@ -1566,7 +1594,7 @@ const expandUnder = (
 						value: literal(value as Scalar),
 					})
 	})
-	return makeAnd(...parts)
+	return andOf(parts)
 }
 
 const bind = (
@@ -1600,12 +1628,12 @@ const bindOnce = (
 		case "Under":
 			return expandUnder(ast.prefix, principal, path)
 		case "And":
-			return makeAnd(
-				...ast.conditions.map((child) => bind(child, principal, path, done)),
+			return andOf(
+				ast.conditions.map((child) => bind(child, principal, path, done)),
 			)
 		case "Or":
-			return makeOr(
-				...ast.conditions.map((child) => bind(child, principal, path, done)),
+			return orOf(
+				ast.conditions.map((child) => bind(child, principal, path, done)),
 			)
 		case "Not":
 			return makeNot(bind(ast.condition, principal, path, done))
@@ -2156,9 +2184,9 @@ const fix = (
 						: never
 			}
 			case "And":
-				return makeAnd(...Arr.map(ast.conditions, fixChild))
+				return andOf(Arr.map(ast.conditions, fixChild))
 			case "Or":
-				return makeOr(...Arr.map(ast.conditions, fixChild))
+				return orOf(Arr.map(ast.conditions, fixChild))
 			case "Not":
 				return makeNot(fixChild(ast.condition))
 			default:
