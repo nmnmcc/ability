@@ -1661,6 +1661,33 @@ describe("Policy", () => {
 		)
 	})
 
+	it("takes a getter of a class inside a codec", () => {
+		class Member extends Schema.Class<Member>("Member")({
+			id: Schema.String,
+		}) {
+			get ownerId() {
+				return this.id
+			}
+		}
+		const Members = Domain.make({
+			principal: Schema.fromJsonString(Member),
+			resources: [Bot],
+		})
+		const policy = Policy.define(Members)(function* (_) {
+			yield* _.allow("read", Bot, {
+				when: ($) => $.eq("ownerUserId", $.principal("ownerId")),
+			})
+		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: Member.make({ id: "alice" }),
+				action: "read",
+				resource: aliceBot,
+			})._tag,
+			"Allow",
+		)
+	})
+
 	describe("keeps the search safe for unusual fields", () => {
 		const denyCoverage = (
 			fields: Schema.Struct.Fields,

@@ -756,6 +756,21 @@ describe("Authorizer", () => {
 			}),
 		)
 
+		it.effect("in the value that is the prototype of a class value", () =>
+			Effect.gen(function* () {
+				class Person extends Schema.Class<Person>("Person")({
+					role: Schema.String,
+					roles: Schema.Array(Schema.String),
+				}) {}
+				const below = (role: string): object =>
+					Object.create(Person.make({ role, roles: [] })) as object
+				assert.strictEqual(
+					failureTag(yield* run(below("admin"), below("guest"))),
+					"Forbidden",
+				)
+			}),
+		)
+
 		it.effect("in an extra key of an array", () =>
 			Effect.gen(function* () {
 				const withRole = (role: string) => {

@@ -173,6 +173,23 @@ describe("Policy", () => {
 		expect(_.allow).type.toBeCallableWith("write", [Bot, Trigger])
 	})
 
+	it("takes the shapes of a target that may be one value or a list", () => {
+		const _ = Rule.builder(App)
+		const target = Bot as typeof Bot | ReadonlyArray<typeof Trigger>
+		expect(_.allow).type.toBeCallableWith("read", target)
+		expect(_.allow).type.not.toBeCallableWith("update", target)
+		expect(_.allow).type.not.toBeCallableWith("write", target)
+		const named = Condition.builder<
+			Rule.DataFor<App, "Bot">,
+			Bot,
+			Caller
+		>().predicate("named", (bot) => bot.name.length > 0)
+		expect(_.allow).type.toBeCallableWith("read", Bot, { when: () => named })
+		expect(_.allow).type.not.toBeCallableWith("read", target, {
+			when: () => named,
+		})
+	})
+
 	it("does not let the test of a predicate node be called with any value", () => {
 		const named = Condition.builder<unknown, Bot, Caller>().predicate(
 			"named",

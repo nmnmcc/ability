@@ -162,24 +162,33 @@ export type ActionFor<D, K> =
  * @category utility types
  * @since 0.4.0
  */
-export type TargetOf<Res> = [Res] extends [ReadonlyArray<infer X>] ? X : Res
+export type TargetOf<Res> = Res extends ReadonlyArray<infer X> ? X : Res
 
 /**
  * The actions that a rule may use for its resource argument. A list of
  * resources may use an action of any of them. One target with a union type
  * may use only an action of every kind in the union, because its value may be
- * any one of them.
+ * any one of them. When the argument may be a list or one target, the rule
+ * may use only an action that each of these shapes allows.
  *
  * @stability stable
  * @category utility types
  * @since 0.4.0
  */
-export type ActionForTargets<D, Res> = [Res] extends [ReadonlyArray<infer X>]
-	? ActionFor<D, KindOf<X>>
-	: | "*"
-		| ("*" extends KindOf<Res>
-				? Domain.AnyAction<D>
-				: Domain.CommonAction<D, Extract<KindOf<Res>, string>>)
+export type ActionForTargets<D, Res> = (
+	Res extends ReadonlyArray<infer X>
+		? (action: ActionFor<D, KindOf<X>>) => void
+		: (action: ActionForTarget<D, Res>) => void
+) extends (action: infer A) => void
+	? A
+	: never
+
+/** The actions for one target that is not a list. */
+type ActionForTarget<D, Res> =
+	| "*"
+	| ("*" extends KindOf<Res>
+			? Domain.AnyAction<D>
+			: Domain.CommonAction<D, Extract<KindOf<Res>, string>>)
 
 /**
  * The data type of the kinds `K`. For `"*"` it has no fields.

@@ -189,14 +189,17 @@ const prototypesOf = (schema: unknown): ReadonlyArray<object> =>
 
 /**
  * Gives the Schemas inside a field Schema: the Schema of an optional field,
- * and the members of a union, such as `Schema.NullOr`.
+ * the members of a union, such as `Schema.NullOr`, and the decoded Schema of
+ * a codec, such as `Schema.fromJsonString`.
  */
 const innerSchemas = (schema: unknown): ReadonlyArray<unknown> =>
 	hasProperty(schema, "members") && Array.isArray(schema.members)
 		? Arr.flatMap(schema.members, innerSchemas)
 		: hasProperty(schema, "schema")
 			? innerSchemas(schema.schema)
-			: [schema]
+			: hasProperty(schema, "to") && Schema.isSchema(schema.to)
+				? innerSchemas(schema.to)
+				: [schema]
 
 /**
  * Tests if a path names a getter of a class Schema, such as a getter of a
