@@ -108,14 +108,25 @@ export const getField = (value: unknown, path: string): unknown => {
 	return cursor === undefined ? null : cursor
 }
 
+/**
+ * Gives the value of an operand. A principal field that is `null` or missing
+ * gives `undefined`. No field of a resource is `undefined`, so a test with it
+ * is never true. This keeps the check closed: a principal with no id never
+ * matches a resource with no owner.
+ */
 const resolve = (operand: Condition.Operand, principal: unknown): unknown =>
-	operand._tag === "Literal" ? operand.value : getField(principal, operand.path)
+	operand._tag === "Literal"
+		? operand.value
+		: (getField(principal, operand.path) ?? undefined)
 
 const testCompare = (
 	op: Condition.CompareOperator,
 	left: unknown,
 	right: unknown,
 ): boolean => {
+	if (right === undefined) {
+		return false
+	}
 	switch (op) {
 		case "eq":
 			return left === right
@@ -333,7 +344,12 @@ export const simplify = (ast: Ast): Ast => {
 				case "Not":
 					return child.condition
 				case "Compare":
-					if (child.op === "eq" || child.op === "ne") {
+					// A principal field with no value makes `eq` and `ne` both false,
+					// so only a fixed value lets `not eq` become `ne`.
+					if (
+						child.value._tag === "Literal" &&
+						(child.op === "eq" || child.op === "ne")
+					) {
 						return Object.freeze({
 							...child,
 							op: child.op === "eq" ? "ne" : "eq",
@@ -351,13 +367,20 @@ export const simplify = (ast: Ast): Ast => {
 	}
 }
 
+/**
+ * Puts the value of the principal into an operand. It gives `undefined` for a
+ * principal field with no value. See {@link resolve}.
+ */
 const bindOperand = (
 	operand: Condition.Operand,
 	principal: unknown,
-): Condition.Literal =>
-	operand._tag === "Literal"
-		? operand
-		: literal(getField(principal, operand.path) as Scalar)
+): Condition.Literal | undefined => {
+	if (operand._tag === "Literal") {
+		return operand
+	}
+	const value = resolve(operand, principal)
+	return value === undefined ? undefined : literal(value as Scalar)
+}
 
 const expandUnder = (
 	prefix: ReadonlyArray<Condition.Operand>,
@@ -371,7 +394,9 @@ const expandUnder = (
 	prefix.forEach((operand, index) => {
 		const value = resolve(operand, principal)
 		const segment = path[index]!
-		if (typeof segment === "string") {
+		if (value === undefined) {
+			parts.push(never)
+		} else if (typeof segment === "string") {
 			parts.push(segment === value ? always : never)
 		} else {
 			parts.push(
@@ -393,13 +418,18 @@ const bind = (
 	path: ReadonlyArray<Resource.PathSegment> | undefined,
 ): Ast => {
 	switch (ast._tag) {
-		case "Compare":
-			return Object.freeze({ ...ast, value: bindOperand(ast.value, principal) })
+		case "Compare": {
+			const value = bindOperand(ast.value, principal)
+			return value === undefined ? never : Object.freeze({ ...ast, value })
+		}
 		case "In":
 			return Object.freeze({
 				...ast,
 				values: Object.freeze(
-					ast.values.map((operand) => bindOperand(operand, principal)),
+					ast.values.flatMap((operand) => {
+						const value = bindOperand(operand, principal)
+						return value === undefined ? [] : [value]
+					}),
 				),
 			})
 		case "Under":

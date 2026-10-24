@@ -208,7 +208,10 @@ The builder in `when` has these functions:
 | `principal(field)`       | Not a test. It gives a field of the principal.    |
 | `predicate(name, test)`  | The test function says yes. It may be an Effect.  |
 
-A missing field has the value `null`.
+A missing field of a resource has the value `null`. A field of the principal
+that is `null` or missing is different: a test with it is always false, also
+with `ne`. So a guest with no `userId` never matches a Bot with no owner. To
+test for `null`, use a fixed value, as in `$.eq("ownerUserId", null)`.
 
 `predicate` is the one way out of plain data. Its test may give a boolean or an
 `Effect`. The error type and the service type of the `Effect` go into the types

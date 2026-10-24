@@ -51,6 +51,11 @@ export interface Literal {
  * A field of the principal. {@link partial} puts the value of the field in its
  * place.
  *
+ * A principal field that is `null` or missing has no value. A `Compare`, `In`
+ * or `Under` test with it is always false, also with `ne`. So a principal with
+ * no id never matches a resource with no owner. `not` still turns false into
+ * true.
+ *
  * @stability stable
  * @category models
  * @since 0.3.0
@@ -509,7 +514,10 @@ export const not: <C extends Any>(
 export interface Input {
 	/** The resource value. */
 	readonly value: object
-	/** The principal. Without it, a principal field has the value `null`. */
+	/**
+	 * The principal. Without it, a principal field has no value. See
+	 * {@link PrincipalRef}.
+	 */
 	readonly principal?: object | undefined
 	/** The path of the resource. Without it, `Under` is false. */
 	readonly path?: ReadonlyArray<Resource.PathSegment> | undefined

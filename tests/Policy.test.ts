@@ -17,6 +17,13 @@ type App = typeof App
 
 const tagOf = (decision: Decision.Decision) => decision._tag
 
+// A principal from a loader may have no user id, for example a guest. The
+// Schema of `Caller` does not let this happen, so the test makes it by hand.
+const guest = {
+	organizationId: "acme",
+	role: "guest",
+} as unknown as Caller
+
 describe("Policy", () => {
 	describe("algorithms", () => {
 		const rules = (_: Rule.Builder<App>) => [
@@ -72,6 +79,72 @@ describe("Policy", () => {
 				),
 				"NotApplicable",
 			)
+		})
+	})
+
+	describe("principal fields with no value", () => {
+		const decide = (policy: Policy.Policy<App>, principal: Caller) =>
+			tagOf(
+				Policy.decideSync(policy, {
+					principal,
+					action: "update",
+					resource: sharedBot,
+				}),
+			)
+		const residual = (policy: Policy.Policy<App>, principal: Caller) =>
+			Policy.residual(policy, { principal, action: "update", kind: "Bot" })
+
+		it("never lets a principal with no id match a resource with no owner", () => {
+			const policy = Policy.define(App)(function* (_) {
+				yield* _.allow("update", Bot, {
+					when: ($) => $.eq("ownerUserId", $.principal("userId")),
+				})
+			})
+			assert.strictEqual(decide(policy, guest), "NotApplicable")
+			assert.deepStrictEqual(residual(policy, guest), Condition.never)
+		})
+
+		it("never matches with in, ne or under", () => {
+			const policy = Policy.define(App)(function* (_) {
+				yield* _.allow("update", Bot, {
+					when: ($) => $.in("ownerUserId", [$.principal("userId")]),
+				})
+				yield* _.allow("update", Bot, {
+					when: ($) => $.ne("ownerUserId", $.principal("userId")),
+				})
+				yield* _.allow("update", Bot, {
+					when: ($) =>
+						$.under(
+							"org",
+							$.principal("organizationId"),
+							"user",
+							$.principal("userId"),
+						),
+				})
+			})
+			assert.strictEqual(decide(policy, guest), "NotApplicable")
+			assert.deepStrictEqual(residual(policy, guest), Condition.never)
+		})
+
+		it("lets a deny rule with not apply", () => {
+			const policy = Policy.define(App)(function* (_) {
+				yield* _.allow("update", Bot)
+				yield* _.deny("update", Bot, {
+					when: ($) => $.not($.eq("ownerUserId", $.principal("userId"))),
+					reason: "Only the owner may change a Bot",
+				})
+			})
+			assert.strictEqual(decide(policy, guest), "Deny")
+			assert.deepStrictEqual(residual(policy, guest), Condition.never)
+		})
+
+		it("keeps a fixed null value as a test for null", () => {
+			const policy = Policy.define(App)(function* (_) {
+				yield* _.allow("update", Bot, {
+					when: ($) => $.eq("ownerUserId", null),
+				})
+			})
+			assert.strictEqual(decide(policy, guest), "Allow")
 		})
 	})
 
@@ -379,6 +452,9 @@ describe("Policy", () => {
 				"under",
 				"notName",
 				"either",
+				"notOwner",
+				"ownerIn",
+				"underUser",
 			]),
 			fields: Schema.Boolean,
 		})
@@ -398,7 +474,9 @@ describe("Policy", () => {
 				"lastApplicable",
 			]),
 			shape: Schema.Literals(["rules", "all", "any", "firstOf", "ceiling"]),
+			principal: Schema.Literals(["alice", "guest"]),
 		})
+		const principals = { alice, guest }
 
 		type BotBuilder = Condition.Builder<Rule.DataFor<App, "Bot">, Bot, Caller>
 		const conditions: Record<
@@ -411,6 +489,15 @@ describe("Policy", () => {
 			under: ($) => $.under("org", $.principal("organizationId")),
 			notName: ($) => $.not($.eq("name", "Team")),
 			either: ($) => $.or($.eq("level", 5), $.exists("ownerUserId")),
+			notOwner: ($) => $.not($.eq("ownerUserId", $.principal("userId"))),
+			ownerIn: ($) => $.in("ownerUserId", [$.principal("userId"), "bob"]),
+			underUser: ($) =>
+				$.under(
+					"org",
+					$.principal("organizationId"),
+					"user",
+					$.principal("userId"),
+				),
 		}
 
 		const toRule = (
@@ -464,14 +551,15 @@ describe("Policy", () => {
 					settings: { model: "small", secret: "s" },
 				})
 				const field = request.field === "none" ? undefined : request.field
+				const principal = principals[request.principal]
 				const decision = Policy.decideSync(policy, {
-					principal: alice,
+					principal,
 					action: request.action,
 					resource: value,
 					...(field === undefined ? {} : { field }),
 				})
 				const residual = Policy.residual(policy, {
-					principal: alice,
+					principal,
 					action: request.action,
 					kind: "Bot",
 					...(field === undefined ? {} : { field }),
@@ -501,8 +589,12 @@ describe("Policy", () => {
 
 		it.prop(
 			"keeps the meaning of a condition when it makes it smaller",
-			{ specs: Schema.Array(Spec), bot: BotInput },
-			({ specs, bot }) => {
+			{
+				specs: Schema.Array(Spec),
+				bot: BotInput,
+				principal: Request.fields.principal,
+			},
+			({ specs, bot, principal }) => {
 				const value = Bot.make({
 					...bot,
 					id: "b9",
@@ -521,8 +613,13 @@ describe("Policy", () => {
 				)
 				const input = {
 					value,
-					principal: alice,
-					path: ["org", { _tag: "Field", field: "organizationId" }] as const,
+					principal: principals[principal],
+					path: [
+						"org",
+						{ _tag: "Field", field: "organizationId" },
+						"user",
+						{ _tag: "Field", field: "ownerUserId" },
+					] as const,
 				}
 				return (
 					Condition.evaluateSync(whole, input) ===
