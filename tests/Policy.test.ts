@@ -1603,6 +1603,64 @@ describe("Policy", () => {
 		)
 	})
 
+	it("lets a key of a record hold any value in the search", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { info: Schema.Record(Schema.String, Schema.Boolean) },
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const $ = Condition.builder<
+			{ readonly info: { readonly [key: string]: boolean } },
+			unknown,
+			unknown
+		>()
+		const policy = Policy.rules(Notes, [
+			Rule.builder(Notes).allow("read", Note),
+			Rule.make({
+				_tag: "Deny",
+				actions: ["read"],
+				resources: ["Note"],
+				when: $.and(
+					$.exists("info.key"),
+					$.ne("info.key", true),
+					$.ne("info.key", false),
+				),
+			}),
+		])
+		assert.notStrictEqual(
+			Policy.coverage(policy, {
+				principal: alice,
+				action: "read",
+				kind: "Note",
+			})._tag,
+			"All",
+		)
+	})
+
+	it("takes a principal field that comes from a getter of its class", () => {
+		class Member extends Principal.Class<Member>("Member")({
+			id: Schema.String,
+		}) {
+			get ownerId() {
+				return this.id
+			}
+		}
+		const Members = Domain.make({ principal: Member, resources: [Bot] })
+		const policy = Policy.define(Members)(function* (_) {
+			yield* _.allow("read", Bot, {
+				when: ($) => $.eq("ownerUserId", $.principal("ownerId")),
+			})
+		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: Member.make({ id: "alice" }),
+				action: "read",
+				resource: aliceBot,
+			})._tag,
+			"Allow",
+		)
+	})
+
 	it("searches many values of one field without a deep stack", () => {
 		const ids = Array.from({ length: 4000 }, (_, index) => `b${String(index)}`)
 		const policy = Policy.define(App)(function* (_) {

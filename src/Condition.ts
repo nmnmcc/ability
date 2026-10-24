@@ -26,6 +26,12 @@
 // the language service check for `unknown` in an Effect is off here.
 // @effect-diagnostics anyUnknownInErrorContext:off
 import * as Arr from "effect/Array"
+import type * as BigDecimal from "effect/BigDecimal"
+import type * as Cause from "effect/Cause"
+import type * as Chunk from "effect/Chunk"
+import type * as DateTime from "effect/DateTime"
+import type * as Duration from "effect/Duration"
+import type * as Redacted from "effect/Redacted"
 import type * as Context from "effect/Context"
 import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
@@ -415,6 +421,25 @@ export type ReadsOf<C> = [C] extends [
 	: unknown
 
 /**
+ * `unknown` when a condition is a condition of its own type fields: each of
+ * its children has them too. A node made with a spread may keep the type
+ * fields of another node, and then it is `never`, so the call stops.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 0.5.0
+ */
+export type Checked<C> =
+	C extends Condition<Error<C>, Services<C>, OpaqueOf<C>, ReadsOf<C>>
+		? unknown
+		: never
+
+/** Each condition, checked with {@link Checked}. */
+type Consistent<Cs extends ReadonlyArray<Any>> = {
+	readonly [K in keyof Cs]: Cs[K] & Checked<Cs[K]>
+}
+
+/**
  * {@link Opaque} when a condition has a predicate.
  *
  * @stability stable
@@ -442,6 +467,13 @@ type Whole =
 	| URL
 	| Uint8Array
 	| Option.Option<unknown>
+	| BigDecimal.BigDecimal
+	| Duration.Duration
+	| DateTime.DateTime
+	| Redacted.Redacted<unknown>
+	| Chunk.Chunk<unknown>
+	| Cause.Cause<unknown>
+	| RegExp
 type PreviousDepth = [never, 0, 1, 2, 3]
 type FieldPathInternal<T, Depth extends number, Arrays extends boolean> = [
 	Depth,
@@ -463,8 +495,9 @@ type FieldPathInternal<T, Depth extends number, Arrays extends boolean> = [
 
 /**
  * The paths of the fields of `T` that hold one value, with dots for nested
- * fields. Arrays are left out. A map, a set, a date, a URL, a byte array and
- * an `Option` are one field, and a path does not go into them. The type goes down four levels, so type
+ * fields. Arrays are left out. A map, a set, a date, a URL, a byte array, an
+ * `Option` and the other value types of Effect, such as `BigDecimal` and
+ * `Duration`, are one field, and a path does not go into them. The type goes down four levels, so type
  * checking stays fast. For a union of types, only the common fields are
  * paths.
  *
@@ -657,7 +690,7 @@ export interface Builder<Data, Value, P> {
 		field: F,
 	) => Ref<PathValue<P, F>, P>
 	readonly and: <const Cs extends ReadonlyArray<Any>>(
-		...conditions: Cs
+		...conditions: Consistent<Cs>
 	) => Condition<
 		Error<Cs[number]>,
 		Services<Cs[number]>,
@@ -665,7 +698,7 @@ export interface Builder<Data, Value, P> {
 		ReadsOf<Cs[number]>
 	>
 	readonly or: <const Cs extends ReadonlyArray<Any>>(
-		...conditions: Cs
+		...conditions: Consistent<Cs>
 	) => Condition<
 		Error<Cs[number]>,
 		Services<Cs[number]>,
@@ -673,7 +706,7 @@ export interface Builder<Data, Value, P> {
 		ReadsOf<Cs[number]>
 	>
 	readonly not: <C extends Any>(
-		condition: C,
+		condition: C & Checked<C>,
 	) => Condition<Error<C>, Services<C>, OpaqueOf<C>, ReadsOf<C>>
 	/**
 	 * A test that runs any code. It may give a boolean or an `Effect`. A
@@ -785,7 +818,7 @@ export const never: Condition = nodes.False() as Condition
  * @since 0.3.0
  */
 export const and: <const Cs extends ReadonlyArray<Any>>(
-	...conditions: Cs
+	...conditions: Consistent<Cs>
 ) => Condition<
 	Error<Cs[number]>,
 	Services<Cs[number]>,
@@ -801,7 +834,7 @@ export const and: <const Cs extends ReadonlyArray<Any>>(
  * @since 0.3.0
  */
 export const or: <const Cs extends ReadonlyArray<Any>>(
-	...conditions: Cs
+	...conditions: Consistent<Cs>
 ) => Condition<
 	Error<Cs[number]>,
 	Services<Cs[number]>,
@@ -815,7 +848,7 @@ export const or: <const Cs extends ReadonlyArray<Any>>(
  * @since 0.3.0
  */
 export const not: <C extends Any>(
-	condition: C,
+	condition: C & Checked<C>,
 ) => Condition<Error<C>, Services<C>, OpaqueOf<C>, ReadsOf<C>> =
 	makeNot as never
 

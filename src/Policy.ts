@@ -2022,6 +2022,30 @@ const refsIn = (
 		}
 	})
 
+/**
+ * Tests if the first part of a path is a getter of a class Schema, such as a
+ * getter of a `Principal.Class`. A condition reads such a field, and the
+ * types of `$.principal` take it, so the check of a policy takes it too.
+ */
+const hasGetter = (schema: unknown, path: string): boolean => {
+	const name = path.split(".")[0]!
+	const prototypes = Arr.unfold(
+		typeof schema === "function" ? (schema.prototype as unknown) : null,
+		(prototype) =>
+			isObjectValue(prototype) && prototype !== Object.prototype
+				? Option.some([prototype, Object.getPrototypeOf(prototype)] as const)
+				: Option.none(),
+	)
+	return Arr.some(
+		prototypes,
+		(prototype) =>
+			Object.getOwnPropertyDescriptor(prototype, name)?.get !== undefined,
+	)
+}
+
+const isObjectValue = (u: unknown): u is object =>
+	typeof u === "object" && u !== null
+
 interface Issue {
 	readonly path: ReadonlyArray<PropertyKey>
 	readonly issue: string
@@ -2103,7 +2127,8 @@ const validate = (
 					value.when === undefined ? [] : principalRefs(value.when),
 					(ref) =>
 						!HashSet.has(principalPaths, ref) &&
-						!Resource.hasPath(domain.principal, ref),
+						!Resource.hasPath(domain.principal, ref) &&
+						!hasGetter(domain.principal, ref),
 				),
 				(ref): Issue => ({
 					path: [...at, "when"],

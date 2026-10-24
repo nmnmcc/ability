@@ -1165,4 +1165,47 @@ describe("Authorizer", () => {
 			assert.isBelow(Date.now() - start, 1000)
 		}),
 	)
+
+	it.effect("makes the cache key of many objects in a short time", () =>
+		Effect.gen(function* () {
+			class Holder extends Principal.Class<Holder>("ManyHolder")({
+				levels: Schema.Record(
+					Schema.String,
+					Schema.Struct({ level: Schema.Finite }),
+				),
+			}) {}
+			const Holders = Domain.make({ principal: Holder, resources: [Bot] })
+			class CurrentManyHolder extends Context.Service<
+				CurrentManyHolder,
+				Holder
+			>()("@nmnmcc/ability/tests/Authorizer.test/CurrentManyHolder") {}
+			class HolderAuth extends Authorizer.Service<
+				HolderAuth,
+				{ requires: CurrentManyHolder }
+			>()("test/ManyHolderAuth", Holders) {}
+			const layer = Authorizer.layer(HolderAuth, {
+				principal: CurrentManyHolder,
+				policy: () =>
+					Effect.succeed(
+						Policy.define(Holders)(function* (_) {
+							yield* _.allow("read", Bot)
+						}),
+					),
+			})
+			const user = Holder.make({
+				levels: Object.fromEntries(
+					Array.from({ length: 8000 }, (_, index) => [
+						String(index),
+						{ level: 1 },
+					]),
+				),
+			})
+			const start = Date.now()
+			yield* HolderAuth.check({ action: "read", resource: aliceBot }).pipe(
+				Effect.provideService(CurrentManyHolder, user),
+				Effect.provide(layer),
+			)
+			assert.isBelow(Date.now() - start, 1000)
+		}),
+	)
 })

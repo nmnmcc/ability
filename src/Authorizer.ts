@@ -469,47 +469,6 @@ const classId = (classes: ClassIds, constructor: object): string => {
 }
 
 /**
- * A text for a value, and the objects that the walk has seen up to now. The
- * objects are in a native `Set`, because it must find an object by the object
- * itself: `Equal` would call two objects with the same data one object.
- */
-interface Keyed {
-	readonly text: string
-	readonly seen: ReadonlySet<object>
-}
-
-/**
- * Gives the texts of some values in order, or `undefined` when one of them
- * has no text. The objects that one value has seen go on to the next.
- */
-const keyTexts = (
-	values: ReadonlyArray<unknown>,
-	seen: ReadonlySet<object>,
-	classes: ClassIds,
-):
-	| {
-			readonly texts: ReadonlyArray<string>
-			readonly seen: ReadonlySet<object>
-	  }
-	| undefined => {
-	// `mapAccum` passes the seen objects from each value to the next, and it
-	// makes the list of texts in one pass. A value with no text makes the
-	// state `undefined`, and the values after it are not read.
-	const [last, texts] = Arr.mapAccum(
-		values,
-		seen as ReadonlySet<object> | undefined,
-		(before, value): readonly [ReadonlySet<object> | undefined, string] => {
-			if (before === undefined) {
-				return [undefined, ""]
-			}
-			const keyed = keyText(value, before, classes)
-			return keyed === undefined ? [undefined, ""] : [keyed.seen, keyed.text]
-		},
-	)
-	return last === undefined ? undefined : { texts, seen: last }
-}
-
-/**
  * Gives a text that names a principal value. Two values get one text only when
  * they have the same types and the same data. So a string `"1"` and a bigint
  * `1n` get two texts. The text keeps the class of each object, by a number
@@ -528,10 +487,10 @@ const keyTexts = (
  */
 const keyText = (
 	value: unknown,
-	seen: ReadonlySet<object>,
+	seen: Set<object>,
 	classes: ClassIds,
-): Keyed | undefined => {
-	const plain = (text: string): Keyed => ({ text, seen })
+): string | undefined => {
+	const plain = (text: string): string => text
 	switch (typeof value) {
 		case "string":
 			return plain(`s${JSON.stringify(value)}`)
@@ -554,15 +513,15 @@ const keyText = (
 	if (seen.has(value)) {
 		return undefined
 	}
-	const inner = new Set([...seen, value])
+	seen.add(value)
 	const list = (
 		items: ReadonlyArray<unknown>,
 		wrap: (texts: ReadonlyArray<string>) => string,
-	): Keyed | undefined => {
-		const result = keyTexts(items, inner, classes)
-		return result === undefined
-			? undefined
-			: { text: wrap(result.texts), seen: result.seen }
+	): string | undefined => {
+		const texts = Arr.map(items, (item) => keyText(item, seen, classes))
+		return Arr.every(texts, (text) => text !== undefined)
+			? wrap(texts as ReadonlyArray<string>)
+			: undefined
 	}
 	const prototype: unknown = Object.getPrototypeOf(value)
 	// The own keys of the value. A built-in value keeps its data inside, so it
@@ -572,10 +531,10 @@ const keyText = (
 	// The entries of a map or a set keep their order, because a loader may read
 	// the first one.
 	if (prototype === Date.prototype && own.length === 0) {
-		return { text: `d${String((value as Date).getTime())}`, seen: inner }
+		return `d${String((value as Date).getTime())}`
 	}
 	if (prototype === URL.prototype && own.length === 0) {
-		return { text: `u${JSON.stringify((value as URL).href)}`, seen: inner }
+		return `u${JSON.stringify((value as URL).href)}`
 	}
 	if (
 		prototype === Array.prototype &&
@@ -668,10 +627,10 @@ const makeLayer = (
 	// not use the cache.
 	const classes: ClassIds = MutableHashMap.empty()
 	const keyOf = (principal: object): PrincipalKey | undefined => {
-		const keyed = keyText(principal, new Set(), classes)
-		return keyed === undefined
-			? undefined
-			: new PrincipalKey(principal, keyed.text)
+		// One set of seen objects for the walk: the walk adds each object to it,
+		// and the set goes away when the key is made.
+		const text = keyText(principal, new Set(), classes)
+		return text === undefined ? undefined : new PrincipalKey(principal, text)
 	}
 	return Layer.effect(
 		service,

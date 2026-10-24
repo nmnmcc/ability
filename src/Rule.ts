@@ -243,7 +243,7 @@ export interface Options<D, K, C extends Condition.Any> {
 			ValueFor<D, K>,
 			Domain.Principal<D>
 		>,
-	) => C
+	) => C & Condition.Checked<C>
 	readonly fields?: ReadonlyArray<FieldFor<D, K>>
 	readonly reason?: string
 	readonly id?: string

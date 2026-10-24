@@ -367,6 +367,31 @@ describe("Policy", () => {
 		})
 	})
 
+	it("does not take a node with children of other types", () => {
+		const base = Condition.and()
+		const named = Condition.builder<unknown, Bot, Caller>().predicate(
+			"named",
+			(bot) => bot.name.length > 0,
+		)
+		if (base._tag === "And") {
+			const spread = { ...base, conditions: [named] }
+			expect(Condition.and).type.not.toBeCallableWith(spread)
+		}
+	})
+
+	it("takes an Effect value type as one field", () => {
+		const Price = Resource.make("Price", {
+			actions: ["read"],
+			fields: { cost: Schema.BigDecimal },
+		})
+		const Prices = Domain.make({ principal: Caller, resources: [Price] })
+		const _ = Rule.builder(Prices)
+		expect(_.deny).type.toBeCallableWith("read", Price, { fields: ["cost"] })
+		expect(_.deny).type.not.toBeCallableWith("read", Price, {
+			fields: ["cost.scale"],
+		})
+	})
+
 	it("does not go into a map in a field path", () => {
 		const $ = Condition.builder<
 			{ readonly roles: ReadonlyMap<string, string> },

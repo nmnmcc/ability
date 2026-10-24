@@ -692,21 +692,13 @@ const domainAt = (
 					? joinDomains([nullDomain, inner])
 					: inner
 			}
-			const keys = Arr.filter(ast.indexSignatures, (signature) =>
-				Schema.is(Schema.make(signature.parameter))(name),
-			)
 			// A name that the struct does not have may still be a field of a
 			// value: a condition reads a field that a value has from its class,
-			// such as a getter, and the Schema does not stop such a field. So it
-			// may hold any value. A key of a record may be missing.
-			return keys.length === 0
-				? anyDomain
-				: joinDomains([
-						nullDomain,
-						...Arr.map(keys, (signature) =>
-							domainAt(signature.type, names, index + 1, new Set()),
-						),
-					])
+			// such as a getter, and the Schema does not stop such a field. A key
+			// of a record is not safe either: the Schema of a record checks only
+			// the keys that a loop over the keys sees, and a condition reads the
+			// others too. So such a field may hold any value.
+			return anyDomain
 		}
 		case "Union":
 			return joinDomains(
