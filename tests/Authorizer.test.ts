@@ -9,6 +9,7 @@ import {
 	Domain,
 	Policy,
 	Principal,
+	Resource,
 } from "../src/index.ts"
 import {
 	alice,
@@ -339,6 +340,36 @@ describe("Authorizer", () => {
 						within: ($) => $.and($.eq("name", "a"), $.eq("name", "b")),
 					}),
 					{ decider: () => Effect.succeed(Decision.Allow({})) },
+				)
+				assert.strictEqual(failureTag(exit), "Forbidden")
+			}),
+		)
+
+		it.effect("does not ask the decider when a scope may be empty", () =>
+			Effect.gen(function* () {
+				const Note = Resource.make("Note", {
+					actions: ["read"],
+					fields: { tags: Schema.Record(Schema.String, Schema.String) },
+				})
+				const Notes = Domain.make({ principal: Caller, resources: [Note] })
+				class NoteAuth extends Authorizer.Service<
+					NoteAuth,
+					{ requires: Identity }
+				>()("test/NoteAuth", Notes) {}
+				const layer = Authorizer.layer(NoteAuth, {
+					principal: Identity,
+					policy: () => Effect.succeed(Policy.empty(Notes)),
+					decider: () => Effect.succeed(Decision.Allow({})),
+				})
+				const exit = yield* NoteAuth.check({
+					action: "read",
+					kind: "Note",
+					within: ($) =>
+						$.and($.eq("tags.owner", "alice"), $.eq("tags.owner", "bob")),
+				}).pipe(
+					Effect.provideService(Identity, alice),
+					Effect.provide(layer),
+					Effect.exit,
 				)
 				assert.strictEqual(failureTag(exit), "Forbidden")
 			}),

@@ -1954,6 +1954,25 @@ const coverageAny = (policy: Any, request: ScopedRequest): AnyCoverage => {
 }
 
 /**
+ * Tests if the scope of a request has a value of the Schema of its kind. The
+ * answer is `true` only when the search finds such a value. When the search
+ * can not say, the answer is `false`. So a "yes" from it is safe to act on,
+ * as for the question "may the decider answer for this scope?".
+ *
+ * @stability stable
+ * @category evaluation
+ * @since 0.5.0
+ */
+export const scopeHasValue = (policy: Any, request: ScopedRequest): boolean => {
+	const scoped = scopedResiduals(policy, request)
+	return (
+		Condition.satisfiable(scoped.scope as Condition.Any, {
+			schema: scoped.schema,
+		})._tag === "Satisfiable"
+	)
+}
+
+/**
  * Tests if the scope of a request has no value of the Schema of its kind. A
  * scope with a mistake, such as two values for one field, is empty. With no
  * scope, the answer is `false` when the kind has a value. When the search can
