@@ -211,7 +211,7 @@ export type ValueFor<D, K> = "*" extends K
  * @since 0.3.0
  */
 export type FieldFor<D, K> =
-	Condition.FieldPath<DataFor<D, K>> | `${string}*${string}`
+	Condition.FieldSelector<DataFor<D, K>> | `${string}*${string}`
 
 /**
  * A condition that a rule for the kinds `K` may have. Its predicates may read

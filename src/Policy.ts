@@ -248,7 +248,7 @@ export type Target<D> = {
 	[K in Domain.Kind<D>]: {
 		readonly action: Domain.ActionOf<D, K>
 		readonly resource: Domain.ValueOf<D, K>
-		readonly field?: Condition.FieldPath<Domain.DataOf<D, K>>
+		readonly field?: Condition.FieldSelector<Domain.DataOf<D, K>>
 		/** A target has a resource value or a kind, never both. */
 		readonly kind?: never
 	}
@@ -304,7 +304,7 @@ export type KindTarget<D> = {
 	[K in Domain.Kind<D>]: {
 		readonly action: Domain.ActionOf<D, K>
 		readonly kind: K
-		readonly field?: Condition.FieldPath<Domain.DataOf<D, K>>
+		readonly field?: Condition.FieldSelector<Domain.DataOf<D, K>>
 		/** The part of the kind. See {@link Scope}. */
 		readonly within?: Scope<D, K>
 		/** A target has a resource value or a kind, never both. */
@@ -423,6 +423,30 @@ const encodeNode = (node: Node): EncodedNode => {
 }
 
 /**
+ * The tree of a policy as a value that `JSON.stringify` keeps with no loss.
+ * See `Condition.toJsonValue`.
+ */
+const jsonNode = (node: EncodedNode): unknown => {
+	switch (node._tag) {
+		case "Rules":
+			return {
+				...node,
+				rules: Arr.map(node.rules, (value) =>
+					value.when === undefined
+						? value
+						: { ...value, when: Condition.toJsonValue(value.when as Ast) },
+				),
+			}
+		case "All":
+		case "Any":
+		case "FirstOf":
+			return { ...node, policies: Arr.map(node.policies, jsonNode) }
+		case "Ceiling":
+			return { ...node, cap: jsonNode(node.cap), policy: jsonNode(node.policy) }
+	}
+}
+
+/**
  * The class of every policy value. Two policies of one domain with the same
  * tree are equal. As JSON, a policy is its tree.
  */
@@ -431,7 +455,7 @@ class PolicyData extends Data.Class<{
 	readonly node: Node
 }> {
 	toJSON(): unknown {
-		return encodeNode(this.node)
+		return jsonNode(encodeNode(this.node))
 	}
 }
 

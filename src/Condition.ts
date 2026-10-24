@@ -443,16 +443,22 @@ type Whole =
 	| Uint8Array
 	| Option.Option<unknown>
 type PreviousDepth = [never, 0, 1, 2, 3]
-type FieldPathInternal<T, Depth extends number> = [Depth] extends [never]
+type FieldPathInternal<T, Depth extends number, Arrays extends boolean> = [
+	Depth,
+] extends [never]
 	? never
 	: {
 			[K in keyof T & string]-?: NonNullable<T[K]> extends Leaf | Whole
 				? K
-				: NonNullable<T[K]> extends ReadonlyArray<unknown> | Function
+				: NonNullable<T[K]> extends Function
 					? never
-					: NonNullable<T[K]> extends object
-						? `${K}.${FieldPathInternal<NonNullable<T[K]>, PreviousDepth[Depth]>}`
-						: never
+					: NonNullable<T[K]> extends ReadonlyArray<unknown>
+						? Arrays extends true
+							? K
+							: never
+						: NonNullable<T[K]> extends object
+							? `${K}.${FieldPathInternal<NonNullable<T[K]>, PreviousDepth[Depth], Arrays>}`
+							: never
 		}[keyof T & string]
 
 /**
@@ -467,7 +473,36 @@ type FieldPathInternal<T, Depth extends number> = [Depth] extends [never]
  * @since 0.3.0
  */
 export type FieldPath<T> = [T] extends [object]
-	? FieldPathInternal<T, 4>
+	? FieldPathInternal<T, 4, false>
+	: never
+
+/**
+ * The paths of the fields of `T` that a rule or a request may name, as in
+ * `Rule.Options.fields`. They are the paths of {@link FieldPath}, and the
+ * paths of arrays too: a rule may allow or deny a whole array field, and
+ * `permittedFields` lists it.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 0.5.0
+ */
+export type FieldSelector<T> = [T] extends [object]
+	? FieldPathInternal<T, 4, true>
+	: never
+
+/**
+ * The value type that fits every field in `F`. For one field, it is the type
+ * of the field. For a union of fields, it is the values that each of them can
+ * hold, so a value of a union type can not test a field of another type.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 0.5.0
+ */
+export type FieldValue<Data, F extends string> = (
+	F extends unknown ? (value: PathValue<Data, F>) => void : never
+) extends (value: infer V) => void
+	? V
 	: never
 
 type Normalize<A> = Exclude<A, undefined> | (undefined extends A ? null : never)
@@ -557,7 +592,7 @@ export interface Builder<Data, Value, P> {
 	/** The field is equal to the value. */
 	readonly eq: <
 		const F extends FieldPath<Data>,
-		const V extends OperandOf<PathValue<Data, F>, any>,
+		const V extends OperandOf<FieldValue<Data, F>, any>,
 	>(
 		field: F,
 		value: V,
@@ -565,35 +600,35 @@ export interface Builder<Data, Value, P> {
 	/** The field is not equal to the value. */
 	readonly ne: <
 		const F extends FieldPath<Data>,
-		const V extends OperandOf<PathValue<Data, F>, any>,
+		const V extends OperandOf<FieldValue<Data, F>, any>,
 	>(
 		field: F,
 		value: V,
 	) => Test<Value, PrincipalOf<V, P>>
 	readonly lt: <
 		const F extends OrderedPath<Data>,
-		const V extends OperandOf<Exclude<PathValue<Data, F>, null>, any>,
+		const V extends OperandOf<Exclude<FieldValue<Data, F>, null>, any>,
 	>(
 		field: F,
 		value: V,
 	) => Test<Value, PrincipalOf<V, P>>
 	readonly lte: <
 		const F extends OrderedPath<Data>,
-		const V extends OperandOf<Exclude<PathValue<Data, F>, null>, any>,
+		const V extends OperandOf<Exclude<FieldValue<Data, F>, null>, any>,
 	>(
 		field: F,
 		value: V,
 	) => Test<Value, PrincipalOf<V, P>>
 	readonly gt: <
 		const F extends OrderedPath<Data>,
-		const V extends OperandOf<Exclude<PathValue<Data, F>, null>, any>,
+		const V extends OperandOf<Exclude<FieldValue<Data, F>, null>, any>,
 	>(
 		field: F,
 		value: V,
 	) => Test<Value, PrincipalOf<V, P>>
 	readonly gte: <
 		const F extends OrderedPath<Data>,
-		const V extends OperandOf<Exclude<PathValue<Data, F>, null>, any>,
+		const V extends OperandOf<Exclude<FieldValue<Data, F>, null>, any>,
 	>(
 		field: F,
 		value: V,
@@ -601,7 +636,7 @@ export interface Builder<Data, Value, P> {
 	/** The field is equal to one of the values. */
 	readonly in: <
 		const F extends FieldPath<Data>,
-		const Vs extends ReadonlyArray<OperandOf<PathValue<Data, F>, any>>,
+		const Vs extends ReadonlyArray<OperandOf<FieldValue<Data, F>, any>>,
 	>(
 		field: F,
 		values: Vs,
@@ -1261,6 +1296,12 @@ const reduce = (
 		? conditions
 		: absorb(inner, dedupe(conditions, memo), memo)
 
+/**
+ * Puts the children of a child of the same kind into the node. A child with a
+ * predicate stays one child: its children all stay anyway, and one shared
+ * child would come again for each path to it, so the node could grow without
+ * end.
+ */
 const flatten = (
 	tag: "And" | "Or",
 	conditions: ReadonlyArray<Ast>,
@@ -1268,7 +1309,9 @@ const flatten = (
 ): ReadonlyArray<Ast> =>
 	Arr.flatMap(conditions, (child) => {
 		const simple = simplifyIn(child, memo)
-		return simple._tag === tag ? simple.conditions : [simple]
+		return simple._tag === tag && !hasPredicateIn(simple, memo.predicates)
+			? simple.conditions
+			: [simple]
 	})
 
 /**
@@ -2234,6 +2277,49 @@ export const satisfiable: {
 	(args) => isObject(args[0]) && hasProperty(args[0], "_tag"),
 	satisfiableAst,
 ) as never
+
+const operandJson = (operand: Operand): unknown =>
+	operand._tag === "Literal" &&
+	typeof operand.value === "number" &&
+	!Number.isFinite(operand.value)
+		? { ...operand, value: { nonFinite: String(operand.value) } }
+		: operand
+
+const jsonIn = (ast: Ast, done: Map<Ast, unknown>): unknown =>
+	remember(done, ast, (): unknown => {
+		switch (ast._tag) {
+			case "Compare":
+				return { ...ast, value: operandJson(ast.value) }
+			case "In":
+				return { ...ast, values: Arr.map(ast.values, operandJson) }
+			case "Under":
+				return { ...ast, prefix: Arr.map(ast.prefix, operandJson) }
+			case "And":
+			case "Or":
+				return {
+					...ast,
+					conditions: Arr.map(ast.conditions, (child) => jsonIn(child, done)),
+				}
+			case "Not":
+				return { ...ast, condition: jsonIn(ast.condition, done) }
+			default:
+				return ast
+		}
+	})
+
+/**
+ * Gives a condition as a value that `JSON.stringify` keeps with no loss. JSON
+ * has no `Infinity`, `-Infinity` or `NaN`: it writes `null` in their place,
+ * and a test with `null` has another meaning. Such a number becomes an object
+ * that {@link schema} does not decode, so a policy with it fails to load and
+ * never gives a wrong answer.
+ *
+ * @stability stable
+ * @category conversions
+ * @since 0.5.0
+ */
+export const toJsonValue = (condition: Ast): unknown =>
+	jsonIn(condition, new Map())
 
 /**
  * The JSON form of a condition with no predicate.

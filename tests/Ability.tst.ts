@@ -7,6 +7,7 @@ import {
 	type Decision,
 	Domain,
 	Policy,
+	Resource,
 	Rule,
 } from "../src/index.ts"
 import {
@@ -346,6 +347,24 @@ describe("Policy", () => {
 		>().principal("userId")
 		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
 		expect($.eq).type.not.toBeCallableWith("ownerUserId", id)
+	})
+
+	it("takes a value that fits every field of a union of fields", () => {
+		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
+		const either = "level" as "level" | "name"
+		expect($.ne).type.not.toBeCallableWith(either, "blocked")
+		expect($.ne).type.toBeCallableWith("name", "blocked")
+	})
+
+	it("lets a rule name an array field", () => {
+		const Doc = Resource.make("Doc", {
+			actions: ["read"],
+			fields: { secrets: Schema.Array(Schema.String) },
+		})
+		const Docs = Domain.make({ principal: Caller, resources: [Doc] })
+		expect(Rule.builder(Docs).deny).type.toBeCallableWith("read", Doc, {
+			fields: ["secrets"],
+		})
 	})
 
 	it("does not go into a map in a field path", () => {

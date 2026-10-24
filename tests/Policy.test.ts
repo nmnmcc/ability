@@ -1291,6 +1291,33 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 2000)
 	})
 
+	it("does not load JSON of a policy with a number that JSON can not hold", () => {
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot)
+			yield* _.deny("read", Bot, { when: ($) => $.lt("level", Infinity) })
+		})
+		const json: unknown = JSON.parse(JSON.stringify(policy))
+		assert.throws(() => Schema.decodeUnknownSync(Policy.schema(App))(json))
+	})
+
+	it("simplifies shared predicate branches in a short time", () => {
+		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
+		const shared = Arr.reduce(
+			Arr.range(0, 17),
+			$.predicate("never", () => false) as Condition.Condition<
+				never,
+				never,
+				Condition.Opaque,
+				Condition.Reads<Bot, Caller>
+			>,
+			(inner) => $.and(inner, inner),
+		)
+		const start = Date.now()
+		assert.doesNotThrow(() => Condition.simplify(shared))
+		assert.doesNotThrow(() => Condition.partial(shared, { principal: alice }))
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
 	it("keeps tests with numbers that JSON can not hold apart", () => {
 		const policy = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot)
