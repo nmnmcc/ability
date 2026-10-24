@@ -442,4 +442,53 @@ describe("Authorizer", () => {
 			assert.strictEqual(failureTag(exit), "Forbidden")
 		}),
 	)
+
+	it.effect(
+		"does not give one cached policy to two classes with one name",
+		() =>
+			Effect.gen(function* () {
+				const make = (identifier: string) =>
+					class User extends Principal.Class<User>(identifier)({
+						id: Schema.String,
+					}) {}
+				const Admin = make("Admin")
+				const Guest = make("Guest")
+				const Team = Domain.make({
+					principal: Schema.Union([Admin, Guest]),
+					resources: [Bot],
+				})
+				class CurrentUser extends Context.Service<
+					CurrentUser,
+					InstanceType<typeof Admin> | InstanceType<typeof Guest>
+				>()("@nmnmcc/ability/tests/Authorizer.test/CurrentUser") {}
+				class TeamAuth extends Authorizer.Service<
+					TeamAuth,
+					{ requires: CurrentUser }
+				>()("test/TeamAuth", Team) {}
+				const layer = Authorizer.layer(TeamAuth, {
+					principal: CurrentUser,
+					policy: (user) =>
+						Effect.succeed(
+							Policy.define(Team)(function* (_) {
+								if (user instanceof Admin) {
+									yield* _.allow("read", Bot)
+								}
+							}),
+						),
+				})
+				const exit = yield* Effect.gen(function* () {
+					yield* Effect.provideService(
+						TeamAuth.check({ action: "read", resource: aliceBot }),
+						CurrentUser,
+						Admin.make({ id: "1" }),
+					)
+					yield* Effect.provideService(
+						TeamAuth.check({ action: "read", resource: aliceBot }),
+						CurrentUser,
+						Guest.make({ id: "1" }),
+					)
+				}).pipe(Effect.provide(layer), Effect.exit)
+				assert.strictEqual(failureTag(exit), "Forbidden")
+			}),
+	)
 })

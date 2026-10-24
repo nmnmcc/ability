@@ -839,6 +839,57 @@ describe("Policy", () => {
 		])
 	})
 
+	it("leaves out a record field when a deny rule names a part of it", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: {
+				title: Schema.String,
+				settings: Schema.Record(Schema.String, Schema.String),
+			},
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.rules(Notes, [
+			Rule.builder(Notes).allow("read", Note),
+			Rule.make({
+				_tag: "Deny",
+				actions: ["read"],
+				resources: ["Note"],
+				fields: ["settings.*"],
+			}),
+		])
+		const fields = Effect.runSync(
+			Policy.permittedFields(policy, {
+				principal: alice,
+				action: "read",
+				resource: Note.make({ title: "a", settings: { secret: "b" } }),
+			}),
+		)
+		assert.deepStrictEqual(fields, ["title"])
+	})
+
+	it("matches field patterns", () => {
+		assert.isTrue(Rule.matchesField("address.*", "address.city"))
+		assert.isFalse(Rule.matchesField("address.*", "address.city.code"))
+		assert.isTrue(Rule.matchesField("address.**", "address.city.code"))
+		assert.isTrue(Rule.matchesField("**", "name"))
+		assert.isTrue(Rule.matchesField("*.city", "address.city"))
+		assert.isFalse(Rule.matchesField("*.city", "city"))
+		assert.isTrue(Rule.matchesField("a*c", "abbc"))
+		assert.isFalse(Rule.matchesField("a*c", "a.c"))
+		assert.isTrue(Rule.matchesInside("settings.*", "settings"))
+		assert.isTrue(Rule.matchesInside("**", "settings"))
+		assert.isFalse(Rule.matchesInside("settings", "settings"))
+		assert.isFalse(Rule.matchesInside("name.*", "settings"))
+	})
+
+	it("matches a pattern with many stars in a short time", () => {
+		const start = Date.now()
+		assert.isFalse(
+			Rule.matchesField(`${"*".repeat(80)}Z`, "organizationIdentifier"),
+		)
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
 	it("does not let a field name have a dot", () => {
 		assert.throws(() =>
 			Resource.make("Note", {

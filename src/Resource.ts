@@ -61,6 +61,12 @@ export interface Descriptor {
 	readonly path: ReadonlyArray<PathSegment> | undefined
 	/** The paths of the data fields, with dots for nested fields. */
 	readonly fieldPaths: ReadonlyArray<string>
+	/**
+	 * The paths in {@link fieldPaths} of fields that hold more than one value,
+	 * such as a record, a map or an array. The parts of such a field are not
+	 * in `fieldPaths`, but a rule may name them.
+	 */
+	readonly openPaths: ReadonlyArray<string>
 	/** The Schema of the values, with the `_tag` field. */
 	readonly schema: Schema.Top
 }
@@ -196,13 +202,35 @@ const structsOf = (
 	}
 }
 
+/** Tests if a Schema holds one plain value, with no parts. */
+const isScalar = (ast: SchemaAST.AST): boolean => {
+	switch (ast._tag) {
+		case "String":
+		case "Number":
+		case "Boolean":
+		case "BigInt":
+		case "Symbol":
+		case "UniqueSymbol":
+		case "Literal":
+		case "Enum":
+		case "TemplateLiteral":
+		case "Null":
+		case "Undefined":
+			return true
+		case "Union":
+			return ast.types.every(isScalar)
+		default:
+			return false
+	}
+}
+
 /**
  * Visits the path of every field of a Schema, with a dot between the names of
  * nested fields. `leaf` is `false` for a field that is a struct.
  */
 const walkFields = (
 	ast: SchemaAST.AST,
-	visit: (path: string, leaf: boolean) => void,
+	visit: (path: string, leaf: boolean, type: SchemaAST.AST) => void,
 	prefix = "",
 	open: ReadonlySet<SchemaAST.AST> = new Set(),
 ): void => {
@@ -216,7 +244,7 @@ const walkFields = (
 			}
 			const path = prefix === "" ? property.name : `${prefix}.${property.name}`
 			const leaf = structsOf(property.type, inner).length === 0
-			visit(path, leaf)
+			visit(path, leaf, property.type)
 			if (!leaf) walkFields(property.type, visit, path, inner)
 		}
 	}
@@ -255,14 +283,17 @@ const makeDescriptor = (
 		refs[key] = { _tag: "Field", field: key }
 	}
 	const paths = new Set<string>()
-	walkFields(Schema.Struct(options.fields).ast, (path, leaf) => {
+	const open = new Set<string>()
+	walkFields(Schema.Struct(options.fields).ast, (path, leaf, type) => {
 		if (leaf) paths.add(path)
+		if (leaf && !isScalar(type)) open.add(path)
 	})
 	return new ResourceDescriptor({
 		kind,
 		actions: [...options.actions],
 		path: options.path === undefined ? undefined : [...options.path(refs)],
 		fieldPaths: Array.from(paths),
+		openPaths: Array.from(open),
 		schema,
 	})
 }

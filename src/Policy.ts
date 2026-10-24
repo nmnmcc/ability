@@ -417,7 +417,7 @@ export const rules: <
  */
 export const define =
 	<D extends Domain.Any>(domain: D, options?: Options) =>
-	<Rules extends Rule.Any, A>(
+	<Rules extends Rule.Rule<any, any, any, D>, A>(
 		body: (builder: Rule.Builder<D>) => Generator<Rules, A, unknown>,
 	): Policy<
 		D,
@@ -841,8 +841,44 @@ export const explain: {
 ) as never
 
 /**
+ * Tests if a deny rule of the request names a part inside `field`.
+ */
+const deniesInside = (
+	node: Node,
+	target: { readonly action: string; readonly kind: string },
+	field: string,
+): boolean => {
+	switch (node._tag) {
+		case "Rules":
+			return node.rules.some(
+				(value) =>
+					value._tag === "Deny" &&
+					value.fields !== undefined &&
+					value.fields.some((pattern) => Rule.matchesInside(pattern, field)) &&
+					(value.actions.includes("*") ||
+						value.actions.includes(target.action)) &&
+					(value.resources.includes("*") ||
+						value.resources.includes(target.kind)),
+			)
+		case "All":
+		case "Any":
+		case "FirstOf":
+			return node.policies.some((child) => deniesInside(child, target, field))
+		case "Ceiling":
+			return (
+				deniesInside(node.cap, target, field) ||
+				deniesInside(node.policy, target, field)
+			)
+	}
+}
+
+/**
  * Gives the fields of a resource value that the policy lets a request use. It
  * tests each field of the resource Schema, with dots for nested fields.
+ *
+ * A field that holds more than one value, such as a record, is left out when a
+ * deny rule names a part of it. The list can not name that part, and the whole
+ * field would show it.
  *
  * @stability stable
  * @category evaluation
@@ -865,7 +901,7 @@ export const permittedFields: {
 		request: Omit<AnyRequest, "field">,
 	): Effect.fn.Return<ReadonlyArray<string>, unknown, unknown> {
 		const kind = Resource.kindOf(request.resource)
-		const descriptor =
+		const descriptor: Resource.Descriptor | undefined =
 			kind === undefined ? undefined : policy.domain.resources.get(kind)
 		if (descriptor === undefined) {
 			return []
@@ -876,7 +912,17 @@ export const permittedFields: {
 				...request,
 				field,
 			})
-			if (result._tag === "Allow") {
+			if (
+				result._tag === "Allow" &&
+				!(
+					descriptor.openPaths.includes(field) &&
+					deniesInside(
+						policy.node,
+						{ ...request, kind: descriptor.kind },
+						field,
+					)
+				)
+			) {
 				output.push(field)
 			}
 		}

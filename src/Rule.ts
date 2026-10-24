@@ -326,32 +326,70 @@ export const builder = <D extends Domain.Any>(_domain: D): Builder<D> =>
  */
 export const isRule = (u: unknown): u is Any => u instanceof RuleData
 
-const patternCache = new Map<string, RegExp>()
+/**
+ * A part of a field pattern: `"**"`, `"*"`, or one plain character.
+ */
+type Token = string
 
-const compilePattern = (pattern: string): RegExp => {
-	const cached = patternCache.get(pattern)
+const tokenCache = new Map<string, ReadonlyArray<Token>>()
+
+const tokensOf = (pattern: string): ReadonlyArray<Token> => {
+	const cached = tokenCache.get(pattern)
 	if (cached !== undefined) {
 		return cached
 	}
-	let source = ""
+	const tokens: Array<Token> = []
 	let index = 0
 	while (index < pattern.length) {
-		const char = pattern[index]!
-		if (char === "*") {
-			if (pattern[index + 1] === "*") {
-				source += ".*"
-				index = index + 2
-				continue
-			}
-			source += "[^.]*"
+		if (pattern.startsWith("**", index)) {
+			tokens.push("**")
+			index = index + 2
 		} else {
-			source += char.replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+			tokens.push(pattern[index]!)
+			index = index + 1
 		}
-		index = index + 1
 	}
-	const regex = new RegExp(`^${source}$`)
-	patternCache.set(pattern, regex)
-	return regex
+	tokenCache.set(pattern, tokens)
+	return tokens
+}
+
+/** Adds the states after the stars, because a star may match nothing. */
+const close = (
+	tokens: ReadonlyArray<Token>,
+	states: Set<number>,
+): Set<number> => {
+	for (const state of states) {
+		if (tokens[state] === "*" || tokens[state] === "**") {
+			states.add(state + 1)
+		}
+	}
+	return states
+}
+
+/**
+ * Gives every place in the pattern that a match may have reached after
+ * `input`. It keeps a set of places, and it does not go back, so the time is
+ * at most the length of the input times the length of the pattern. A regular
+ * expression may take a very long time on a pattern with many stars.
+ */
+const run = (tokens: ReadonlyArray<Token>, input: string): Set<number> => {
+	let states = close(tokens, new Set([0]))
+	for (const char of input) {
+		const next = new Set<number>()
+		for (const state of states) {
+			const token = tokens[state]
+			if (token === "**" || (token === "*" && char !== ".")) {
+				next.add(state)
+			} else if (token === char) {
+				next.add(state + 1)
+			}
+		}
+		states = close(tokens, next)
+		if (states.size === 0) {
+			break
+		}
+	}
+	return states
 }
 
 /**
@@ -361,10 +399,31 @@ const compilePattern = (pattern: string): RegExp => {
  * @category predicates
  * @since 0.3.0
  */
-export const matchesField = (pattern: string, field: string): boolean =>
-	pattern.includes("*")
-		? compilePattern(pattern).test(field)
-		: pattern === field
+export const matchesField = (pattern: string, field: string): boolean => {
+	if (!pattern.includes("*")) {
+		return pattern === field
+	}
+	const tokens = tokensOf(pattern)
+	return run(tokens, field).has(tokens.length)
+}
+
+/**
+ * Tests if a field pattern may match a field inside `field`, such as
+ * `settings.secret` inside `settings`.
+ *
+ * @stability stable
+ * @category predicates
+ * @since 0.4.0
+ */
+export const matchesInside = (pattern: string, field: string): boolean => {
+	const tokens = tokensOf(pattern)
+	for (const state of run(tokens, `${field}.`)) {
+		if (state < tokens.length) {
+			return true
+		}
+	}
+	return false
+}
 
 /**
  * Tests the parts of a rule that do not need the resource value: the action,

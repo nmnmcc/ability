@@ -146,6 +146,9 @@ describe("Policy", () => {
 		const rule = Rule.builder(App).allow("read", Bot)
 		expect(Policy.rules).type.toBeCallableWith(App, [rule])
 		expect(Policy.rules).type.not.toBeCallableWith(Other, [rule])
+		expect(Policy.define(Other)).type.not.toBeCallableWith(function* () {
+			yield* rule
+		})
 	})
 
 	it("takes only principal fields with a scalar type", () => {

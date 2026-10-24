@@ -358,10 +358,25 @@ class PrincipalKey implements Equal.Equal {
 	}
 }
 
+const classIds = new WeakMap<object, number>()
+let nextClassId = 0
+
+/** Gives a number that is only for this class. */
+const classId = (constructor: object): string => {
+	let id = classIds.get(constructor)
+	if (id === undefined) {
+		id = nextClassId
+		nextClassId = nextClassId + 1
+		classIds.set(constructor, id)
+	}
+	return `#${String(id)}`
+}
+
 /**
  * Gives a text that names a principal value. Two values get one text only when
  * they have the same types and the same data. So a string `"1"` and a bigint
- * `1n` get two texts. The text keeps the name of the class of each object.
+ * `1n` get two texts. The text keeps the class of each object, by a number
+ * that is its own, because two classes may have one name.
  *
  * It reads only the fields of plain objects and of `Schema.Class` values. An
  * object of another class may keep its data where the text can not see it, as
@@ -435,7 +450,7 @@ const keyText = (value: unknown, seen: Set<object>): string | undefined => {
 		const items = all(
 			keys.map((key) => (value as Record<string, unknown>)[key]),
 		)
-		const name = constructor?.name ?? ""
+		const name = constructor === undefined ? "" : classId(constructor)
 		text =
 			items === undefined
 				? undefined
