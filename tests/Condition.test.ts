@@ -468,6 +468,27 @@ describe("Condition", () => {
 				next: Schema.NullOr(Schema.suspend((): Schema.Codec<List> => List)),
 			})
 			assert.isFalse(Resource.hasNoValue(List))
+			assert.isFalse(
+				Resource.hasValue(Schema.Struct({ x: Schema.Tuple([Schema.Never]) })),
+			)
+			assert.isFalse(
+				Resource.hasValue(
+					Schema.Struct({ x: Schema.NonEmptyArray(Schema.Never) }),
+				),
+			)
+			assert.isTrue(
+				Resource.hasValue(Schema.Struct({ x: Schema.Array(Schema.Never) })),
+			)
+			assert.isTrue(
+				Resource.hasValue(Schema.Struct({ x: Schema.Option(Schema.Never) })),
+			)
+			assert.isTrue(Resource.hasValue(Schema.Struct({ x: Schema.Json })))
+			assert.strictEqual(
+				Condition.satisfiable(Condition.always, {
+					schema: Schema.Struct({ x: Schema.Tuple([Schema.Never]) }),
+				})._tag,
+				"Unknown",
+			)
 			// A plain field next to them is still exact.
 			assert.strictEqual(tagOf(_.eq("name", "a")), "Satisfiable")
 		})

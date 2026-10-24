@@ -447,6 +447,16 @@ describe("Policy", () => {
 		})
 	})
 
+	it("takes only a value that a field of each kind can hold", () => {
+		const $ = Condition.builder<
+			{ readonly owner: string } | { readonly owner: number },
+			unknown,
+			Caller
+		>()
+		expect($.eq).type.not.toBeCallableWith("owner", "alice")
+		expect($.eq).type.not.toBeCallableWith("owner", 1)
+	})
+
 	it("does not go into a map in a field path", () => {
 		const $ = Condition.builder<
 			{ readonly roles: ReadonlyMap<string, string> },

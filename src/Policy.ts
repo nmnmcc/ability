@@ -48,6 +48,7 @@ import { dual } from "effect/Function"
 import * as HashMap from "effect/HashMap"
 import * as HashSet from "effect/HashSet"
 import * as Option from "effect/Option"
+import { hasProperty } from "effect/Predicate"
 import type * as Pipeable from "effect/Pipeable"
 import * as Ref from "effect/Ref"
 import * as Schema from "effect/Schema"
@@ -2181,10 +2182,25 @@ interface Issue {
 type LiteralTest = readonly [field: string, value: Condition.Scalar]
 
 const literalTests = (node: ConditionNode): ReadonlyArray<LiteralTest> =>
-	Arr.map(
-		Array.from(literalTestsIn(node, new Map())),
-		(text) => JSON.parse(text) as LiteralTest,
-	)
+	Arr.map(Array.from(literalTestsIn(node, new Map())), (text) => {
+		const [field, value] = JSON.parse(text) as readonly [string, unknown]
+		return [
+			field,
+			hasProperty(value, "number") ? Number(value.number) : value,
+		] as LiteralTest
+	})
+
+/**
+ * The JSON text of a test. JSON has no `Infinity`, `-Infinity` or `NaN`, so
+ * such a number goes in as its text.
+ */
+const literalText = (field: string, value: Condition.Scalar): string =>
+	JSON.stringify([
+		field,
+		typeof value === "number" && !Number.isFinite(value)
+			? { number: String(value) }
+			: value,
+	])
 
 /**
  * The tests of fields with fixed values in a node, each as the JSON text of a
@@ -2202,9 +2218,7 @@ const literalTestsIn = (
 		): HashSet.HashSet<string> =>
 			HashSet.fromIterable(
 				Arr.flatMap(operands, (operand) =>
-					operand._tag === "Literal"
-						? [JSON.stringify([field, operand.value])]
-						: [],
+					operand._tag === "Literal" ? [literalText(field, operand.value)] : [],
 				),
 			)
 		switch (node._tag) {
@@ -2273,6 +2287,69 @@ const principalTestsIn = (
 				return HashSet.empty()
 		}
 	})
+
+/**
+ * The fields of ordered tests (`lt`, `lte`, `gt`, `gte`) in a node, each as
+ * the JSON text of the field and the operand. See {@link literalTestsIn}.
+ */
+const orderedTestsIn = (
+	node: ConditionNode,
+	memo: Map<ConditionNode, HashSet.HashSet<string>>,
+): HashSet.HashSet<string> =>
+	remember(memo, node, () => {
+		switch (node._tag) {
+			case "Compare":
+				return node.op === "eq" || node.op === "ne"
+					? HashSet.empty()
+					: HashSet.make(
+							JSON.stringify([
+								node.field,
+								// The type of a fixed value, not the value: JSON has no
+								// `Infinity`.
+								node.value._tag === "Literal"
+									? { _tag: "Literal", type: typeof node.value.value }
+									: node.value,
+							]),
+						)
+			case "And":
+			case "Or":
+				return Arr.reduce(
+					node.conditions as ReadonlyArray<ConditionNode>,
+					HashSet.empty<string>(),
+					(all, child) => HashSet.union(all, orderedTestsIn(child, memo)),
+				)
+			case "Not":
+				return orderedTestsIn(node.condition, memo)
+			default:
+				return HashSet.empty()
+		}
+	})
+
+/** The operand of an ordered test: the type of a fixed value, or a principal field. */
+type OrderedOperand =
+	| { readonly _tag: "Literal"; readonly type: string }
+	| { readonly _tag: "Principal"; readonly path: string }
+
+const orderedTests = (
+	node: ConditionNode,
+): ReadonlyArray<readonly [field: string, operand: OrderedOperand]> =>
+	Arr.map(
+		Array.from(orderedTestsIn(node, new Map())),
+		(text) =>
+			JSON.parse(text) as readonly [field: string, operand: OrderedOperand],
+	)
+
+/**
+ * Tests if a field may hold a value with an order: a number or a string. An
+ * ordered test is false for any other value.
+ */
+const isOrdered = (domain: Resource.FieldDomain): boolean =>
+	domain.string ||
+	domain.number !== "none" ||
+	Arr.some(
+		domain.literals,
+		(value) => typeof value === "string" || typeof value === "number",
+	)
 
 /**
  * Tests if two fields may hold one value: a value of one type, or a single
@@ -2427,6 +2504,28 @@ const validate = (
 				([field, ref]): Issue => ({
 					path: [...at, "when"],
 					issue: `The field "${field}" can not hold a value of the principal field "${ref}"`,
+				}),
+			),
+			// An ordered test compares numbers with numbers and strings with
+			// strings. With another value it is always false.
+			...Arr.map(
+				Arr.filter(
+					value.when === undefined ? [] : orderedTests(value.when),
+					([field, operand]) =>
+						(operand._tag === "Literal"
+							? operand.type !== "string" && operand.type !== "number"
+							: !isOrdered(
+									Resource.domainOf(domain.principal, operand.path),
+								)) ||
+						Arr.some(
+							descriptors,
+							(descriptor) =>
+								!isOrdered(Resource.domainOf(descriptor.schema, field)),
+						),
+				),
+				([field]): Issue => ({
+					path: [...at, "when"],
+					issue: `The field "${field}" has an ordered test with a value that has no order`,
 				}),
 			),
 		]

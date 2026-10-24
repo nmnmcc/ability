@@ -648,14 +648,78 @@ const isSurelyInhabited = (
 				!open.has(ast) &&
 				isSurelyInhabited(ast.thunk(), new Set([...open, ast]))
 			)
+		case "Arrays":
+			// The elements that a tuple needs, and the elements after its rest.
+			// The rest itself may be empty.
+			return Arr.every(
+				[
+					...Arr.filter(
+						ast.elements,
+						(element) => !SchemaAST.isOptional(element),
+					),
+					...ast.rest.slice(1),
+				],
+				(element) => isSurelyInhabited(element, open),
+			)
 		case "Declaration": {
 			const inner = classStruct(ast)
-			return inner === undefined || isSurelyInhabited(inner, open)
+			if (inner !== undefined) {
+				return isSurelyInhabited(inner, open)
+			}
+			const id = declarationId(ast)
+			// A value of these holds a value of one of its type parameters.
+			if (HashSet.has(wrapperDeclarations, id)) {
+				return Arr.some(ast.typeParameters, (type) =>
+					isSurelyInhabited(type, open),
+				)
+			}
+			// These have a value for any type parameters, such as an empty map
+			// or `Option.none()`. Another declaration may take no value.
+			return HashSet.has(inhabitedDeclarations, id)
 		}
 		default:
 			return true
 	}
 }
+
+/** Declarations of Effect that hold a value of a type parameter. */
+const wrapperDeclarations = HashSet.make(
+	"effect/schema/Redacted",
+	"effect/schema/Result",
+)
+
+/** Declarations of Effect that have a value for any type parameters. */
+const inhabitedDeclarations = HashSet.make(
+	"effect/schema/Date",
+	"effect/schema/URL",
+	"effect/schema/Uint8Array",
+	"effect/schema/Duration",
+	"effect/schema/DateTimeUtc",
+	"effect/schema/BigDecimal",
+	"effect/schema/Cause",
+	"effect/schema/Chunk",
+	"effect/schema/HashMap",
+	"effect/schema/HashSet",
+	"effect/schema/ReadonlyMap",
+	"effect/schema/ReadonlySet",
+	"effect/schema/Option",
+	"effect/schema/File",
+	"effect/schema/FormData",
+	"effect/schema/RegExp",
+	"effect/schema/Json",
+	"effect/schema/ByteSize",
+	"effect/schema/DateTimeZoned",
+	"effect/schema/Error",
+	"effect/schema/Exit",
+	"effect/schema/CauseReason",
+	"effect/schema/Graph",
+	"effect/schema/SemVer",
+	"effect/schema/SemVerRange",
+	"effect/schema/TimeZone",
+	"effect/schema/TimeZoneNamed",
+	"effect/schema/TimeZoneOffset",
+	"effect/schema/URLSearchParams",
+)
 
 /**
  * Tests if a Schema has no value at all: a required field of it, at some

@@ -537,14 +537,20 @@ export type FieldSelector<T> = [T] extends [object]
 /**
  * The value type that fits every field in `F`. For one field, it is the type
  * of the field. For a union of fields, it is the values that each of them can
- * hold, so a value of a union type can not test a field of another type.
+ * hold, so a value of a union type can not test a field of another type. For
+ * a union of data types, as for a rule on two kinds, it is the values that
+ * the field can hold in each of them.
  *
  * @stability stable
  * @category utility types
  * @since 0.5.0
  */
 export type FieldValue<Data, F extends string> = (
-	F extends unknown ? (value: PathValue<Data, F>) => void : never
+	Data extends unknown
+		? F extends unknown
+			? (value: PathValue<Data, F>) => void
+			: never
+		: never
 ) extends (value: infer V) => void
 	? V
 	: never

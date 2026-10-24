@@ -1843,6 +1843,35 @@ describe("Policy", () => {
 		)
 	})
 
+	it("does not take an ordered test on a value with no order", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { locked: Schema.Boolean, name: Schema.String },
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const decode = (field: string, value: unknown) =>
+			Schema.decodeUnknownExit(Policy.schema(Notes))({
+				_tag: "Rules",
+				algorithm: "denyOverrides",
+				rules: [
+					{
+						_tag: "Deny",
+						actions: ["read"],
+						resources: ["Note"],
+						when: {
+							_tag: "Compare",
+							op: "gt",
+							field,
+							value: { _tag: "Literal", value },
+						},
+					},
+				],
+			})
+		assert.isTrue(Exit.isFailure(decode("locked", false)))
+		assert.isTrue(Exit.isFailure(decode("name", null)))
+		assert.isTrue(Exit.isSuccess(decode("name", "a")))
+	})
+
 	it("does not cover a kind whose values a check may stop", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],
