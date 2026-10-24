@@ -1907,6 +1907,34 @@ describe("Policy", () => {
 		)
 	})
 
+	it("does not take a path test with a principal field that is an object", () => {
+		class Member extends Principal.Class<Member>("Member")({
+			group: Schema.Struct({ name: Schema.String }),
+		}) {}
+		const Members = Domain.make({ principal: Member, resources: [Bot] })
+		const decode = (path: string) =>
+			Schema.decodeExit(Policy.schema(Members))({
+				_tag: "Rules",
+				algorithm: "denyOverrides",
+				rules: [
+					{
+						_tag: "Deny",
+						actions: ["read"],
+						resources: ["Bot"],
+						when: {
+							_tag: "Under",
+							prefix: [
+								{ _tag: "Literal", value: "org" },
+								{ _tag: "Principal", path },
+							],
+						},
+					},
+				],
+			})
+		assert.isTrue(Exit.isFailure(decode("group")))
+		assert.isTrue(Exit.isSuccess(decode("group.name")))
+	})
+
 	it("does not take a test with a principal field that is an object", () => {
 		class Timed extends Principal.Class<Timed>("Timed")({
 			until: Schema.Date,

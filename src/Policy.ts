@@ -2289,6 +2289,67 @@ const principalTestsIn = (
 	})
 
 /**
+ * The principal fields in the prefixes of `Under` nodes, each as the JSON text
+ * of the place in the prefix and the path of the field. See
+ * {@link literalTestsIn}.
+ */
+const underRefsIn = (
+	node: ConditionNode,
+	memo: Map<ConditionNode, HashSet.HashSet<string>>,
+): HashSet.HashSet<string> =>
+	remember(memo, node, () => {
+		switch (node._tag) {
+			case "Under":
+				return HashSet.fromIterable(
+					Arr.flatMap(node.prefix, (operand, index) =>
+						operand._tag === "Principal"
+							? [JSON.stringify([index, operand.path])]
+							: [],
+					),
+				)
+			case "And":
+			case "Or":
+				return Arr.reduce(
+					node.conditions as ReadonlyArray<ConditionNode>,
+					HashSet.empty<string>(),
+					(all, child) => HashSet.union(all, underRefsIn(child, memo)),
+				)
+			case "Not":
+				return underRefsIn(node.condition, memo)
+			default:
+				return HashSet.empty()
+		}
+	})
+
+const underRefs = (
+	node: ConditionNode,
+): ReadonlyArray<readonly [index: number, ref: string]> =>
+	Arr.map(
+		Array.from(underRefsIn(node, new Map())),
+		(text) => JSON.parse(text) as readonly [index: number, ref: string],
+	)
+
+/**
+ * Tests if a principal field may hold the part of a path at `index`: a string
+ * of the path, or a value of the field that the path names there.
+ */
+const fitsPathPart = (
+	descriptor: Resource.Descriptor,
+	index: number,
+	principal: Resource.FieldDomain,
+): boolean => {
+	const segment = descriptor.path?.[index]
+	return segment === undefined
+		? false
+		: typeof segment === "string"
+			? fitsDomain(principal, segment)
+			: domainsMeet(
+					Resource.domainOf(descriptor.schema, segment.field),
+					principal,
+				)
+}
+
+/**
  * The fields of ordered tests (`lt`, `lte`, `gt`, `gte`) in a node, each as
  * the JSON text of the field and the operand. See {@link literalTestsIn}.
  */
@@ -2504,6 +2565,27 @@ const validate = (
 				([field, ref]): Issue => ({
 					path: [...at, "when"],
 					issue: `The field "${field}" can not hold a value of the principal field "${ref}"`,
+				}),
+			),
+			// A principal field in a path test must hold a value that the path
+			// may have at that place. Else the test is always false.
+			...Arr.map(
+				Arr.filter(
+					value.when === undefined ? [] : underRefs(value.when),
+					([index, ref]) =>
+						Arr.some(
+							descriptors,
+							(descriptor) =>
+								!fitsPathPart(
+									descriptor,
+									index,
+									Resource.domainOf(domain.principal, ref),
+								),
+						),
+				),
+				([, ref]): Issue => ({
+					path: [...at, "when"],
+					issue: `The principal field "${ref}" can not hold a part of the path of the resource`,
 				}),
 			),
 			// An ordered test compares numbers with numbers and strings with
