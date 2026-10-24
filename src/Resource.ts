@@ -216,7 +216,18 @@ const innerSchemas = (schema: unknown): ReadonlyArray<unknown> =>
  * @since 0.5.0
  */
 export const hasGetter = (schema: unknown, path: string): boolean =>
-	getterAt(schema, path.split("."))
+	!isTooLong(path) && getterAt(schema, path.split("."))
+
+/**
+ * The most parts that a field path may have. The walks below call themselves
+ * for each part, and a path comes from the input of a policy. So a very long
+ * path, as in a recursive Schema, could fill the stack.
+ */
+const maxPathParts = 256
+
+/** Tests if a field path has more than {@link maxPathParts} parts. */
+const isTooLong = (path: string): boolean =>
+	path.split(".", maxPathParts + 1).length > maxPathParts
 
 const getterAt = (schema: unknown, names: ReadonlyArray<string>): boolean => {
 	const [name, ...rest] = names
@@ -371,7 +382,11 @@ const holdsValue = (
 ): boolean => {
 	switch (ast._tag) {
 		case "Objects":
-			return ast.propertySignatures.length === 0
+			// A struct with a record part, as from `Schema.StructWithRest`, holds
+			// keys that are not named, so it holds more than one value.
+			return (
+				ast.propertySignatures.length === 0 || ast.indexSignatures.length > 0
+			)
 		case "Union":
 			return ast.types.some((type) => holdsValue(type, open))
 		case "Suspend":
@@ -477,7 +492,7 @@ const isPlainScalar = (ast: SchemaAST.AST): boolean => {
  * @since 0.5.0
  */
 export const isPlainField = (schema: Schema.Top, path: string): boolean =>
-	plainAt(schema.ast, path.split("."))
+	!isTooLong(path) && plainAt(schema.ast, path.split("."))
 
 const plainAt = (ast: SchemaAST.AST, names: ReadonlyArray<string>): boolean => {
 	const [name, ...rest] = names
@@ -511,7 +526,7 @@ const plainAt = (ast: SchemaAST.AST, names: ReadonlyArray<string>): boolean => {
  * @since 0.4.0
  */
 export const hasPath = (schema: Schema.Top, path: string): boolean =>
-	resolves(schema.ast, path.split("."), 0, new Set())
+	!isTooLong(path) && resolves(schema.ast, path.split("."), 0, new Set())
 
 const resolves = (
 	ast: SchemaAST.AST,
@@ -805,8 +820,11 @@ const domainAt = (
  * @since 0.5.0
  */
 export const domainOf = (schema: Schema.Top, path: string): FieldDomain =>
-	// No cache here: a search keeps the cells of each field for itself.
-	domainAt(schema.ast, path.split("."), 0, new Set())
+	// No cache here: a search keeps the cells of each field for itself. A path
+	// that is too long to walk may hold any value.
+	isTooLong(path)
+		? anyDomain
+		: domainAt(schema.ast, path.split("."), 0, new Set())
 
 /**
  * Checks the names of the top fields of a resource at once, when it is made.

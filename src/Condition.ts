@@ -1814,9 +1814,18 @@ export const fields = (condition: Ast): ReadonlyArray<string> =>
 	fieldsIn(condition, new Map())
 
 /**
- * The fields of a node, in the order that they first come. `Arr.union` keeps
- * that order, and a `HashSet` would not.
+ * The fields of a node, in the order that they first come. A `HashSet` would
+ * not keep that order, so it only says which fields came before.
  */
+/** Leaves out each string that came before, in linear time. */
+const dedupeStrings = (values: ReadonlyArray<string>): ReadonlyArray<string> =>
+	Arr.flatten(
+		Arr.mapAccum(values, HashSet.empty<string>(), (seen, value) => [
+			HashSet.add(seen, value),
+			HashSet.has(seen, value) ? [] : [value],
+		])[1],
+	)
+
 const fieldsIn = (
 	ast: Ast,
 	memo: Map<Ast, ReadonlyArray<string>>,
@@ -1829,8 +1838,8 @@ const fieldsIn = (
 				return [ast.field]
 			case "And":
 			case "Or":
-				return Arr.reduce(ast.conditions, Arr.empty<string>(), (all, child) =>
-					Arr.union(all, fieldsIn(child, memo)),
+				return dedupeStrings(
+					Arr.flatMap(ast.conditions, (child) => fieldsIn(child, memo)),
 				)
 			case "Not":
 				return fieldsIn(ast.condition, memo)

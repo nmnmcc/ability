@@ -254,7 +254,8 @@ Put policies together:
 A policy tree may have at most 256 levels. A combinator throws an error for a
 deeper tree, and the policy Schema does not decode one. A deeper tree could fill
 the stack of a check. The JSON form of a policy may have at most 1000 levels of
-objects and arrays, so a deep input fails to decode before it fills the stack.
+objects and arrays, so a deep input fails to decode before it fills the stack. A
+field path may have at most 256 parts.
 
 For example, a user token may never do more than its member, and the platform
 has deny rules for everyone:

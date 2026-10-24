@@ -1789,6 +1789,109 @@ describe("Policy", () => {
 		)
 	})
 
+	describe("grants the whole value only for a field that can be there", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: {
+				entries: Schema.Record(
+					Schema.String,
+					Schema.Struct({ public: Schema.String }),
+				),
+				data: Schema.StructWithRest(Schema.Struct({ label: Schema.String }), [
+					Schema.Record(Schema.String, Schema.String),
+				]),
+			},
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const decide = (pattern: string) =>
+			Policy.decideSync(
+				Policy.define(Notes)(function* (_) {
+					// The pattern comes from a test case, as from JSON.
+					yield* _.allow("read", Note, { fields: [pattern as never] })
+				}),
+				{
+					principal: alice,
+					action: "read",
+					resource: Note.make({ entries: {}, data: { label: "a" } }),
+				},
+			)._tag
+
+		it("in the values of a record", () => {
+			assert.strictEqual(decide("entries.*.public"), "Allow")
+			assert.strictEqual(decide("entries.*.secret"), "NotApplicable")
+		})
+
+		it("in the keys of a struct with a record part", () => {
+			assert.strictEqual(decide("data.public*"), "Allow")
+			assert.strictEqual(decide("data.label"), "Allow")
+		})
+	})
+
+	it("does not fill the stack with a long field path", () => {
+		interface Link {
+			readonly value: string
+			readonly next: Link | null
+		}
+		const Link: Schema.Codec<Link> = Schema.Struct({
+			value: Schema.String,
+			next: Schema.NullOr(Schema.suspend((): Schema.Codec<Link> => Link)),
+		})
+		const Chain = Resource.make("Chain", {
+			actions: ["read"],
+			fields: { root: Link },
+		})
+		const Chains = Domain.make({ principal: Caller, resources: [Chain] })
+		const exit = Schema.decodeExit(Policy.schema(Chains))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Chain"],
+					when: {
+						_tag: "Exists",
+						field: `root.${"next.".repeat(5000)}value`,
+					},
+				},
+			],
+		})
+		assert.isTrue(Exit.isFailure(exit))
+		assert.notInclude(
+			String(Exit.isFailure(exit) ? exit.cause : ""),
+			"RangeError",
+		)
+	})
+
+	it("decodes a condition with many fields in a short time", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { data: Schema.Record(Schema.String, Schema.String) },
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const start = Date.now()
+		const exit = Schema.decodeUnknownExit(Policy.schema(Notes))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Note"],
+					when: {
+						_tag: "And",
+						conditions: Array.from({ length: 12_000 }, (_, index) => ({
+							_tag: "Exists",
+							field: `data.k${String(index)}`,
+						})),
+					},
+				},
+			],
+		})
+		assert.isTrue(Exit.isSuccess(exit))
+		assert.isBelow(Date.now() - start, 2000)
+	})
+
 	it("does not take a path part that is not a field of the resource", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],
