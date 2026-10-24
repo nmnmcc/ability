@@ -2380,6 +2380,12 @@ const constantsOf = (
 		}
 	})
 
+/**
+ * The most fields that the search of {@link satisfiable} takes. Past it, the
+ * answer is `Unknown` with the reason `"budget"`.
+ */
+const maxSearchFields = 256
+
 const satisfiableAst = (
 	ast: Ast,
 	options: SatisfiableOptions = {},
@@ -2388,14 +2394,20 @@ const satisfiableAst = (
 		return satisfiability.Unknown({ reason: "predicate" })
 	}
 	const schema = options.schema
+	const tested = fields(ast)
 	// The model of the values of a field is exact only for a plain scalar
 	// field. For another field, a value may have data that the Schema does not
 	// show, so the search can not say.
 	if (
 		schema !== undefined &&
-		!Arr.every(fields(ast), (field) => Resource.isPlainField(schema, field))
+		!Arr.every(tested, (field) => Resource.isPlainField(schema, field))
 	) {
 		return satisfiability.Unknown({ reason: "schema" })
+	}
+	// The search calls itself one time for each field that it fixes, so a
+	// condition with very many fields could fill the stack.
+	if (tested.length > maxSearchFields) {
+		return satisfiability.Unknown({ reason: "budget" })
 	}
 	const constants = constantsOf(ast)
 	// The cells of each field. A field name is a string, so an Effect map
@@ -2469,7 +2481,8 @@ const satisfiableAst = (
  * value that such a check stops.
  *
  * The problem is as hard as boolean satisfiability, so the search has a
- * budget. Past it, the answer is `Unknown`.
+ * budget. Past it, the answer is `Unknown`. A condition with more than 256
+ * fields gives `Unknown` too.
  *
  * @stability stable
  * @category evaluation

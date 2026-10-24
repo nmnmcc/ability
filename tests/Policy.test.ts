@@ -1762,6 +1762,30 @@ describe("Policy", () => {
 		)
 	})
 
+	it("lets ** match no parts of a field path", () => {
+		assert.isTrue(Rule.matchesField("**.secret", "secret"))
+		assert.isTrue(Rule.matchesField("settings.**.secret", "settings.secret"))
+		assert.isTrue(Rule.matchesField("settings.**", "settings"))
+		assert.isTrue(
+			Rule.matchesField("settings.**.secret", "settings.a.b.secret"),
+		)
+		assert.isFalse(Rule.matchesField("**.secret", "notsecret"))
+		assert.isFalse(Rule.matchesField("settings.**", "settingsx"))
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot)
+			yield* _.deny("read", Bot, { fields: ["**.model"] })
+		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: aliceBot,
+				field: "settings.model",
+			})._tag,
+			"Deny",
+		)
+	})
+
 	it("does not grant parts inside a scalar field", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],
@@ -2233,6 +2257,34 @@ describe("Policy", () => {
 				) => $.eq("ownerId", 0),
 			}),
 		)
+	})
+
+	it("searches many fields without a deep stack", () => {
+		const fields = Object.fromEntries(
+			Array.from({ length: 1300 }, (_, index) => [
+				`f${String(index)}`,
+				Schema.Null,
+			]),
+		)
+		const Wide = Resource.make("Wide", { actions: ["read"], fields })
+		const Wides = Domain.make({ principal: Caller, resources: [Wide] })
+		const $ = Condition.builder<Record<string, null>, unknown, unknown>()
+		const policy = Policy.rules(Wides, [
+			Rule.make({
+				_tag: "Allow",
+				actions: ["read"],
+				resources: ["Wide"],
+				when: $.and(
+					...Object.keys(fields).map((field) => $.eq(field, null)),
+				) as Condition.Condition,
+			}),
+		])
+		const covered = Policy.coverage(policy, {
+			principal: alice,
+			action: "read",
+			kind: "Wide",
+		})
+		assert.strictEqual(covered._tag, "Unknown")
 	})
 
 	it("searches many values of one field without a deep stack", () => {

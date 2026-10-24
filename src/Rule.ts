@@ -437,39 +437,72 @@ const isStar = (token: Token | undefined): boolean =>
 
 type States = HashSet.HashSet<number>
 
-/** Adds the places after the stars, because a star may match nothing. */
+/**
+ * Gives the places that a match may reach from `state` with no input. A star
+ * may match nothing. A `**` that is a whole part may also match no parts, so
+ * the dot next to it may be left out too: `**.secret` and `settings.**.secret`
+ * match `secret` and `settings.secret`, and `settings.**` matches `settings`.
+ */
+const skips = (
+	tokens: ReadonlyArray<Token>,
+	state: number,
+): ReadonlyArray<number> => {
+	const token = tokens[state]
+	const startsPart = state === 0 || tokens[state - 1] === "."
+	return [
+		...(isStar(token) ? [state + 1] : []),
+		...(token === "**" && startsPart && tokens[state + 1] === "."
+			? [state + 2]
+			: []),
+		...(token === "." &&
+		tokens[state + 1] === "**" &&
+		state + 2 === tokens.length &&
+		state > 0
+			? [state + 2]
+			: []),
+	]
+}
+
+/** Adds the places that a match may reach with no input. See {@link skips}. */
 const close = (tokens: ReadonlyArray<Token>, states: States): States => {
-	const after = HashSet.map(
-		HashSet.filter(
-			states,
-			(state) => isStar(tokens[state]) && !HashSet.has(states, state + 1),
+	const after = HashSet.filter(
+		HashSet.fromIterable(
+			Arr.flatMap(Array.from(states), (state) => skips(tokens, state)),
 		),
-		(state) => state + 1,
+		(state) => !HashSet.has(states, state),
 	)
 	return HashSet.size(after) === 0
 		? states
 		: close(tokens, HashSet.union(states, after))
 }
 
-/** Gives the places in the pattern after one more character of the input. */
+/**
+ * Gives the places in the pattern after one more character of the input. A
+ * star that takes the character stays at its place. It has taken part of a
+ * name, so it may not match no parts any more: only the place after it is
+ * added, with no other skips from {@link skips}.
+ */
 const step = (
 	tokens: ReadonlyArray<Token>,
 	states: States,
 	char: string,
-): States =>
-	close(
-		tokens,
-		HashSet.fromIterable(
-			Arr.flatMap(Array.from(states), (state) => {
-				const token = tokens[state]
-				return token === "**" || (token === "*" && char !== ".")
-					? [state]
-					: token === char
-						? [state + 1]
-						: []
-			}),
+): States => {
+	const list = Array.from(states)
+	const stars = Arr.filter(list, (state) => {
+		const token = tokens[state]
+		return token === "**" || (token === "*" && char !== ".")
+	})
+	const moved = Arr.flatMap(list, (state) =>
+		!isStar(tokens[state]) && tokens[state] === char ? [state + 1] : [],
+	)
+	return HashSet.union(
+		HashSet.fromIterable(stars),
+		close(
+			tokens,
+			HashSet.fromIterable([...moved, ...Arr.map(stars, (state) => state + 1)]),
 		),
 	)
+}
 
 /**
  * Gives every place in the pattern that a match may have reached after

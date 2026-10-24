@@ -184,8 +184,8 @@ _.allow("read", "*", {
 - The action `"*"` means every action. The resource `"*"` means every resource.
 - `when` is the condition. It gets a builder with the types of the resource.
 - `fields` makes the rule about some fields only. `*` stands for any part of one
-  field name, and `**` for any number of parts: `settings.*` covers
-  `settings.model`.
+  field name, and `**` for any number of parts, also none: `settings.*` covers
+  `settings.model`, and `**.secret` covers `secret` and `settings.secret`.
 - `reason`, `id` and `meta` are kept with the rule. `meta` is extra data, such
   as the scope of a grant. Give its Schema to `Domain.make({ meta })`.
 
