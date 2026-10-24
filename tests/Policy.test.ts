@@ -2193,6 +2193,40 @@ describe("Policy", () => {
 		)
 	})
 
+	it("does not give exact coverage for a field with a check it can not see", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: {
+				ownerId: Schema.Int.check(Schema.isGreaterThan(0)),
+				level: Schema.Int,
+			},
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const schema = Resource.descriptor(Note).schema
+		assert.isFalse(Resource.isPlainField(schema, "ownerId"))
+		assert.isTrue(Resource.isPlainField(schema, "level"))
+		const policy = Policy.define(Notes)(function* (_) {
+			yield* _.allow("read", Note)
+		})
+		const covered = Policy.coverage(policy, {
+			principal: alice,
+			action: "read",
+			kind: "Note",
+			within: ($) => $.eq("ownerId", 0),
+		})
+		assert.strictEqual(covered._tag, "Unknown")
+		assert.isFalse(
+			Policy.scopeHasValue(policy, {
+				principal: alice,
+				action: "read",
+				kind: "Note",
+				within: (
+					$: Condition.Builder<{ readonly ownerId: number }, unknown, unknown>,
+				) => $.eq("ownerId", 0),
+			}),
+		)
+	})
+
 	it("searches many values of one field without a deep stack", () => {
 		const ids = Array.from({ length: 4000 }, (_, index) => `b${String(index)}`)
 		const policy = Policy.define(App)(function* (_) {

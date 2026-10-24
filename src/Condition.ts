@@ -2464,10 +2464,9 @@ const satisfiableAst = (
  * constants, so the constants cut the values of each field into a few cells.
  * The search tries one value from each cell, one field at a time. The values
  * of a field come from the Schema in `options.schema`: its literals, `null`
- * for a nullable or optional field, and finite or integer numbers. Other
- * Schema checks are left out, so the search may try a value that such a check
- * stops. Then `Satisfiable` may be the answer where the check makes it
- * `Unsatisfiable`, never the other way.
+ * for a nullable or optional field, and finite or integer numbers. A field
+ * with another Schema check is not a plain field, so the search never tries a
+ * value that such a check stops.
  *
  * The problem is as hard as boolean satisfiability, so the search has a
  * budget. Past it, the answer is `Unknown`.

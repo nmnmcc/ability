@@ -459,7 +459,33 @@ export const fieldPaths = (schema: Schema.Top): ReadonlyArray<string> =>
 	Arr.dedupe(Arr.map(walkFields(schema.ast), (visit) => visit.path))
 
 /** Tests if a Schema holds only plain scalars: see {@link isPlainField}. */
+/**
+ * The ids of the checks that the search knows. `domainOf` reads them, so a
+ * field with only these checks has an exact domain.
+ */
+const knownChecks = HashSet.make(
+	"effect/schema/isInt",
+	"effect/schema/isFinite",
+)
+
+/**
+ * Tests if each check of a Schema node is a check that the search knows. A
+ * check such as `isGreaterThan(0)` stops some values, and the search does not
+ * see it, so it could find a value that the Schema does not take.
+ */
+const hasOnlyKnownChecks = (
+	checks: ReadonlyArray<SchemaAST.Check<never>> | undefined,
+): boolean =>
+	Arr.every(checks ?? [], (check) =>
+		check._tag === "FilterGroup"
+			? hasOnlyKnownChecks(check.checks)
+			: HashSet.has(knownChecks, check.annotations?.representation?.id),
+	)
+
 const isPlainScalar = (ast: SchemaAST.AST): boolean => {
+	if (!hasOnlyKnownChecks(ast.checks)) {
+		return false
+	}
 	switch (ast._tag) {
 		case "String":
 		case "Number":
@@ -477,9 +503,11 @@ const isPlainScalar = (ast: SchemaAST.AST): boolean => {
 
 /**
  * Tests if a path names a plain scalar field of a Schema: a string, a number,
- * a boolean, a literal, `null`, or an optional field or a union of these. On
- * the way, each part must be a required field of a plain struct, with a name
- * that is not a name of `Object.prototype`.
+ * a boolean, a literal, `null`, or an optional field or a union of these. Its
+ * only checks may be integer and finite checks: another check, such as
+ * `isGreaterThan(0)`, stops values that the search does not know about. On
+ * the way, each part must be a required field of a plain struct with no
+ * checks, with a name that is not a name of `Object.prototype`.
  *
  * `Policy.coverage` and `Condition.satisfiable` answer `All`, `None` or
  * `Some` only when each field of the condition is such a field. Their model of
@@ -500,6 +528,7 @@ const plainAt = (ast: SchemaAST.AST, names: ReadonlyArray<string>): boolean => {
 		name === undefined ||
 		ast._tag !== "Objects" ||
 		ast.indexSignatures.length > 0 ||
+		(ast.checks ?? []).length > 0 ||
 		name in Object.prototype
 	) {
 		return false

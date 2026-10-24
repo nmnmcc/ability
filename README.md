@@ -341,16 +341,16 @@ values, so these values cut the values of the field into a few parts, and every
 value in one part gives the same answer. `Condition.satisfiable` tries one value
 from each part, one field at a time. It takes the values of each field from the
 Schema of the resource: its literals, `null` for a nullable or optional field,
-and finite or integer numbers. It does not use other Schema checks, such as a
-minimum length. So it may say "not all" where such a check stops the other
-values, but it never says "all" wrongly.
+and finite or integer numbers. It does not know other Schema checks, such as a
+minimum length, so a field with such a check is not plain (see below).
 
 The search answers only for plain scalar fields: a string, a number, a boolean,
-a literal, `null`, or an optional field or a union of these, on a path of
-required fields of plain structs. For another field, such as a class, a record,
-a union of structs, a date or a field of `Schema.declare`, a value may have data
-that the Schema does not show, so the answer is `Unknown`. A check on a kind
-then says no. `Resource.isPlainField` tells if a field is plain.
+a literal, `null`, or an optional field or a union of these, with no checks
+other than finite and integer checks, on a path of required fields of plain
+structs. For another field, such as a class, a record, a union of structs, a
+date or a field of `Schema.declare`, a value may have data that the Schema does
+not show, so the answer is `Unknown`. A check on a kind then says no.
+`Resource.isPlainField` tells if a field is plain.
 
 "Some" means that some value of the Schema is allowed. It does not mean that
 such a value is in your database. To know that, run the condition as a query.
