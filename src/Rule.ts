@@ -19,27 +19,11 @@
  * @stability stable
  * @since 0.3.0
  */
-import type * as Equal from "effect/Equal"
-import type * as Inspectable from "effect/Inspectable"
+import * as Data from "effect/Data"
 import type * as Pipeable from "effect/Pipeable"
-import type * as Condition from "./Condition.ts"
+import * as Condition from "./Condition.ts"
 import type * as Domain from "./Domain.ts"
-import * as internal from "./internal/rule.ts"
-import type * as Resource from "./Resource.ts"
-
-/**
- * @stability stable
- * @category type IDs
- * @since 0.3.0
- */
-export const TypeId: "~@nmnmcc/ability/Rule" = internal.TypeId
-
-/**
- * @stability stable
- * @category type IDs
- * @since 0.3.0
- */
-export type TypeId = typeof TypeId
+import * as Resource from "./Resource.ts"
 
 /**
  * A rule. `E`, `R` and `O` come from its condition. See
@@ -50,8 +34,19 @@ export type TypeId = typeof TypeId
  * @since 0.3.0
  */
 export interface Rule<E = never, R = never, O = never>
-	extends Equal.Equal, Inspectable.Inspectable, Pipeable.Pipeable {
-	readonly [TypeId]: TypeId
+	extends Shape<E, R, O>, Pipeable.Pipeable {
+	readonly "~Rule"?: Condition.Variance<E, R, O>
+	[Symbol.iterator](): Generator<Rule<E, R, O>, Rule<E, R, O>, unknown>
+}
+
+/**
+ * The data of a rule.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.4.0
+ */
+export interface Shape<E = never, R = never, O = never> {
 	readonly _tag: "Allow" | "Deny"
 	readonly actions: ReadonlyArray<string>
 	readonly resources: ReadonlyArray<string>
@@ -60,8 +55,6 @@ export interface Rule<E = never, R = never, O = never>
 	readonly reason?: string
 	readonly id?: string
 	readonly meta?: unknown
-	readonly "~Rule"?: Condition.Variance<E, R, O>
-	[Symbol.iterator](): Generator<Rule<E, R, O>, Rule<E, R, O>, unknown>
 }
 
 /**
@@ -228,6 +221,82 @@ export interface Builder<D> {
 }
 
 /**
+ * The class of every rule value. A rule works in a generator: it gives
+ * itself, so `yield* _.allow(...)` gives the rule to `Policy.define`.
+ */
+class RuleData extends Data.Class<Shape<unknown, unknown, unknown>> {
+	*[Symbol.iterator](): Generator<this, this, unknown> {
+		yield this
+		return this
+	}
+}
+
+/**
+ * Makes a rule from its data. It does not check the data against a domain.
+ * Use {@link builder} for rules with types, or `Policy.schema` for rules from
+ * JSON.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 0.4.0
+ */
+export const make = <E = never, R = never, O = never>(
+	data: Shape<E, R, O>,
+): Rule<E, R, O> => {
+	// A missing option is left out, so two rules with the same data are equal.
+	const shape: { -readonly [K in keyof Shape<E, R, O>]: Shape<E, R, O>[K] } = {
+		_tag: data._tag,
+		actions: [...data.actions],
+		resources: [...data.resources],
+	}
+	if (data.when !== undefined) shape.when = data.when
+	if (data.fields !== undefined) shape.fields = [...data.fields]
+	if (data.reason !== undefined) shape.reason = data.reason
+	if (data.id !== undefined) shape.id = data.id
+	if (data.meta !== undefined) shape.meta = data.meta
+	return new RuleData(shape) as never
+}
+
+const toArray = <A>(value: A | ReadonlyArray<A>): ReadonlyArray<A> =>
+	Array.isArray(value) ? value : [value as A]
+
+const kindName = (target: unknown): string =>
+	Resource.isResource(target)
+		? Resource.descriptor(target).kind
+		: (target as string)
+
+const makeFromOptions =
+	(tag: "Allow" | "Deny") =>
+	(
+		action: string | ReadonlyArray<string>,
+		resource: unknown,
+		options?: {
+			readonly when?: (builder: never) => Condition.Any
+			readonly fields?: ReadonlyArray<string>
+			readonly reason?: string
+			readonly id?: string
+			readonly meta?: unknown
+		},
+	): Any =>
+		make({
+			_tag: tag,
+			actions: toArray(action),
+			resources: toArray(resource).map(kindName),
+			...(options?.when === undefined
+				? {}
+				: { when: options.when(Condition.builder() as never) }),
+			...(options?.fields === undefined ? {} : { fields: options.fields }),
+			...(options?.reason === undefined ? {} : { reason: options.reason }),
+			...(options?.id === undefined ? {} : { id: options.id }),
+			...(options?.meta === undefined ? {} : { meta: options.meta }),
+		})
+
+const sharedBuilder = {
+	allow: makeFromOptions("Allow"),
+	deny: makeFromOptions("Deny"),
+}
+
+/**
  * Makes a rule builder for a domain.
  *
  * @example
@@ -242,8 +311,8 @@ export interface Builder<D> {
  * @category constructors
  * @since 0.3.0
  */
-export const builder: <D extends Domain.Any>(domain: D) => Builder<D> =
-	internal.builder
+export const builder = <D extends Domain.Any>(_domain: D): Builder<D> =>
+	sharedBuilder as never
 
 /**
  * Tests if a value is a rule.
@@ -252,7 +321,35 @@ export const builder: <D extends Domain.Any>(domain: D) => Builder<D> =
  * @category guards
  * @since 0.3.0
  */
-export const isRule: (u: unknown) => u is Any = internal.isRule
+export const isRule = (u: unknown): u is Any => u instanceof RuleData
+
+const patternCache = new Map<string, RegExp>()
+
+const compilePattern = (pattern: string): RegExp => {
+	const cached = patternCache.get(pattern)
+	if (cached !== undefined) {
+		return cached
+	}
+	let source = ""
+	let index = 0
+	while (index < pattern.length) {
+		const char = pattern[index]!
+		if (char === "*") {
+			if (pattern[index + 1] === "*") {
+				source += ".*"
+				index = index + 2
+				continue
+			}
+			source += "[^.]*"
+		} else {
+			source += char.replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+		}
+		index = index + 1
+	}
+	const regex = new RegExp(`^${source}$`)
+	patternCache.set(pattern, regex)
+	return regex
+}
 
 /**
  * Tests if a field name matches a field name or a field pattern of a rule.
@@ -261,5 +358,43 @@ export const isRule: (u: unknown) => u is Any = internal.isRule
  * @category predicates
  * @since 0.3.0
  */
-export const matchesField: (pattern: string, field: string) => boolean =
-	internal.matchesFieldPattern
+export const matchesField = (pattern: string, field: string): boolean =>
+	pattern.includes("*")
+		? compilePattern(pattern).test(field)
+		: pattern === field
+
+/**
+ * Tests the parts of a rule that do not need the resource value: the action,
+ * the kind and the field.
+ *
+ * A rule with fields covers a request with no field only when it is an allow
+ * rule. So "may update some fields" is a yes. A deny rule for some fields does
+ * not stop a request for the whole value.
+ *
+ * @stability stable
+ * @category predicates
+ * @since 0.4.0
+ */
+export const matchesTarget = (
+	rule: Any,
+	target: {
+		readonly action: string
+		readonly kind: string
+		readonly field?: string | undefined
+	},
+): boolean => {
+	if (!rule.actions.includes("*") && !rule.actions.includes(target.action)) {
+		return false
+	}
+	if (!rule.resources.includes("*") && !rule.resources.includes(target.kind)) {
+		return false
+	}
+	if (rule.fields === undefined) {
+		return true
+	}
+	if (target.field === undefined) {
+		return rule._tag === "Allow"
+	}
+	const field = target.field
+	return rule.fields.some((pattern) => matchesField(pattern, field))
+}

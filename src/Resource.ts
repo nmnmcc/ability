@@ -21,22 +21,9 @@
  * @stability stable
  * @since 0.3.0
  */
+import { Class as DataClass } from "effect/Data"
+import { hasProperty, isObject } from "effect/Predicate"
 import * as Schema from "effect/Schema"
-import * as internal from "./internal/resource.ts"
-
-/**
- * @stability stable
- * @category type IDs
- * @since 0.3.0
- */
-export const TypeId: "~@nmnmcc/ability/Resource" = internal.TypeId
-
-/**
- * @stability stable
- * @category type IDs
- * @since 0.3.0
- */
-export type TypeId = typeof TypeId
 
 /**
  * One part of a resource path. A string is a fixed part. A field reference
@@ -91,7 +78,7 @@ export interface Resource<
 	Data extends object,
 	Value extends { readonly _tag: Kind },
 > {
-	readonly [TypeId]: Descriptor
+	readonly descriptor: Descriptor
 	readonly "~Resource"?: {
 		readonly Kind: Kind
 		readonly Action: Action
@@ -168,6 +155,94 @@ export interface Options<
 }
 
 /**
+ * The class of the runtime data of a resource. {@link isResource} uses it to
+ * know a resource.
+ */
+class ResourceDescriptor extends DataClass<Descriptor> {}
+
+/**
+ * Gives the struct fields inside a Schema. It looks through the wrappers of
+ * `Schema.optionalKey` and `Schema.optional`, and through the members of a
+ * union, such as `Schema.NullOr`. A union of structs gives the fields of each
+ * struct.
+ */
+const structFields = (schema: unknown): ReadonlyArray<Schema.Struct.Fields> => {
+	if (hasProperty(schema, "fields") && isObject(schema.fields)) {
+		return [schema.fields as Schema.Struct.Fields]
+	}
+	if (hasProperty(schema, "members") && Array.isArray(schema.members)) {
+		return schema.members.flatMap(structFields)
+	}
+	if (hasProperty(schema, "schema")) {
+		return structFields(schema.schema)
+	}
+	return []
+}
+
+/**
+ * Gives the paths of all the fields of a Schema, with dots for nested fields.
+ * A nested struct gives its own path and the paths of its fields. Arrays are
+ * left out.
+ *
+ * @stability stable
+ * @category getters
+ * @since 0.4.0
+ */
+export const fieldPaths = (schema: Schema.Top): ReadonlyArray<string> => {
+	const output = new Set<string>()
+	const visit = (value: unknown, prefix: string): void => {
+		for (const fields of structFields(value)) {
+			for (const key of Object.keys(fields)) {
+				const path = prefix === "" ? key : `${prefix}.${key}`
+				output.add(path)
+				visit(fields[key], path)
+			}
+		}
+	}
+	visit(schema, "")
+	return Array.from(output)
+}
+
+/**
+ * Gives the paths of the data fields: the fields with no nested struct.
+ */
+const dataFieldPaths = (
+	fields: Schema.Struct.Fields,
+	prefix: string,
+	output: Set<string>,
+): void => {
+	for (const key of Object.keys(fields)) {
+		const path = prefix === "" ? key : `${prefix}.${key}`
+		const nested = structFields(fields[key])
+		if (nested.length > 0) {
+			for (const inner of nested) dataFieldPaths(inner, path, output)
+		} else {
+			output.add(path)
+		}
+	}
+}
+
+const makeDescriptor = (
+	kind: string,
+	options: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
+	schema: Schema.Top,
+): Descriptor => {
+	const refs: Record<string, FieldRef<string>> = {}
+	for (const key of Object.keys(options.fields)) {
+		refs[key] = { _tag: "Field", field: key }
+	}
+	const paths = new Set<string>()
+	dataFieldPaths(options.fields, "", paths)
+	return new ResourceDescriptor({
+		kind,
+		actions: [...options.actions],
+		path: options.path === undefined ? undefined : [...options.path(refs)],
+		fieldPaths: Array.from(paths),
+		schema,
+	})
+}
+
+/**
  * The type of a class made by {@link Class}.
  *
  * @stability stable
@@ -226,7 +301,19 @@ export const Class: <Self = never>(
 	options: Options<Actions, Fields>,
 ) => [Self] extends [never]
 	? "Missing `Self` type: use Resource.Class<Self>()(...)"
-	: Class<Self, Kind, Actions, Fields> = internal.Class as never
+	: Class<Self, Kind, Actions, Fields> = ((identifier?: string) =>
+	(
+		kind: string,
+		options: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
+	) => {
+		const Base = Schema.TaggedClass<any>(identifier)(kind, options.fields)
+		const descriptor = makeDescriptor(kind, options, Base)
+		return class extends Base {
+			static readonly descriptor = descriptor
+			static readonly kind = kind
+			static readonly actions = descriptor.actions
+		}
+	}) as never
 
 /**
  * A resource made by {@link make}. Its values are plain objects.
@@ -269,7 +356,20 @@ export const make: <
 >(
 	kind: Kind,
 	options: Options<Actions, Fields>,
-) => Struct<Kind, Actions, Fields> = internal.make as never
+) => Struct<Kind, Actions, Fields> = ((
+	kind: string,
+	options: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
+) => {
+	const schema = Schema.TaggedStruct(kind, options.fields)
+	const descriptor = makeDescriptor(kind, options, schema)
+	return {
+		descriptor,
+		kind,
+		actions: descriptor.actions,
+		schema,
+		make: (input: object) => schema.make(input as never),
+	}
+}) as never
 
 /**
  * Tests if a value is a resource.
@@ -278,7 +378,8 @@ export const make: <
  * @category guards
  * @since 0.3.0
  */
-export const isResource: (u: unknown) => u is Any = internal.isResource
+export const isResource = (u: unknown): u is Any =>
+	hasProperty(u, "descriptor") && u.descriptor instanceof ResourceDescriptor
 
 /**
  * Gets the runtime data of a resource.
@@ -287,4 +388,16 @@ export const isResource: (u: unknown) => u is Any = internal.isResource
  * @category getters
  * @since 0.3.0
  */
-export const descriptor: (resource: Any) => Descriptor = internal.descriptor
+export const descriptor = (resource: Any): Descriptor => resource.descriptor
+
+/**
+ * Gives the kind name of a resource value, from its `_tag` field.
+ *
+ * @stability stable
+ * @category getters
+ * @since 0.4.0
+ */
+export const kindOf = (value: unknown): string | undefined =>
+	hasProperty(value, "_tag") && typeof value._tag === "string"
+		? value._tag
+		: undefined

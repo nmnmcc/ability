@@ -28,13 +28,20 @@
  * @stability unstable
  * @since 0.3.0
  */
+// A `load` function of a requirement is kept in an annotation, so its error
+// type and its service type are erased to `unknown`. The language service
+// check for `unknown` in an Effect is off here.
+// @effect-diagnostics anyUnknownInErrorContext:off
 import * as Context from "effect/Context"
-import type * as Effect from "effect/Effect"
-import type * as Layer from "effect/Layer"
+import * as Effect from "effect/Effect"
+import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
+import * as SchemaTransformation from "effect/SchemaTransformation"
+import { HttpRouter } from "effect/http"
 import { HttpApiSchema } from "effect/http-api"
 import * as Authorizer from "./Authorizer.ts"
 import type * as Domain from "./Domain.ts"
-import * as internal from "./internal/httpApi.ts"
 
 /**
  * One check that an endpoint needs: an action on a kind of resource. With
@@ -103,7 +110,28 @@ export const requires: <
 	load?: (
 		params: Readonly<Record<string, string | undefined>>,
 	) => Effect.Effect<Domain.ValueOf<A["domain"], K>, unknown, unknown>,
-) => Requirement = internal.requires
+) => Requirement = (_authorizer, action, kind, load) =>
+	load === undefined ? { action, kind } : { action, kind, load }
+
+/**
+ * The Schema of a `PolicyUnavailable` response. It encodes only the `_tag`, so
+ * the cause does not go to the client.
+ */
+const PolicyUnavailableResponse = Schema.TaggedStruct(
+	"PolicyUnavailable",
+	{},
+).pipe(
+	Schema.decodeTo(
+		Schema.declare(
+			(u): u is Authorizer.PolicyUnavailable =>
+				u instanceof Authorizer.PolicyUnavailable,
+		),
+		SchemaTransformation.transform({
+			decode: () => Authorizer.PolicyUnavailable.make({ cause: undefined }),
+			encode: () => ({ _tag: "PolicyUnavailable" as const }),
+		}),
+	),
+)
 
 /**
  * The errors of the middleware, with HTTP status codes: 403 for
@@ -119,9 +147,71 @@ export const requires: <
  */
 export const errors = [
 	Authorizer.Forbidden.pipe(HttpApiSchema.status(403)),
-	internal.PolicyUnavailableResponse.pipe(HttpApiSchema.status(503)),
+	PolicyUnavailableResponse.pipe(HttpApiSchema.status(503)),
 	Authorizer.Pending.pipe(HttpApiSchema.status(409)),
 ] as const
+
+const makeLayer = (
+	middleware: Context.ServiceClass<any, string, any>,
+	authorizer: Authorizer.AnyServiceClass,
+) =>
+	Layer.effect(
+		middleware,
+		Effect.gen(function* () {
+			const service = yield* authorizer
+			const services = yield* Effect.context<never>()
+			return Effect.fnUntraced(function* (
+				httpEffect: Effect.Effect<unknown, unknown, unknown>,
+				options: {
+					readonly endpoint: {
+						readonly name: string
+						readonly method: string
+						readonly annotations: Context.Context<never>
+					}
+					readonly group: {
+						readonly identifier: string
+						readonly annotations: Context.Context<never>
+					}
+				},
+			) {
+				const requirements = Option.orElse(
+					Context.getOption(options.endpoint.annotations, Required),
+					() =>
+						Option.map(
+							Context.getOption(options.group.annotations, GroupRequired),
+							(rules) =>
+								options.endpoint.method === "GET" ? rules.read : rules.write,
+						),
+				)
+				if (Option.isNone(requirements)) {
+					return yield* Effect.die(
+						new Error(
+							`The endpoint ${options.group.identifier}.${options.endpoint.name} does not say what it needs. Give it the HttpApi.Required annotation.`,
+						),
+					)
+				}
+				for (const requirement of requirements.value) {
+					if (requirement.load === undefined) {
+						yield* service.check({
+							action: requirement.action,
+							kind: requirement.kind,
+						} as never)
+					} else {
+						const params = yield* HttpRouter.params
+						const value = yield* Effect.provideContext(
+							requirement.load(params),
+							services,
+						)
+						yield* service.check({
+							action: requirement.action,
+							resource: value,
+						} as never)
+					}
+				}
+				return yield* httpEffect
+			})
+		}),
+	)
 
 /**
  * Makes the layer of an authorization middleware. The middleware reads the
@@ -149,4 +239,4 @@ export const layer: <
 	Self,
 	never,
 	(A extends Context.Key<infer I, any> ? I : never) | R
-> = internal.layer as never
+> = makeLayer as never

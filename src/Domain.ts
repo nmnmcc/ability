@@ -14,24 +14,10 @@
  * @stability stable
  * @since 0.3.0
  */
+import * as Data from "effect/Data"
 import type * as Schema from "effect/Schema"
-import * as internal from "./internal/domain.ts"
 import type * as PrincipalSchema from "./Principal.ts"
-import type * as Resource from "./Resource.ts"
-
-/**
- * @stability stable
- * @category type IDs
- * @since 0.3.0
- */
-export const TypeId: "~@nmnmcc/ability/Domain" = internal.TypeId
-
-/**
- * @stability stable
- * @category type IDs
- * @since 0.3.0
- */
-export type TypeId = typeof TypeId
+import * as Resource from "./Resource.ts"
 
 /**
  * A domain. `P` is the type of the principal, `Resources` is the union of the
@@ -46,7 +32,6 @@ export interface Domain<
 	Resources extends Resource.Any,
 	Meta,
 > {
-	readonly [TypeId]: TypeId
 	readonly principal: PrincipalSchema.Any
 	readonly resources: ReadonlyMap<string, Resource.Descriptor>
 	readonly meta: Schema.Top | undefined
@@ -162,6 +147,15 @@ export type ValueOf<D, K extends string> = Resource.Value<ResourceOf<D, K>>
 export type AnyValue<D> = Resource.Value<Resources<D>>
 
 /**
+ * The class of every domain value. {@link isDomain} uses it to know a domain.
+ */
+class DomainData extends Data.Class<{
+	readonly principal: PrincipalSchema.Any
+	readonly resources: ReadonlyMap<string, Resource.Descriptor>
+	readonly meta: Schema.Top | undefined
+}> {}
+
+/**
  * Makes a domain. Each resource must have its own kind name. Give `meta` when
  * rules must keep extra data, such as the scope of a grant.
  *
@@ -177,7 +171,26 @@ export const make: <
 	readonly principal: P
 	readonly resources: Resources
 	readonly meta?: M
-}) => Domain<P["Type"], Resources[number], M["Type"]> = internal.make
+}) => Domain<P["Type"], Resources[number], M["Type"]> = (options) => {
+	const resources = new Map<string, Resource.Descriptor>()
+	for (const resource of options.resources) {
+		const value = Resource.descriptor(resource)
+		if (resources.has(value.kind)) {
+			// Two resources with one kind name is a mistake in the code, not in the
+			// data, so it is a defect.
+			throw new Error(`Two resources have the kind name "${value.kind}"`)
+		}
+		if (value.kind === "*") {
+			throw new Error(`A resource may not have the kind name "*"`)
+		}
+		resources.set(value.kind, value)
+	}
+	return new DomainData({
+		principal: options.principal,
+		resources,
+		meta: options.meta,
+	})
+}
 
 /**
  * Tests if a value is a domain.
@@ -186,4 +199,4 @@ export const make: <
  * @category guards
  * @since 0.3.0
  */
-export const isDomain: (u: unknown) => u is Any = internal.isDomain
+export const isDomain = (u: unknown): u is Any => u instanceof DomainData

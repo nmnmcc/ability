@@ -38,8 +38,8 @@ material. Do not change it unless the user asks.
   `Authorizer`.
 - `src/HttpApi.ts` is a separate entry point, because `effect/http-api` is not
   stable. Do not export it from `src/index.ts`.
-- Internal code is in `src/internal/`, with one file for each module that has
-  code.
+- Each module keeps its types, its docs and its code in one file. There is no
+  `src/internal/` folder.
 - Examples are in `examples/`.
 - Tests are in `tests/`.
 
@@ -67,11 +67,23 @@ material. Do not change it unless the user asks.
 
 ## Code
 
-- Keep public types and their docs in the public modules in `src/`. Keep the
-  code in `src/internal/`.
-- Inside `src/internal/`, the error and service types of predicates are erased
-  to `unknown`. Those files turn off the `anyUnknownInErrorContext` check. Keep
-  the real types in the public modules.
+- Build the library on Effect. Do not copy the way Effect builds itself: Effect
+  had no Effect to build on, so its own code uses tricks that this library does
+  not need.
+  - Make values with Effect data types: `Data.taggedEnum` for trees of plain
+    nodes, `Data.Class` for values with methods, and `Schema` classes for errors
+    and for data that comes from outside.
+  - Do not make prototypes by hand. Do not write `Equal.symbol`, `Hash.symbol`
+    or `NodeInspectSymbol` methods, and do not use `Object.create`. Effect data
+    types give equality, hashing and `pipe`.
+  - Do not mark values with a `TypeId`. A guard tests the class with
+    `instanceof`.
+  - Use the tools that Effect gives to its users, such as `Function.dual`,
+    `Effect.fn`, `Context.Service`, `Layer`, `Cache` and `Schema`.
+- A public function gives its full types. When the code under it works on nodes
+  with no types, give it a short private function, and give the public type in
+  the `export const` line. Such a file may turn off the
+  `anyUnknownInErrorContext` check, with a comment that says why.
 - Follow the style of the code near your change before you add new layers.
 - Keep each change to what the user asked for.
 - Do not change generated files or reference material by hand.

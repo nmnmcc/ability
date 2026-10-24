@@ -21,9 +21,17 @@
  * @stability stable
  * @since 0.3.0
  */
-import type * as Effect from "effect/Effect"
-import type * as Schema from "effect/Schema"
-import * as internal from "./internal/condition.ts"
+// A predicate keeps its error type and service type in the public types. The
+// code below works on the nodes with no types, where they are `unknown`, so
+// the language service check for `unknown` in an Effect is off here.
+// @effect-diagnostics anyUnknownInErrorContext:off
+import type * as Context from "effect/Context"
+import * as Data from "effect/Data"
+import * as Effect from "effect/Effect"
+import * as Equal from "effect/Equal"
+import { dual } from "effect/Function"
+import { hasProperty, isObject } from "effect/Predicate"
+import * as Schema from "effect/Schema"
 import type * as Resource from "./Resource.ts"
 
 /**
@@ -442,6 +450,66 @@ export interface Builder<Data, Value, P> {
 	) => Condition<E, R, Opaque>
 }
 
+const nodes = Data.taggedEnum<Ast>()
+const operands = Data.taggedEnum<Operand>()
+
+const literal = (value: Scalar): Literal => operands.Literal({ value })
+
+const isOperand = (u: unknown): u is Operand =>
+	hasProperty(u, "_tag") && (u._tag === "Literal" || u._tag === "Principal")
+
+const toOperand = (value: unknown): Operand =>
+	isOperand(value) ? value : literal(value as Scalar)
+
+const compare =
+	(op: CompareOperator) =>
+	(field: string, value: unknown): Compare =>
+		nodes.Compare({ op, field, value: toOperand(value) })
+
+const makeAnd = (...conditions: ReadonlyArray<Ast>): Ast =>
+	nodes.And({ conditions })
+
+const makeOr = (...conditions: ReadonlyArray<Ast>): Ast =>
+	nodes.Or({ conditions })
+
+const makeNot = (condition: Ast): Ast => nodes.Not({ condition })
+
+const makePredicate = (
+	name: string,
+	run: (value: unknown, principal: unknown) => Effect.Effect<boolean, any, any>,
+): Ast => nodes.Predicate({ name, run })
+
+const sharedBuilder: Builder<any, any, any> = {
+	eq: compare("eq"),
+	ne: compare("ne"),
+	lt: compare("lt"),
+	lte: compare("lte"),
+	gt: compare("gt"),
+	gte: compare("gte"),
+	in: (field: string, values: ReadonlyArray<unknown>) =>
+		nodes.In({ field, values: values.map(toOperand) }),
+	exists: (field: string) => nodes.Exists({ field }),
+	under: (...prefix: ReadonlyArray<unknown>) =>
+		nodes.Under({ prefix: prefix.map(toOperand) }),
+	principal: (path: string) => operands.Principal({ path }),
+	and: makeAnd,
+	or: makeOr,
+	not: makeNot,
+	predicate: (
+		name: string,
+		test: (
+			value: unknown,
+			principal: unknown,
+		) => boolean | Effect.Effect<boolean, unknown, unknown>,
+	) =>
+		makePredicate(name, (value, principal) =>
+			Effect.suspend(() => {
+				const result = test(value, principal)
+				return Effect.isEffect(result) ? result : Effect.succeed(result)
+			}),
+		),
+} as never
+
 /**
  * Makes a builder. Rules give you a builder with the right types, so you do not
  * often need this.
@@ -450,8 +518,8 @@ export interface Builder<Data, Value, P> {
  * @category constructors
  * @since 0.3.0
  */
-export const builder: <Data, Value, P>() => Builder<Data, Value, P> =
-	internal.builder
+export const builder = <Data, Value, P>(): Builder<Data, Value, P> =>
+	sharedBuilder
 
 /**
  * Always true.
@@ -460,7 +528,7 @@ export const builder: <Data, Value, P>() => Builder<Data, Value, P> =
  * @category constructors
  * @since 0.3.0
  */
-export const always: Condition = internal.always
+export const always: Condition = nodes.True()
 
 /**
  * Always false.
@@ -469,7 +537,7 @@ export const always: Condition = internal.always
  * @category constructors
  * @since 0.3.0
  */
-export const never: Condition = internal.never
+export const never: Condition = nodes.False()
 
 /**
  * True when all the conditions are true. With no conditions, it is true.
@@ -481,7 +549,7 @@ export const never: Condition = internal.never
 export const and: <const Cs extends ReadonlyArray<Any>>(
 	...conditions: Cs
 ) => Condition<Error<Cs[number]>, Services<Cs[number]>, OpaqueOf<Cs[number]>> =
-	internal.and as never
+	makeAnd
 
 /**
  * True when one of the conditions is true. With no conditions, it is false.
@@ -493,7 +561,7 @@ export const and: <const Cs extends ReadonlyArray<Any>>(
 export const or: <const Cs extends ReadonlyArray<Any>>(
 	...conditions: Cs
 ) => Condition<Error<Cs[number]>, Services<Cs[number]>, OpaqueOf<Cs[number]>> =
-	internal.or as never
+	makeOr
 
 /**
  * @stability stable
@@ -502,7 +570,7 @@ export const or: <const Cs extends ReadonlyArray<Any>>(
  */
 export const not: <C extends Any>(
 	condition: C,
-) => Condition<Error<C>, Services<C>, OpaqueOf<C>> = internal.not as never
+) => Condition<Error<C>, Services<C>, OpaqueOf<C>> = makeNot
 
 /**
  * The data that a condition needs for a test.
@@ -524,6 +592,220 @@ export interface Input {
 }
 
 /**
+ * Gets a field of an object by a path with dots. A missing field, or a field
+ * under a value that is not an object, gives `null`.
+ */
+const getField = (value: unknown, path: string): unknown => {
+	let cursor: unknown = value
+	for (const key of path.split(".")) {
+		if (!isObject(cursor) || !Object.hasOwn(cursor, key)) {
+			return null
+		}
+		cursor = (cursor as Record<string, unknown>)[key]
+	}
+	return cursor === undefined ? null : cursor
+}
+
+/**
+ * Gives the value of an operand. A principal field that is `null` or missing
+ * gives `undefined`. No field of a resource is `undefined`, so a test with it
+ * is never true. This keeps the check closed: a principal with no id never
+ * matches a resource with no owner.
+ */
+const resolve = (operand: Operand, principal: unknown): unknown =>
+	operand._tag === "Literal"
+		? operand.value
+		: (getField(principal, operand.path) ?? undefined)
+
+const testCompare = (
+	op: CompareOperator,
+	left: unknown,
+	right: unknown,
+): boolean => {
+	if (right === undefined) {
+		return false
+	}
+	switch (op) {
+		case "eq":
+			return left === right
+		case "ne":
+			return left !== right
+		default: {
+			const ordered =
+				(typeof left === "number" && typeof right === "number") ||
+				(typeof left === "string" && typeof right === "string")
+			if (!ordered) {
+				return false
+			}
+			const a = left as number | string
+			const b = right as number | string
+			switch (op) {
+				case "lt":
+					return a < b
+				case "lte":
+					return a <= b
+				case "gt":
+					return a > b
+				case "gte":
+					return a >= b
+			}
+		}
+	}
+}
+
+/**
+ * Gives the values of a resource path. It gives `undefined` when the resource
+ * has no path.
+ */
+const pathValues = (
+	value: unknown,
+	path: ReadonlyArray<Resource.PathSegment> | undefined,
+): ReadonlyArray<unknown> | undefined =>
+	path?.map((segment) =>
+		typeof segment === "string" ? segment : getField(value, segment.field),
+	)
+
+const testUnder = (prefix: ReadonlyArray<Operand>, input: Input): boolean => {
+	const values = pathValues(input.value, input.path)
+	if (values === undefined || prefix.length > values.length) {
+		return false
+	}
+	return prefix.every(
+		(operand, index) => resolve(operand, input.principal) === values[index],
+	)
+}
+
+/**
+ * True when a condition has a {@link Predicate}.
+ *
+ * @stability stable
+ * @category predicates
+ * @since 0.4.0
+ */
+export const hasPredicate: (condition: Any) => boolean = nodes.$match({
+	Predicate: () => true,
+	And: (node) => node.conditions.some(hasPredicate),
+	Or: (node) => node.conditions.some(hasPredicate),
+	Not: (node) => hasPredicate(node.condition),
+	True: () => false,
+	False: () => false,
+	Compare: () => false,
+	In: () => false,
+	Exists: () => false,
+	Under: () => false,
+})
+
+const provideAst = (ast: Ast, context: Context.Context<never>): Ast => {
+	switch (ast._tag) {
+		case "Predicate":
+			return makePredicate(ast.name, (value, principal) =>
+				Effect.provideContext(ast.run(value, principal), context),
+			)
+		case "And":
+			return makeAnd(
+				...ast.conditions.map((child) => provideAst(child, context)),
+			)
+		case "Or":
+			return makeOr(
+				...ast.conditions.map((child) => provideAst(child, context)),
+			)
+		case "Not":
+			return makeNot(provideAst(ast.condition, context))
+		default:
+			return ast
+	}
+}
+
+/**
+ * Gives the services in `context` to every predicate of a condition, so the
+ * condition needs no services when it runs.
+ *
+ * @stability stable
+ * @category services
+ * @since 0.4.0
+ */
+export const provideContext: {
+	<R>(
+		context: Context.Context<R>,
+	): <E, O>(condition: Condition<E, R, O>) => Condition<E, never, O>
+	<E, R, O>(
+		condition: Condition<E, R, O>,
+		context: Context.Context<R>,
+	): Condition<E, never, O>
+} = dual(2, provideAst) as never
+
+const evaluateSyncAst = (ast: Ast, input: Input): boolean => {
+	switch (ast._tag) {
+		case "True":
+			return true
+		case "False":
+			return false
+		case "Compare":
+			return testCompare(
+				ast.op,
+				getField(input.value, ast.field),
+				resolve(ast.value, input.principal),
+			)
+		case "In": {
+			const field = getField(input.value, ast.field)
+			return ast.values.some(
+				(operand) => resolve(operand, input.principal) === field,
+			)
+		}
+		case "Exists":
+			return getField(input.value, ast.field) !== null
+		case "Under":
+			return testUnder(ast.prefix, input)
+		case "And":
+			return ast.conditions.every((child) => evaluateSyncAst(child, input))
+		case "Or":
+			return ast.conditions.some((child) => evaluateSyncAst(child, input))
+		case "Not":
+			return !evaluateSyncAst(ast.condition, input)
+		case "Predicate":
+			// The types stop this. A predicate needs `evaluate`.
+			throw new globalThis.Error(
+				`The predicate "${ast.name}" needs an Effect. Use Condition.evaluate.`,
+			)
+	}
+}
+
+const evaluateAst = (
+	ast: Ast,
+	input: Input,
+): Effect.Effect<boolean, unknown, unknown> => {
+	if (!hasPredicate(ast)) {
+		return Effect.sync(() => evaluateSyncAst(ast, input))
+	}
+	switch (ast._tag) {
+		case "Predicate":
+			return ast.run(input.value, input.principal)
+		case "Not":
+			return Effect.map(evaluateAst(ast.condition, input), (value) => !value)
+		case "And":
+			return Effect.gen(function* () {
+				for (const child of ast.conditions) {
+					if (!(yield* evaluateAst(child, input))) {
+						return false
+					}
+				}
+				return true
+			})
+		case "Or":
+			return Effect.gen(function* () {
+				for (const child of ast.conditions) {
+					if (yield* evaluateAst(child, input)) {
+						return true
+					}
+				}
+				return false
+			})
+		default:
+			return Effect.sync(() => evaluateSyncAst(ast, input))
+	}
+}
+
+/**
  * Tests a condition on a value. A predicate may fail with its error.
  *
  * @stability stable
@@ -538,7 +820,7 @@ export const evaluate: {
 		condition: Condition<E, R, O>,
 		input: Input,
 	): Effect.Effect<boolean, E, R>
-} = internal.evaluate as never
+} = dual(2, evaluateAst) as never
 
 /**
  * Tests a condition with no predicate on a value, at once.
@@ -550,7 +832,225 @@ export const evaluate: {
 export const evaluateSync: {
 	(input: Input): (condition: Condition) => boolean
 	(condition: Condition, input: Input): boolean
-} = internal.evaluateSync
+} = dual(2, evaluateSyncAst)
+
+const dedupe = (conditions: ReadonlyArray<Ast>): ReadonlyArray<Ast> => {
+	const output: Array<Ast> = []
+	for (const condition of conditions) {
+		if (!output.some((other) => Equal.equals(other, condition))) {
+			output.push(condition)
+		}
+	}
+	return output
+}
+
+/**
+ * Removes the children that the other children make useless. In an `Or`,
+ * `a OR (a AND b)` is `a`. In an `And`, `a AND (a OR b)` is `a`.
+ */
+const absorb = (
+	inner: "And" | "Or",
+	conditions: ReadonlyArray<Ast>,
+): ReadonlyArray<Ast> =>
+	conditions.filter(
+		(condition) =>
+			condition._tag !== inner ||
+			// A predicate may fail, so a child with a predicate stays.
+			hasPredicate(condition) ||
+			!conditions.some(
+				(other) =>
+					other !== condition &&
+					condition.conditions.some((part) => Equal.equals(part, other)),
+			),
+	)
+
+const flatten = (
+	tag: "And" | "Or",
+	conditions: ReadonlyArray<Ast>,
+): ReadonlyArray<Ast> =>
+	conditions.flatMap((child) => {
+		const simple = simplifyAst(child)
+		return simple._tag === tag ? simple.conditions : [simple]
+	})
+
+/**
+ * Gives the result of an `And` with a `False` child, or of an `Or` with a
+ * `True` child. The children are tested in order, so a predicate before the
+ * constant still runs, and it may fail. Such predicates stay in front of the
+ * constant, so the failure is not lost.
+ */
+const shortCircuit = (
+	tag: "And" | "Or",
+	children: ReadonlyArray<Ast>,
+	index: number,
+): Ast => {
+	const constant = tag === "And" ? never : always
+	const before = children.slice(0, index).filter(hasPredicate)
+	if (before.length === 0) {
+		return constant
+	}
+	return tag === "And"
+		? makeAnd(...before, constant)
+		: makeOr(...before, constant)
+}
+
+const simplifyAst = (ast: Ast): Ast => {
+	switch (ast._tag) {
+		case "And": {
+			const flat = flatten("And", ast.conditions)
+			const stop = flat.findIndex((child) => child._tag === "False")
+			if (stop !== -1) {
+				return shortCircuit("And", flat, stop)
+			}
+			const children = flat.filter((child) => child._tag !== "True")
+			const unique = absorb("Or", dedupe(children))
+			if (unique.length === 0) {
+				return always
+			}
+			return unique.length === 1 ? unique[0]! : makeAnd(...unique)
+		}
+		case "Or": {
+			const flat = flatten("Or", ast.conditions)
+			const stop = flat.findIndex((child) => child._tag === "True")
+			if (stop !== -1) {
+				return shortCircuit("Or", flat, stop)
+			}
+			const children = flat.filter((child) => child._tag !== "False")
+			const unique = absorb("And", dedupe(children))
+			if (unique.length === 0) {
+				return never
+			}
+			return unique.length === 1 ? unique[0]! : makeOr(...unique)
+		}
+		case "Not": {
+			const child = simplifyAst(ast.condition)
+			switch (child._tag) {
+				case "True":
+					return never
+				case "False":
+					return always
+				case "Not":
+					return child.condition
+				case "Compare":
+					// A principal field with no value makes `eq` and `ne` both false,
+					// so only a fixed value lets `not eq` become `ne`.
+					if (
+						child.value._tag === "Literal" &&
+						(child.op === "eq" || child.op === "ne")
+					) {
+						return nodes.Compare({
+							op: child.op === "eq" ? "ne" : "eq",
+							field: child.field,
+							value: child.value,
+						})
+					}
+					return makeNot(child)
+				default:
+					return makeNot(child)
+			}
+		}
+		case "In":
+			return ast.values.length === 0 ? never : ast
+		default:
+			return ast
+	}
+}
+
+/**
+ * Makes a condition smaller without a change to its meaning. It removes `True`
+ * and `False` from `And` and `Or`, joins nested `And` and `Or` nodes, and
+ * removes double `Not` nodes.
+ *
+ * @stability stable
+ * @category evaluation
+ * @since 0.3.0
+ */
+export const simplify: <E, R, O>(
+	condition: Condition<E, R, O>,
+) => Condition<E, R, O> = simplifyAst
+
+/**
+ * Puts the value of the principal into an operand. It gives `undefined` for a
+ * principal field with no value. See {@link resolve}.
+ */
+const bindOperand = (
+	operand: Operand,
+	principal: unknown,
+): Literal | undefined => {
+	if (operand._tag === "Literal") {
+		return operand
+	}
+	const value = resolve(operand, principal)
+	return value === undefined ? undefined : literal(value as Scalar)
+}
+
+const expandUnder = (
+	prefix: ReadonlyArray<Operand>,
+	principal: unknown,
+	path: ReadonlyArray<Resource.PathSegment> | undefined,
+): Ast => {
+	if (path === undefined || prefix.length > path.length) {
+		return never
+	}
+	const parts: Array<Ast> = []
+	prefix.forEach((operand, index) => {
+		const value = resolve(operand, principal)
+		const segment = path[index]!
+		if (value === undefined) {
+			parts.push(never)
+		} else if (typeof segment === "string") {
+			parts.push(segment === value ? always : never)
+		} else {
+			parts.push(
+				nodes.Compare({
+					op: "eq",
+					field: segment.field,
+					value: literal(value as Scalar),
+				}),
+			)
+		}
+	})
+	return makeAnd(...parts)
+}
+
+const bind = (
+	ast: Ast,
+	principal: unknown,
+	path: ReadonlyArray<Resource.PathSegment> | undefined,
+): Ast => {
+	switch (ast._tag) {
+		case "Compare": {
+			const value = bindOperand(ast.value, principal)
+			return value === undefined
+				? never
+				: nodes.Compare({ op: ast.op, field: ast.field, value })
+		}
+		case "In":
+			return nodes.In({
+				field: ast.field,
+				values: ast.values.flatMap((operand) => {
+					const value = bindOperand(operand, principal)
+					return value === undefined ? [] : [value]
+				}),
+			})
+		case "Under":
+			return expandUnder(ast.prefix, principal, path)
+		case "And":
+			return makeAnd(
+				...ast.conditions.map((child) => bind(child, principal, path)),
+			)
+		case "Or":
+			return makeOr(
+				...ast.conditions.map((child) => bind(child, principal, path)),
+			)
+		case "Not":
+			return makeNot(bind(ast.condition, principal, path))
+		case "Predicate":
+			return makePredicate(ast.name, (value) => ast.run(value, principal))
+		default:
+			return ast
+	}
+}
 
 /**
  * Puts the principal into a condition and expands `Under` with the path of the
@@ -574,20 +1074,16 @@ export const partial: {
 			readonly path?: ReadonlyArray<Resource.PathSegment> | undefined
 		},
 	): Condition<E, R, O>
-} = internal.partial as never
-
-/**
- * Makes a condition smaller without a change to its meaning. It removes `True`
- * and `False` from `And` and `Or`, joins nested `And` and `Or` nodes, and
- * removes double `Not` nodes.
- *
- * @stability stable
- * @category evaluation
- * @since 0.3.0
- */
-export const simplify: <E, R, O>(
-	condition: Condition<E, R, O>,
-) => Condition<E, R, O> = internal.simplify as never
+} = dual(
+	2,
+	(
+		ast: Ast,
+		input: {
+			readonly principal?: object | undefined
+			readonly path?: ReadonlyArray<Resource.PathSegment> | undefined
+		},
+	): Ast => simplifyAst(bind(ast, input.principal, input.path)),
+)
 
 /**
  * The functions that change each node of a condition into another form, such
@@ -617,15 +1113,62 @@ export interface Interpreter<A> {
  * @category errors
  * @since 0.3.0
  */
-export const Untranslatable: typeof internal.Untranslatable =
-	internal.Untranslatable
+export class Untranslatable extends Schema.TaggedError<Untranslatable>(
+	"@nmnmcc/ability/Condition/Untranslatable",
+)("Untranslatable", { reason: Schema.String }) {}
 
-/**
- * @stability stable
- * @category errors
- * @since 0.3.0
- */
-export type Untranslatable = internal.Untranslatable
+const literalValue = (operand: Operand, field: string): Scalar => {
+	if (operand._tag !== "Literal") {
+		throw Untranslatable.make({
+			reason: `The field "${field}" uses a principal field. Call Condition.partial first.`,
+		})
+	}
+	return operand.value
+}
+
+const foldAst = <A>(ast: Ast, interpreter: Interpreter<A>): A => {
+	switch (ast._tag) {
+		case "True":
+			return interpreter.true()
+		case "False":
+			return interpreter.false()
+		case "Compare":
+			return interpreter.compare(
+				ast.op,
+				ast.field,
+				literalValue(ast.value, ast.field),
+			)
+		case "In":
+			return interpreter.in(
+				ast.field,
+				ast.values.map((operand) => literalValue(operand, ast.field)),
+			)
+		case "Exists":
+			return interpreter.exists(ast.field)
+		case "Under":
+			throw Untranslatable.make({
+				reason:
+					"An Under node needs the resource path. Call Condition.partial first.",
+			})
+		case "And":
+			return interpreter.and(
+				ast.conditions.map((child) => foldAst(child, interpreter)),
+			)
+		case "Or":
+			return interpreter.or(
+				ast.conditions.map((child) => foldAst(child, interpreter)),
+			)
+		case "Not":
+			return interpreter.not(foldAst(ast.condition, interpreter))
+		case "Predicate":
+			if (interpreter.predicate === undefined) {
+				throw Untranslatable.make({
+					reason: `The predicate "${ast.name}" can not become a query`,
+				})
+			}
+			return interpreter.predicate(ast.name)
+	}
+}
 
 /**
  * Changes a condition into another form with an interpreter. Call
@@ -644,7 +1187,22 @@ export const fold: {
 		condition: Any,
 		interpreter: Interpreter<A>,
 	): Effect.Effect<A, Untranslatable>
-} = internal.fold
+} = dual(
+	2,
+	<A>(
+		ast: Ast,
+		interpreter: Interpreter<A>,
+	): Effect.Effect<A, Untranslatable> =>
+		Effect.try({
+			try: () => foldAst(ast, interpreter),
+			catch: (cause) => {
+				if (cause instanceof Untranslatable) {
+					return cause
+				}
+				throw cause
+			},
+		}),
+)
 
 /**
  * The fields that a condition uses.
@@ -653,7 +1211,29 @@ export const fold: {
  * @category getters
  * @since 0.3.0
  */
-export const fields: (condition: Any) => ReadonlyArray<string> = internal.fields
+export const fields = (condition: Any): ReadonlyArray<string> => {
+	const output = new Set<string>()
+	const visit = (node: Ast): void => {
+		switch (node._tag) {
+			case "Compare":
+			case "In":
+			case "Exists":
+				output.add(node.field)
+				return
+			case "And":
+			case "Or":
+				node.conditions.forEach(visit)
+				return
+			case "Not":
+				visit(node.condition)
+				return
+			default:
+				return
+		}
+	}
+	visit(condition)
+	return Array.from(output)
+}
 
 /**
  * The JSON form of a condition with no predicate.
@@ -695,6 +1275,20 @@ export interface EncodedNot {
 	readonly condition: Encoded
 }
 
+const ScalarSchema = Schema.Union([
+	Schema.String,
+	Schema.Finite,
+	Schema.Boolean,
+	Schema.Null,
+])
+
+const OperandSchema = Schema.Union([
+	Schema.TaggedStruct("Literal", { value: ScalarSchema }),
+	Schema.TaggedStruct("Principal", { path: Schema.String }),
+])
+
+const Recursive = Schema.suspend((): Schema.Codec<Condition, Encoded> => schema)
+
 /**
  * The Schema of a condition with no predicate. It checks the shape only. Use
  * `Policy.schema` to check the field names against a domain too.
@@ -703,4 +1297,21 @@ export interface EncodedNot {
  * @category schemas
  * @since 0.3.0
  */
-export const schema: Schema.Codec<Condition, Encoded> = internal.schema
+export const schema: Schema.Codec<Condition, Encoded> = Schema.Union([
+	Schema.TaggedStruct("True", {}),
+	Schema.TaggedStruct("False", {}),
+	Schema.TaggedStruct("Compare", {
+		op: Schema.Literals(["eq", "ne", "lt", "lte", "gt", "gte"]),
+		field: Schema.String,
+		value: OperandSchema,
+	}),
+	Schema.TaggedStruct("In", {
+		field: Schema.String,
+		values: Schema.Array(OperandSchema),
+	}),
+	Schema.TaggedStruct("Exists", { field: Schema.String }),
+	Schema.TaggedStruct("Under", { prefix: Schema.Array(OperandSchema) }),
+	Schema.TaggedStruct("And", { conditions: Schema.Array(Recursive) }),
+	Schema.TaggedStruct("Or", { conditions: Schema.Array(Recursive) }),
+	Schema.TaggedStruct("Not", { condition: Recursive }),
+]) as never
