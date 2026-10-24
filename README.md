@@ -304,9 +304,11 @@ const toSql = Condition.fold<string>({
 	not: (part) => `NOT ${part}`,
 })
 
-const where =
-	yield *
-	toSql(Policy.residual(policy, { principal, action: "read", kind: "Post" }))
+const program = Effect.gen(function* () {
+	const where = yield* toSql(
+		Policy.residual(policy, { principal, action: "read", kind: "Post" }),
+	)
+})
 ```
 
 `fold` fails with `Untranslatable` on a predicate, unless you give a `predicate`
@@ -354,16 +356,17 @@ const AuthLive = Authorizer.layer(Auth, {
 Use it in a handler:
 
 ```ts
-yield * Auth.check({ action: "update", resource: post })
-yield * Auth.check({ action: "read", kind: "Post" })
-yield *
-	Auth.guard(
+const handler = Effect.gen(function* () {
+	yield* Auth.check({ action: "update", resource: post })
+	yield* Auth.check({ action: "read", kind: "Post" })
+	yield* Auth.guard(
 		{ action: "update", resource: post },
 		{
 			hide: () => PostNotFound.make({ id: post.id }),
 		},
 	)
-const where = yield * Auth.filter({ action: "read", kind: "Post" })
+	const where = yield* Auth.filter({ action: "read", kind: "Post" })
+})
 ```
 
 | Function          | What it does                                                                  |
