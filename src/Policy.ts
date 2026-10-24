@@ -489,6 +489,12 @@ export const rules: <
 		algorithm: options?.algorithm ?? "denyOverrides",
 		rules: Array.from(values),
 	})
+	// A value that is not a rule, such as a copy of a rule made with a spread,
+	// may keep the type fields of another rule, and it does not work in a
+	// generator. It is a mistake in the code, so it is a defect.
+	if (!Arr.every(node.rules, Rule.isRule)) {
+		throw new globalThis.Error("A value in the list is not a rule")
+	}
 	// A rule from a builder of another domain is a mistake in the code, so it
 	// is a defect. Two domains may have the same types, so the types do not
 	// find it.
@@ -568,6 +574,11 @@ type Combined<D extends Domain.Any, Ps extends ReadonlyArray<Any>> = Policy<
 >
 
 const sameDomain = (policies: ReadonlyArray<Any>): Domain.Any => {
+	// A copy of a policy made with a spread may keep the type fields of another
+	// policy. Only a policy value goes into a tree.
+	if (!Arr.every(policies, isPolicy)) {
+		throw new globalThis.Error("A value in the list is not a policy")
+	}
 	const domain = policies[0]!.domain
 	if (!Arr.every(policies, (policy) => policy.domain === domain)) {
 		throw new globalThis.Error(
@@ -993,7 +1004,8 @@ export const fitsKind = (
 	descriptor.actions.includes(request.action) &&
 	(request.field === undefined ||
 		descriptor.fieldPaths.includes(request.field) ||
-		Resource.hasPath(descriptor.schema, request.field))
+		Resource.hasPath(descriptor.schema, request.field) ||
+		Resource.hasGetter(descriptor.schema, request.field))
 
 const makeContext = (
 	domain: Domain.Any,
@@ -2022,30 +2034,6 @@ const refsIn = (
 		}
 	})
 
-/**
- * Tests if the first part of a path is a getter of a class Schema, such as a
- * getter of a `Principal.Class`. A condition reads such a field, and the
- * types of `$.principal` take it, so the check of a policy takes it too.
- */
-const hasGetter = (schema: unknown, path: string): boolean => {
-	const name = path.split(".")[0]!
-	const prototypes = Arr.unfold(
-		typeof schema === "function" ? (schema.prototype as unknown) : null,
-		(prototype) =>
-			isObjectValue(prototype) && prototype !== Object.prototype
-				? Option.some([prototype, Object.getPrototypeOf(prototype)] as const)
-				: Option.none(),
-	)
-	return Arr.some(
-		prototypes,
-		(prototype) =>
-			Object.getOwnPropertyDescriptor(prototype, name)?.get !== undefined,
-	)
-}
-
-const isObjectValue = (u: unknown): u is object =>
-	typeof u === "object" && u !== null
-
 interface Issue {
 	readonly path: ReadonlyArray<PropertyKey>
 	readonly issue: string
@@ -2113,8 +2101,9 @@ const validate = (
 							(descriptor) =>
 								descriptor.fieldPaths.includes(field) ||
 								// A key of a record, or a field deep in a recursive
-								// Schema.
-								Resource.hasPath(descriptor.schema, field),
+								// Schema, or a getter of a nested class.
+								Resource.hasPath(descriptor.schema, field) ||
+								Resource.hasGetter(descriptor.schema, field),
 						),
 				),
 				(field): Issue => ({
@@ -2128,7 +2117,7 @@ const validate = (
 					(ref) =>
 						!HashSet.has(principalPaths, ref) &&
 						!Resource.hasPath(domain.principal, ref) &&
-						!hasGetter(domain.principal, ref),
+						!Resource.hasGetter(domain.principal, ref),
 				),
 				(ref): Issue => ({
 					path: [...at, "when"],

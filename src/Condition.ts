@@ -2145,52 +2145,62 @@ const fix = (
 		}
 	})
 
-/** The number of tests of each field, in the order that the fields come. */
-type FieldCounts = ReadonlyArray<readonly [string, number]>
-
-const addCounts = (left: FieldCounts, right: FieldCounts): FieldCounts =>
-	Arr.reduce(right, left, (all, [field, count]) =>
-		Option.match(
-			Arr.findFirstIndex(all, ([name]) => name === field),
-			{
-				onNone: () => Arr.append(all, [field, count] as const),
-				onSome: (index) =>
-					Arr.map(all, (entry, at) =>
-						at === index ? ([entry[0], entry[1] + count] as const) : entry,
-					),
-			},
-		),
-	)
-
-const fieldCounts = (ast: Ast, memo: Map<Ast, FieldCounts>): FieldCounts =>
-	remember(memo, ast, (): FieldCounts => {
-		switch (ast._tag) {
+/**
+ * Counts the tests of each field. Each node is visited one time, so the work
+ * is the number of nodes, and the walk gives that work back for the budget.
+ * The counts and the seen nodes are a memo of this walk only.
+ */
+const countFields = (
+	ast: Ast,
+): {
+	readonly counts: MutableHashMap.MutableHashMap<string, number>
+	readonly work: number
+} => {
+	const counts = MutableHashMap.empty<string, number>()
+	// A native set: it must find a node by the node itself. See `remember`.
+	const seen = new Set<Ast>()
+	const visit = (node: Ast): void => {
+		if (seen.has(node)) {
+			return
+		}
+		seen.add(node)
+		switch (node._tag) {
 			case "Compare":
 			case "In":
 			case "Exists":
-				return [[ast.field, 1]]
+				MutableHashMap.set(
+					counts,
+					node.field,
+					Option.getOrElse(MutableHashMap.get(counts, node.field), () => 0) + 1,
+				)
+				return
 			case "And":
 			case "Or":
-				return Arr.reduce(ast.conditions, [] as FieldCounts, (all, child) =>
-					addCounts(all, fieldCounts(child, memo)),
-				)
+				return Arr.forEach(node.conditions, visit)
 			case "Not":
-				return fieldCounts(ast.condition, memo)
+				return visit(node.condition)
 			default:
-				return []
+				return
 		}
-	})
+	}
+	visit(ast)
+	return { counts, work: seen.size }
+}
 
 /**
  * Picks the next field to split on. A field comes before the fields below it,
- * so a value of a field can fix them. Then a field in more tests comes first.
+ * so a value of a field can fix them. Then a field in more tests comes first,
+ * and then the first name in order, so the choice is the same each time.
  */
-const nextField = (ast: Ast): string => {
+const nextField = (
+	counts: MutableHashMap.MutableHashMap<string, number>,
+): string => {
 	const depth = (field: string) => field.split(".").length
-	const [first, ...rest] = fieldCounts(ast, new Map())
+	const [first, ...rest] = Array.from(counts)
 	return Arr.reduce(rest, first!, (best, next) =>
 		depth(next[0]) < depth(best[0]) ||
-		(depth(next[0]) === depth(best[0]) && next[1] > best[1])
+		(depth(next[0]) === depth(best[0]) &&
+			(next[1] > best[1] || (next[1] === best[1] && next[0] < best[0])))
 			? next
 			: best,
 	)[0]
@@ -2219,7 +2229,12 @@ const searchAst = (
 	if (HashSet.has(state.failed, id)) {
 		return { assignment: Option.none(), state }
 	}
-	const field = nextField(current)
+	// Counting the fields reads the whole condition, so the budget counts it.
+	const counted = countFields(current)
+	if (state.steps + counted.work > search.budget) {
+		throw new OutOfBudget()
+	}
+	const field = nextField(counted.counts)
 	const cells = search.cells(field)
 	// The cells are tried in order, until one gives values. A fold over the
 	// cells does no work after a found answer, and it does not grow the stack

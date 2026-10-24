@@ -1661,6 +1661,123 @@ describe("Policy", () => {
 		)
 	})
 
+	describe("keeps the search safe for unusual fields", () => {
+		const denyCoverage = (
+			fields: Schema.Struct.Fields,
+			deny: Condition.Ast,
+		) => {
+			const Note = Resource.make("Note", { actions: ["read"], fields })
+			const Notes = Domain.make({ principal: Caller, resources: [Note] })
+			const policy = Policy.rules(Notes, [
+				Rule.builder(Notes).allow("read", Note),
+				Rule.make({
+					_tag: "Deny",
+					actions: ["read"],
+					resources: ["Note"],
+					when: deny as Condition.Condition,
+				}),
+			])
+			return Policy.coverage(policy, {
+				principal: alice,
+				action: "read",
+				kind: "Note",
+			})._tag
+		}
+		// The builder only makes the conditions, so its field types are simple.
+		const $ = Condition.builder<
+			{ readonly value: string | null; readonly constructor: string | null },
+			unknown,
+			unknown
+		>()
+
+		it("lets a Void field hold any value", () => {
+			assert.notStrictEqual(
+				denyCoverage({ value: Schema.Void }, $.exists("value")),
+				"All",
+			)
+		})
+
+		it("lets a field named constructor be missing", () => {
+			assert.notStrictEqual(
+				denyCoverage(
+					{ constructor: Schema.ObjectKeyword },
+					$.not($.exists("constructor")),
+				),
+				"All",
+			)
+		})
+	})
+
+	it("declares a recursive resource class", () => {
+		assert.doesNotThrow(() => {
+			class Folder extends Resource.Class<Folder>()("Folder", {
+				actions: ["read"],
+				fields: {
+					name: Schema.String,
+					parent: Schema.NullOr(
+						Schema.suspend((): Schema.Codec<Folder> => Folder),
+					),
+				},
+			}) {}
+			return Folder
+		})
+	})
+
+	it("does not take a copy of a rule or a policy made with a spread", () => {
+		const rule = Rule.builder(App).allow("read", Bot)
+		assert.throws(() => Policy.rules(App, [{ ...rule } as Rule.Any]))
+		const policy = Policy.empty(App)
+		assert.throws(() => Policy.any([{ ...policy } as Policy.Policy<App>]))
+	})
+
+	it("takes a field that is a getter of a nested class", () => {
+		class Info extends Schema.Class<Info>("Info")({ id: Schema.String }) {
+			get owner() {
+				return this.id
+			}
+		}
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { info: Info },
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		assert.doesNotThrow(() =>
+			Policy.define(Notes)(function* (_) {
+				yield* _.allow("read", Note, {
+					when: ($) => $.eq("info.owner", "alice"),
+				})
+			}),
+		)
+	})
+
+	it("counts the fields of a long condition in a short time", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { info: Schema.Record(Schema.String, Schema.String) },
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const $ = Condition.builder<
+			{ readonly info: { readonly [key: string]: string } },
+			unknown,
+			unknown
+		>()
+		const keys = Array.from(
+			{ length: 3000 },
+			(_, index) => `info.k${String(index)}`,
+		)
+		const policy = Policy.rules(Notes, [
+			Rule.make({
+				_tag: "Allow",
+				actions: ["read"],
+				resources: ["Note"],
+				when: $.and(...Arr.map(keys, (key) => $.exists(key as "info.x"))),
+			}),
+		])
+		const start = Date.now()
+		Policy.coverage(policy, { principal: alice, action: "read", kind: "Note" })
+		assert.isBelow(Date.now() - start, 3000)
+	})
+
 	it("searches many values of one field without a deep stack", () => {
 		const ids = Array.from({ length: 4000 }, (_, index) => `b${String(index)}`)
 		const policy = Policy.define(App)(function* (_) {

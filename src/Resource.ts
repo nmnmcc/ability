@@ -24,6 +24,7 @@
 import * as Arr from "effect/Array"
 import { Class as DataClass } from "effect/Data"
 import * as HashSet from "effect/HashSet"
+import * as Option from "effect/Option"
 import { hasProperty } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import * as SchemaAST from "effect/SchemaAST"
@@ -173,6 +174,69 @@ export interface Options<
  * know a resource.
  */
 class ResourceDescriptor extends DataClass<Descriptor> {}
+
+/** The prototypes of a class, below `Object.prototype`. */
+const prototypesOf = (schema: unknown): ReadonlyArray<object> =>
+	Arr.unfold(
+		typeof schema === "function" ? (schema.prototype as unknown) : null,
+		(prototype) =>
+			typeof prototype === "object" &&
+			prototype !== null &&
+			prototype !== Object.prototype
+				? Option.some([prototype, Object.getPrototypeOf(prototype)] as const)
+				: Option.none(),
+	)
+
+/**
+ * Gives the Schemas inside a field Schema: the Schema of an optional field,
+ * and the members of a union, such as `Schema.NullOr`.
+ */
+const innerSchemas = (schema: unknown): ReadonlyArray<unknown> =>
+	hasProperty(schema, "members") && Array.isArray(schema.members)
+		? Arr.flatMap(schema.members, innerSchemas)
+		: hasProperty(schema, "schema")
+			? innerSchemas(schema.schema)
+			: [schema]
+
+/**
+ * Tests if a path names a getter of a class Schema, such as a getter of a
+ * `Schema.Class` or a `Principal.Class`, at its root or in a nested field. A
+ * condition reads such a field, and the types of a condition take it, so the
+ * check of a policy takes it too. It reads the Schema objects, because the
+ * class with the getter is not in the Schema nodes.
+ *
+ * @stability stable
+ * @category predicates
+ * @since 0.5.0
+ */
+export const hasGetter = (schema: unknown, path: string): boolean =>
+	getterAt(schema, path.split("."))
+
+const getterAt = (schema: unknown, names: ReadonlyArray<string>): boolean => {
+	const [name, ...rest] = names
+	if (name === undefined) {
+		return false
+	}
+	return Arr.some(innerSchemas(schema), (inner) => {
+		if (
+			Arr.some(
+				prototypesOf(inner),
+				(prototype) =>
+					Object.getOwnPropertyDescriptor(prototype, name)?.get !== undefined,
+			)
+		) {
+			return true
+		}
+		const fields: unknown = hasProperty(inner, "fields")
+			? inner.fields
+			: undefined
+		return (
+			hasProperty(fields, name) &&
+			rest.length > 0 &&
+			getterAt((fields as Record<string, unknown>)[name], rest)
+		)
+	})
+}
 
 /**
  * Gives the struct of a `Schema.Class`. A class is a declaration with one
@@ -615,10 +679,11 @@ const domainOfType = (
 	switch (ast._tag) {
 		case "Null":
 		case "Undefined":
-		case "Void":
 			return nullDomain
 		case "Never":
 			return emptyDomain
+		// `Schema.Void` takes any value, as `Schema.Unknown` does.
+		case "Void":
 		case "Unknown":
 		case "Any":
 			return anyDomain
@@ -688,7 +753,10 @@ const domainAt = (
 			)
 			if (property !== undefined) {
 				const inner = domainAt(property.type, names, index + 1, new Set())
-				return SchemaAST.isOptional(property.type)
+				// A field that may be missing may be `null`. So may a field with a
+				// name of `Object.prototype`: a condition reads it only when a
+				// value gives it another value.
+				return SchemaAST.isOptional(property.type) || name in Object.prototype
 					? joinDomains([nullDomain, inner])
 					: inner
 			}
@@ -739,15 +807,49 @@ export const domainOf = (schema: Schema.Top, path: string): FieldDomain =>
 	// No cache here: a search keeps the cells of each field for itself.
 	domainAt(schema.ast, path.split("."), 0, new Set())
 
-const makeDescriptor = (
+/**
+ * Checks the names of the top fields of a resource at once, when it is made.
+ * The names of nested fields are checked when the descriptor is made.
+ */
+const checkFields = (
 	kind: string,
 	options: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
-): Descriptor => {
+): void => {
 	// The kind of a value comes from its `_tag`. A field with this name could
 	// give a value another kind, so it is a defect.
 	if (Object.hasOwn(options.fields, "_tag")) {
 		throw new Error(`The resource "${kind}" may not have a field "_tag"`)
 	}
+	Arr.map(Object.keys(options.fields), (name) => {
+		if (name.includes(".")) {
+			throw new Error(`A field name may not have a dot: "${name}"`)
+		}
+		if (name === "") {
+			throw new Error("A field name may not be empty")
+		}
+	})
+}
+
+/**
+ * Gives a value that is made on first use, and then kept. The descriptor of a
+ * resource reads its Schema, and a recursive Schema refers to the resource
+ * class, so it can not be read while the class is made. The cell belongs to
+ * one resource.
+ */
+const lazy = <A>(make: () => A): (() => A) => {
+	const cell: { value?: A } = {}
+	return () => {
+		if (!("value" in cell)) {
+			cell.value = make()
+		}
+		return cell.value as A
+	}
+}
+
+const makeDescriptor = (
+	kind: string,
+	options: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
+): Descriptor => {
 	const refs: Record<string, FieldRef<string>> = Object.fromEntries(
 		Arr.map(Object.keys(options.fields), (key) => [
 			key,
@@ -843,12 +945,15 @@ export const Class: <Self = never>(
 		kind: string,
 		options: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
 	) => {
+		checkFields(kind, options)
 		const Base = Schema.TaggedClass<any>(identifier)(kind, options.fields)
-		const descriptor = makeDescriptor(kind, options)
+		const descriptor = lazy(() => makeDescriptor(kind, options))
 		return class extends Base {
-			static readonly descriptor = descriptor
+			static get descriptor() {
+				return descriptor()
+			}
 			static readonly kind = kind
-			static readonly actions = descriptor.actions
+			static readonly actions = [...options.actions]
 		}
 	}) as never
 
@@ -897,12 +1002,15 @@ export const make: <
 	kind: string,
 	options: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
 ) => {
+	checkFields(kind, options)
 	const schema = Schema.TaggedStruct(kind, options.fields)
-	const descriptor = makeDescriptor(kind, options)
+	const descriptor = lazy(() => makeDescriptor(kind, options))
 	return {
-		descriptor,
+		get descriptor() {
+			return descriptor()
+		},
 		kind,
-		actions: descriptor.actions,
+		actions: [...options.actions],
 		schema,
 		make: (input: object) => schema.make(input as never),
 	}
