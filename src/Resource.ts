@@ -24,7 +24,7 @@
 import { Class as DataClass } from "effect/Data"
 import { hasProperty } from "effect/Predicate"
 import * as Schema from "effect/Schema"
-import type * as SchemaAST from "effect/SchemaAST"
+import * as SchemaAST from "effect/SchemaAST"
 
 /**
  * One part of a resource path. A string is a fixed part. A field reference
@@ -398,6 +398,221 @@ const resolves = (
 		default:
 			return false
 	}
+}
+
+/**
+ * The values that one field of a resource may hold, as a condition sees them.
+ * A missing field and `undefined` are `null`. The domain may be larger than
+ * the real set of values: Schema checks other than finite and integer checks
+ * are left out. A larger domain only makes a check say "no" more often.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.5.0
+ */
+export interface FieldDomain {
+	/** The field may be `null` or missing. */
+	readonly null: boolean
+	/** The field may hold a value with parts, or a value that is not a scalar. */
+	readonly object: boolean
+	/** The field may hold `true` and `false`. */
+	readonly boolean: boolean
+	/** The field may hold any string. */
+	readonly string: boolean
+	/** The numbers that the field may hold. */
+	readonly number: "none" | "integer" | "finite" | "any"
+	/** Single values that the field may hold, other than the ones above. */
+	readonly literals: ReadonlyArray<string | number | boolean>
+}
+
+const numberOrder = ["none", "integer", "finite", "any"] as const
+
+const emptyDomain: FieldDomain = {
+	null: false,
+	object: false,
+	boolean: false,
+	string: false,
+	number: "none",
+	literals: [],
+}
+
+const nullDomain: FieldDomain = { ...emptyDomain, null: true }
+
+const objectDomain: FieldDomain = { ...emptyDomain, object: true }
+
+/**
+ * The domain of a field with no Schema: any value.
+ *
+ * @stability stable
+ * @category constants
+ * @since 0.5.0
+ */
+export const anyDomain: FieldDomain = {
+	null: true,
+	object: true,
+	boolean: true,
+	string: true,
+	number: "any",
+	literals: [],
+}
+
+const joinDomains = (domains: ReadonlyArray<FieldDomain>): FieldDomain =>
+	domains.reduce(
+		(left, right) => ({
+			null: left.null || right.null,
+			object: left.object || right.object,
+			boolean: left.boolean || right.boolean,
+			string: left.string || right.string,
+			number:
+				numberOrder.indexOf(left.number) >= numberOrder.indexOf(right.number)
+					? left.number
+					: right.number,
+			literals: [...left.literals, ...right.literals],
+		}),
+		emptyDomain,
+	)
+
+const hasCheck = (
+	checks: ReadonlyArray<SchemaAST.Check<never>>,
+	id: string,
+): boolean =>
+	checks.some(
+		(check) =>
+			check.annotations?.representation?.id === id ||
+			(check._tag === "FilterGroup" && hasCheck(check.checks, id)),
+	)
+
+/** The domain of the values of a Schema node. */
+const domainOfType = (
+	ast: SchemaAST.AST,
+	open: ReadonlySet<SchemaAST.AST>,
+): FieldDomain => {
+	switch (ast._tag) {
+		case "Null":
+		case "Undefined":
+		case "Void":
+			return nullDomain
+		case "Never":
+			return emptyDomain
+		case "Unknown":
+		case "Any":
+			return anyDomain
+		case "String":
+		case "TemplateLiteral":
+			return { ...emptyDomain, string: true }
+		case "Number": {
+			const checks = ast.checks ?? []
+			return {
+				...emptyDomain,
+				number: hasCheck(checks, "effect/schema/isInt")
+					? "integer"
+					: hasCheck(checks, "effect/schema/isFinite")
+						? "finite"
+						: "any",
+			}
+		}
+		case "Boolean":
+			return { ...emptyDomain, boolean: true }
+		case "Literal":
+			return typeof ast.literal === "bigint"
+				? objectDomain
+				: { ...emptyDomain, literals: [ast.literal] }
+		case "Enum":
+			return { ...emptyDomain, literals: ast.enums.map(([, value]) => value) }
+		case "Union":
+			return joinDomains(ast.types.map((type) => domainOfType(type, open)))
+		case "Suspend":
+			return open.has(ast)
+				? anyDomain
+				: domainOfType(ast.thunk(), new Set([...open, ast]))
+		default:
+			return objectDomain
+	}
+}
+
+const domainAt = (
+	ast: SchemaAST.AST,
+	names: ReadonlyArray<string>,
+	index: number,
+	open: ReadonlySet<SchemaAST.AST>,
+): FieldDomain => {
+	if (index === names.length) {
+		return domainOfType(ast, open)
+	}
+	const name = names[index]!
+	switch (ast._tag) {
+		case "Objects": {
+			const property = ast.propertySignatures.find(
+				(signature) => signature.name === name,
+			)
+			if (property !== undefined) {
+				const inner = domainAt(property.type, names, index + 1, new Set())
+				return SchemaAST.isOptional(property.type)
+					? joinDomains([nullDomain, inner])
+					: inner
+			}
+			// A key of a record may be missing.
+			return joinDomains([
+				nullDomain,
+				...ast.indexSignatures
+					.filter((signature) =>
+						Schema.is(Schema.make(signature.parameter))(name),
+					)
+					.map((signature) =>
+						domainAt(signature.type, names, index + 1, new Set()),
+					),
+			])
+		}
+		case "Union":
+			return joinDomains(
+				ast.types.map((type) => domainAt(type, names, index, open)),
+			)
+		case "Suspend":
+			return open.has(ast)
+				? anyDomain
+				: domainAt(ast.thunk(), names, index, new Set([...open, ast]))
+		case "Declaration": {
+			const inner = classStruct(ast)
+			return inner === undefined
+				? anyDomain
+				: domainAt(inner, names, index, open)
+		}
+		case "Arrays":
+		case "ObjectKeyword":
+		case "Unknown":
+		case "Any":
+			// A path may go into these values, and the Schema does not say what
+			// is there.
+			return anyDomain
+		default:
+			// A path does not go into a scalar, so the field is `null`.
+			return nullDomain
+	}
+}
+
+const domains = new WeakMap<SchemaAST.AST, Map<string, FieldDomain>>()
+
+/**
+ * Gives the domain of a field of a Schema, by its path with dots. A path that
+ * the Schema does not name gives `null`, as a condition reads such a field.
+ *
+ * @stability stable
+ * @category getters
+ * @since 0.5.0
+ */
+export const domainOf = (schema: Schema.Top, path: string): FieldDomain => {
+	let cache = domains.get(schema.ast)
+	if (cache === undefined) {
+		cache = new Map()
+		domains.set(schema.ast, cache)
+	}
+	const cached = cache.get(path)
+	if (cached !== undefined) {
+		return cached
+	}
+	const domain = domainAt(schema.ast, path.split("."), 0, new Set())
+	cache.set(path, domain)
+	return domain
 }
 
 const makeDescriptor = (

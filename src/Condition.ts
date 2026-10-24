@@ -32,7 +32,7 @@ import type * as Option from "effect/Option"
 import { dual } from "effect/Function"
 import { hasProperty, isObject } from "effect/Predicate"
 import * as Schema from "effect/Schema"
-import type * as Resource from "./Resource.ts"
+import * as Resource from "./Resource.ts"
 
 /**
  * A value that a condition can compare.
@@ -1676,6 +1676,500 @@ export const fields = (condition: Ast): ReadonlyArray<string> => {
 	visit(condition)
 	return Array.from(output)
 }
+
+// Satisfiability
+
+/**
+ * Values of fields, as a nested object. A field that is not in it may have any
+ * value. A value with parts that the search does not look into, such as a
+ * date, is an empty object.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.5.0
+ */
+export interface Example {
+	readonly [field: string]: unknown
+}
+
+/**
+ * The answer of {@link satisfiable}:
+ * - `Satisfiable`: some value makes the condition true. `example` is one.
+ * - `Unsatisfiable`: no value makes the condition true.
+ * - `Unknown`: the search can not say. The condition has a predicate, or the
+ *   search went past its budget.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.5.0
+ */
+export type Satisfiability = Data.TaggedEnum<{
+	Satisfiable: { readonly example: Example }
+	Unsatisfiable: {}
+	Unknown: { readonly reason: "predicate" | "budget" }
+}>
+
+const satisfiability = Data.taggedEnum<Satisfiability>()
+
+/**
+ * The options of {@link satisfiable}.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.5.0
+ */
+export interface SatisfiableOptions {
+	/**
+	 * The Schema of the values. It gives the domain of each field. Without
+	 * it, a field may have any value.
+	 */
+	readonly schema?: Schema.Top | undefined
+	/** The most nodes that the search may visit. The default is 1000000. */
+	readonly budget?: number | undefined
+}
+
+/** Stands for a value with parts, such as a struct or a date. */
+const opaque: object = Object.freeze({})
+
+/** Marks a field that a step of the search did not fix. */
+const free: unique symbol = Symbol("free")
+
+const sameValue = (left: unknown, right: unknown): boolean =>
+	left === right || (Number.isNaN(left) && Number.isNaN(right))
+
+/** The least number that is greater than `value`. */
+const nextUp = (value: number): number => {
+	if (Number.isNaN(value) || value === Infinity) {
+		return value
+	}
+	if (value === 0) {
+		return Number.MIN_VALUE
+	}
+	const view = new DataView(new ArrayBuffer(8))
+	view.setFloat64(0, value)
+	const bits = view.getBigUint64(0)
+	view.setBigUint64(0, value > 0 ? bits + 1n : bits - 1n)
+	return view.getFloat64(0)
+}
+
+/**
+ * Gives one number from each part of the number line that the constants
+ * make: each constant, and one number between each two neighbours when there
+ * is one. The ends of the domain are in the list too.
+ */
+const numberCells = (
+	kind: "integer" | "finite" | "any",
+	constants: ReadonlyArray<number>,
+): ReadonlyArray<number> => {
+	const integer = kind === "integer"
+	const low = integer
+		? Number.MIN_SAFE_INTEGER
+		: kind === "finite"
+			? -Number.MAX_VALUE
+			: -Infinity
+	const high = integer
+		? Number.MAX_SAFE_INTEGER
+		: kind === "finite"
+			? Number.MAX_VALUE
+			: Infinity
+	const points = constants
+		.filter((value) => !Number.isNaN(value))
+		.flatMap((value) =>
+			integer && Number.isFinite(value)
+				? [Math.floor(value), Math.ceil(value)]
+				: [value],
+		)
+		.filter((value) => value >= low && value <= high)
+	// `0` and `-0` are one point: every test gives the same answer for both.
+	const sorted = [...new Set([low, high, ...points])].sort((a, b) => a - b)
+	const cells: Array<number> = []
+	sorted.forEach((value, index) => {
+		cells.push(value)
+		const after = sorted[index + 1]
+		if (after === undefined) {
+			return
+		}
+		const between = integer ? value + 1 : nextUp(value)
+		if (between < after) {
+			cells.push(between)
+		}
+	})
+	if (kind === "any") {
+		cells.push(Number.NaN)
+	}
+	return cells
+}
+
+/**
+ * Gives one string from each part that the constants make. Strings are in the
+ * order of their UTF-16 code units, as `<` sees them. The least string after
+ * `a` is `a + "\0"`, so there is a string between `a` and `b` exactly when
+ * `b` is not `a + "\0"`.
+ */
+const stringCells = (
+	constants: ReadonlyArray<string>,
+): ReadonlyArray<string> => {
+	const sorted = [...new Set(constants)].sort()
+	if (sorted.length === 0) {
+		return [""]
+	}
+	const cells: Array<string> = sorted[0] === "" ? [] : [""]
+	sorted.forEach((value, index) => {
+		cells.push(value)
+		const next = `${value}\0`
+		if (next !== sorted[index + 1]) {
+			cells.push(next)
+		}
+	})
+	return cells
+}
+
+/**
+ * Gives one value from each cell of a field. Each test of a field compares it
+ * with constants, so the constants cut the domain into a few cells, and every
+ * test gives the same answer for all the values of one cell.
+ */
+const cellsOf = (
+	domain: Resource.FieldDomain,
+	constants: ReadonlyArray<Scalar>,
+): ReadonlyArray<unknown> => {
+	const cells: Array<unknown> = []
+	const add = (value: unknown) => {
+		if (!cells.some((cell) => sameValue(cell, value))) {
+			cells.push(value)
+		}
+	}
+	if (domain.null) add(null)
+	if (domain.object) add(opaque)
+	if (domain.boolean) {
+		add(true)
+		add(false)
+	}
+	if (domain.string) {
+		stringCells(constants.filter((value) => typeof value === "string")).forEach(
+			add,
+		)
+	}
+	if (domain.number !== "none") {
+		numberCells(
+			domain.number,
+			constants.filter((value) => typeof value === "number"),
+		).forEach(add)
+	}
+	domain.literals.forEach(add)
+	return cells
+}
+
+class OutOfBudget {}
+
+interface Search {
+	readonly cells: (field: string) => ReadonlyArray<unknown>
+	/** The conditions that the search found to be unsatisfiable. */
+	readonly failed: Set<number>
+	readonly budget: number
+	steps: number
+}
+
+const literalOf = (operand: Operand): Scalar => {
+	if (operand._tag !== "Literal") {
+		throw new Error(
+			"Condition.satisfiable needs a condition with no principal fields. Call Condition.partial first.",
+		)
+	}
+	return operand.value
+}
+
+/**
+ * The value of the field `name` after `field` gets `value`. A field below
+ * `field` is `null` when `value` is not a value with parts.
+ */
+const fixedValue = (
+	name: string,
+	field: string,
+	value: unknown,
+): unknown | typeof free =>
+	name === field
+		? value
+		: name.startsWith(`${field}.`)
+			? value === opaque
+				? free
+				: null
+			: free
+
+const testFixed = (ast: Compare | In | Exists, value: unknown): boolean => {
+	switch (ast._tag) {
+		case "Compare":
+			return testCompare(ast.op, value, literalOf(ast.value))
+		case "In":
+			return ast.values.some((operand) => literalOf(operand) === value)
+		case "Exists":
+			return value !== null
+	}
+}
+
+/** Puts one value into a field, and into the fields below it. */
+const fix = (
+	ast: Ast,
+	field: string,
+	value: unknown,
+	search: Search,
+	done: Map<Ast, Ast>,
+): Ast => {
+	const cached = done.get(ast)
+	if (cached !== undefined) {
+		return cached
+	}
+	search.steps = search.steps + 1
+	if (search.steps > search.budget) {
+		throw new OutOfBudget()
+	}
+	let result: Ast
+	switch (ast._tag) {
+		case "Compare":
+		case "In":
+		case "Exists": {
+			const known = fixedValue(ast.field, field, value)
+			result = known === free ? ast : testFixed(ast, known) ? always : never
+			break
+		}
+		case "And":
+			result = makeAnd(
+				...ast.conditions.map((child) =>
+					fix(child, field, value, search, done),
+				),
+			)
+			break
+		case "Or":
+			result = makeOr(
+				...ast.conditions.map((child) =>
+					fix(child, field, value, search, done),
+				),
+			)
+			break
+		case "Not":
+			result = makeNot(fix(ast.condition, field, value, search, done))
+			break
+		default:
+			result = ast
+	}
+	done.set(ast, result)
+	return result
+}
+
+/**
+ * Picks the next field to split on. A field comes before the fields below it,
+ * so a value of a field can fix them. Then a field in more tests comes first.
+ */
+const nextField = (ast: Ast): string => {
+	const counts = new Map<string, number>()
+	const seen = new Set<Ast>()
+	const visit = (node: Ast): void => {
+		if (seen.has(node)) {
+			return
+		}
+		seen.add(node)
+		switch (node._tag) {
+			case "Compare":
+			case "In":
+			case "Exists":
+				counts.set(node.field, (counts.get(node.field) ?? 0) + 1)
+				return
+			case "And":
+			case "Or":
+				node.conditions.forEach(visit)
+				return
+			case "Not":
+				visit(node.condition)
+				return
+			default:
+				return
+		}
+	}
+	visit(ast)
+	const depth = (field: string) => field.split(".").length
+	let best: string | undefined
+	for (const [field, count] of counts) {
+		if (
+			best === undefined ||
+			depth(field) < depth(best) ||
+			(depth(field) === depth(best) && count > counts.get(best)!)
+		) {
+			best = field
+		}
+	}
+	return best!
+}
+
+/**
+ * Finds values of the fields that make the condition true. It splits on one
+ * field at a time, and tries one value from each cell of the field.
+ */
+const searchAst = (
+	ast: Ast,
+	search: Search,
+	assignment: ReadonlyArray<readonly [string, unknown]>,
+): ReadonlyArray<readonly [string, unknown]> | undefined => {
+	const current = simplifyAst(ast)
+	if (current._tag === "True") {
+		return assignment
+	}
+	if (current._tag === "False") {
+		return undefined
+	}
+	// A condition with the same structure has the same free fields, so its
+	// answer is the same.
+	const id = structureId(current)
+	if (search.failed.has(id)) {
+		return undefined
+	}
+	const field = nextField(current)
+	for (const cell of search.cells(field)) {
+		const found = searchAst(
+			fix(current, field, cell, search, new Map()),
+			search,
+			[...assignment, [field, cell]],
+		)
+		if (found !== undefined) {
+			return found
+		}
+	}
+	search.failed.add(id)
+	return undefined
+}
+
+const exampleOf = (
+	assignment: ReadonlyArray<readonly [string, unknown]>,
+): Example => {
+	const root: Record<string, unknown> = {}
+	for (const [field, value] of assignment) {
+		const names = field.split(".")
+		let cursor = root
+		names.slice(0, -1).forEach((name) => {
+			const inner = cursor[name]
+			if (!isObject(inner) || inner === opaque) {
+				cursor[name] = {}
+			}
+			cursor = cursor[name] as Record<string, unknown>
+		})
+		const last = names[names.length - 1]!
+		if (!(value === opaque && isObject(cursor[last]))) {
+			cursor[last] = value === opaque ? {} : value
+		}
+	}
+	return root
+}
+
+/** Gives the constants that the tests of each field use. */
+const constantsOf = (ast: Ast): Map<string, Array<Scalar>> => {
+	const output = new Map<string, Array<Scalar>>()
+	const seen = new Set<Ast>()
+	const add = (field: string, values: ReadonlyArray<Scalar>) => {
+		output.set(field, [...(output.get(field) ?? []), ...values])
+	}
+	const visit = (node: Ast): void => {
+		if (seen.has(node)) {
+			return
+		}
+		seen.add(node)
+		switch (node._tag) {
+			case "Compare":
+				add(node.field, [literalOf(node.value)])
+				return
+			case "In":
+				add(node.field, node.values.map(literalOf))
+				return
+			case "Exists":
+				add(node.field, [])
+				return
+			case "Under":
+				throw new Error(
+					"Condition.satisfiable needs a condition with no Under nodes. Call Condition.partial first.",
+				)
+			case "And":
+			case "Or":
+				node.conditions.forEach(visit)
+				return
+			case "Not":
+				visit(node.condition)
+				return
+			default:
+				return
+		}
+	}
+	visit(ast)
+	return output
+}
+
+const satisfiableAst = (
+	ast: Ast,
+	options: SatisfiableOptions = {},
+): Satisfiability => {
+	if (hasPredicate(ast)) {
+		return satisfiability.Unknown({ reason: "predicate" })
+	}
+	const constants = constantsOf(ast)
+	const schema = options.schema
+	const cells = new Map<string, ReadonlyArray<unknown>>()
+	const search: Search = {
+		cells: (field) => {
+			let found = cells.get(field)
+			if (found === undefined) {
+				found = cellsOf(
+					schema === undefined
+						? Resource.anyDomain
+						: Resource.domainOf(schema, field),
+					constants.get(field) ?? [],
+				)
+				cells.set(field, found)
+			}
+			return found
+		},
+		failed: new Set(),
+		budget: options.budget ?? 1_000_000,
+		steps: 0,
+	}
+	try {
+		const found = searchAst(ast, search, [])
+		return found === undefined
+			? satisfiability.Unsatisfiable()
+			: satisfiability.Satisfiable({ example: exampleOf(found) })
+	} catch (error) {
+		if (error instanceof OutOfBudget) {
+			return satisfiability.Unknown({ reason: "budget" })
+		}
+		throw error
+	}
+}
+
+/**
+ * Tests if some value makes a condition true, and gives such a value.
+ *
+ * Call {@link partial} first: the condition must have no principal fields and
+ * no `Under` nodes. A condition with a predicate gives `Unknown`.
+ *
+ * The answer is exact. Each test of a condition compares one field with
+ * constants, so the constants cut the values of each field into a few cells.
+ * The search tries one value from each cell, one field at a time. The values
+ * of a field come from the Schema in `options.schema`: its literals, `null`
+ * for a nullable or optional field, and finite or integer numbers. Other
+ * Schema checks are left out, so the search may try a value that such a check
+ * stops. Then `Satisfiable` may be the answer where the check makes it
+ * `Unsatisfiable`, never the other way.
+ *
+ * The problem is as hard as boolean satisfiability, so the search has a
+ * budget. Past it, the answer is `Unknown`.
+ *
+ * @stability stable
+ * @category evaluation
+ * @since 0.5.0
+ */
+export const satisfiable: {
+	(options?: SatisfiableOptions): (condition: Any) => Satisfiability
+	(condition: Any, options?: SatisfiableOptions): Satisfiability
+} = dual(
+	(args) => isObject(args[0]) && hasProperty(args[0], "_tag"),
+	satisfiableAst,
+) as never
 
 /**
  * The JSON form of a condition with no predicate.

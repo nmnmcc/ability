@@ -265,7 +265,31 @@ export type FieldlessTarget<D> = {
 }[Domain.Kind<D>]
 
 /**
- * One act on one kind of resource, with no value.
+ * A scope: a part of a kind, as a condition on its values. It gets a builder
+ * with the types of the kind and of the principal, like the condition of a
+ * rule. A scope is plain data, so it can not have a predicate.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.5.0
+ */
+export type Scope<D, K extends string> = (
+	builder: Condition.Builder<
+		Domain.DataOf<D, K>,
+		Domain.ValueOf<D, K>,
+		Domain.Principal<D>
+	>,
+) => Condition.Condition<
+	never,
+	never,
+	never,
+	Condition.Reads<Domain.ValueOf<D, K>, Domain.Principal<D>>
+>
+
+/**
+ * One act on one kind of resource, with no value. With `within`, the target is
+ * only the values of the kind in the scope. Without it, the target is every
+ * value of the kind.
  *
  * @stability stable
  * @category models
@@ -276,6 +300,8 @@ export type KindTarget<D> = {
 		readonly action: Domain.ActionOf<D, K>
 		readonly kind: K
 		readonly field?: Condition.FieldPath<Domain.DataOf<D, K>>
+		/** The part of the kind. See {@link Scope}. */
+		readonly within?: Scope<D, K>
 		/** A target has a resource value or a kind, never both. */
 		readonly resource?: never
 	}
@@ -1097,6 +1123,11 @@ export interface AnyKindRequest {
 	readonly action: string
 	readonly kind: string
 	readonly field?: string | undefined
+	/**
+	 * A scope needs the types of the domain for its builder. With the request
+	 * first, the domain is not known yet, so give the policy first.
+	 */
+	readonly within?: never
 }
 
 /**
@@ -1395,30 +1426,109 @@ const usesPredicateOnce = (node: Node, context: ResidualContext): boolean => {
 	}
 }
 
-const residualsAny = (
-	policy: Any,
-	request: {
-		readonly principal: object
-		readonly action: string
-		readonly kind: string
-		readonly field?: string | undefined
-	},
-): Pair => {
+const isScopeValue = (operand: Condition.Operand): boolean =>
+	operand._tag === "Principal" ||
+	operand.value === null ||
+	typeof operand.value === "string" ||
+	typeof operand.value === "number" ||
+	typeof operand.value === "boolean"
+
+/**
+ * Tests that a scope is plain data. A predicate, or a value that a condition
+ * can not hold, such as `undefined` from a route parameter, is a defect: such
+ * a scope could make a check pass on the wrong values.
+ */
+const checkScope = (ast: Ast, seen: Set<Ast> = new Set()): void => {
+	if (seen.has(ast)) {
+		return
+	}
+	seen.add(ast)
+	const fail = (reason: string) => {
+		throw new globalThis.Error(`A scope ${reason}`)
+	}
+	switch (ast._tag) {
+		case "Predicate":
+			return fail("can not have a predicate")
+		case "Compare":
+			return isScopeValue(ast.value)
+				? undefined
+				: fail(`has a value for "${ast.field}" that is not a scalar`)
+		case "In":
+			return ast.values.every(isScopeValue)
+				? undefined
+				: fail(`has a value for "${ast.field}" that is not a scalar`)
+		case "Under":
+			return ast.prefix.every(isScopeValue)
+				? undefined
+				: fail("has a path part that is not a scalar")
+		case "And":
+		case "Or":
+			return ast.conditions.forEach((child) => checkScope(child, seen))
+		case "Not":
+			return checkScope(ast.condition, seen)
+		default:
+			return
+	}
+}
+
+/**
+ * Gives the condition of a scope, with the principal and the path in it.
+ * With no scope, it is `True`.
+ */
+const scopeOf = (within: unknown, input: ResidualContext["input"]): Ast => {
+	if (within === undefined) {
+		return always
+	}
+	const ast = (within as (builder: unknown) => Ast)(Condition.builder())
+	checkScope(ast)
+	return Condition.partial(ast as Condition.Condition, input)
+}
+
+/** A request about a kind with no types, with the scope of a target. */
+interface ScopedRequest {
+	readonly principal: object
+	readonly action: string
+	readonly kind: string
+	readonly field?: string | undefined
+	readonly within?: unknown
+}
+
+/** The scope of a request, and the residual conditions inside it. */
+interface Scoped extends Pair {
+	readonly scope: Ast
+	readonly schema: Schema.Top | undefined
+}
+
+const residualsAny = (policy: Any, request: ScopedRequest): Pair =>
+	scopedResiduals(policy, request)
+
+const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 	const descriptor = policy.domain.resources.get(request.kind)
 	if (descriptor === undefined || !fitsKind(descriptor, request)) {
-		return { allow: never, deny: never }
+		return { scope: never, allow: never, deny: never, schema: undefined }
+	}
+	const input = { principal: request.principal, path: descriptor.path }
+	const scope = scopeOf(request.within, input)
+	const inScope = (pair: Pair): Scoped => ({
+		scope,
+		allow: and(scope, pair.allow),
+		deny: and(scope, pair.deny),
+		schema: descriptor.schema,
+	})
+	if (scope._tag === "False") {
+		return inScope({ allow: never, deny: never })
 	}
 	const context: ResidualContext = {
 		action: request.action,
 		kind: request.kind,
 		field: request.field,
-		input: { principal: request.principal, path: descriptor.path },
+		input,
 		pairs: new Map(),
 		predicates: new Map(),
 	}
 	if (!usesPredicate(nodeOf(policy), context)) {
 		try {
-			return residualNode(nodeOf(policy), context)
+			return inScope(residualNode(nodeOf(policy), context))
 		} catch (error) {
 			// The type of the residual of a plain policy says that it has no
 			// predicate, so it can not be the predicate below. The policy is too
@@ -1460,7 +1570,9 @@ const residualsAny = (
 				? Effect.map(decision(value), (result) => result._tag === tag)
 				: Effect.succeed(false),
 		)
-	return { allow: test("Allow"), deny: test("Deny") }
+	// The scope comes first in each `And`, so the policy runs only on values
+	// in the scope.
+	return inScope({ allow: test("Allow"), deny: test("Deny") })
 }
 
 /**
@@ -1468,6 +1580,11 @@ const residualsAny = (
  * request. It has no principal fields and no `Under` nodes, so you can give it
  * to `Condition.fold`. It is `True` when the policy allows every value of the
  * kind, and `False` when it allows none.
+ *
+ * With a scope (`within`), the condition is the scope and the residual
+ * together, so it is false for every value outside the scope. Give the policy
+ * first to use a scope. The condition comes from its parts, with no search. To
+ * know if it allows all of the scope or none of it, use {@link coverage}.
  *
  * When a rule that the request may use has a predicate, the condition is one
  * predicate with the name `"policy"`. It runs the whole policy for each value,
@@ -1520,6 +1637,128 @@ export const residuals: {
 		request: Req,
 	): Residuals<E, R, O, ResidualReads<D, Req["kind"]>>
 } = dual(2, residualsAny) as never
+
+/**
+ * How much of a scope a policy allows. In each case, `condition` is the exact
+ * condition on the values in the scope that the policy allows: give it to
+ * `Condition.fold` for a list query.
+ * - `All`: the policy allows every value in the scope. `condition` is the
+ *   scope (`True` with no scope).
+ * - `None`: the policy allows no value in the scope. `condition` is `False`.
+ *   An empty scope is `None` too, so a check on a scope that has a mistake,
+ *   such as a principal field with no value, never passes.
+ * - `Some`: the policy allows some values in the scope and not others.
+ *   `allowed` is an example of a value that it allows, and `refused` of a
+ *   value in the scope that it does not allow.
+ * - `Unknown`: the answer needs a predicate, or the search went past its
+ *   budget.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.5.0
+ */
+export type Coverage<
+	E = never,
+	R = never,
+	O = never,
+	I = unknown,
+> = Data.TaggedEnum<{
+	All: { readonly condition: Condition.Condition<E, R, O, I> }
+	None: { readonly condition: Condition.Condition<E, R, O, I> }
+	Some: {
+		readonly condition: Condition.Condition<E, R, O, I>
+		readonly allowed: Condition.Example
+		readonly refused: Condition.Example
+	}
+	Unknown: {
+		readonly condition: Condition.Condition<E, R, O, I>
+		readonly reason: "predicate" | "budget"
+	}
+}>
+
+/** A {@link Coverage} with no types. */
+type AnyCoverage = Data.TaggedEnum<{
+	All: { readonly condition: Ast }
+	None: { readonly condition: Ast }
+	Some: {
+		readonly condition: Ast
+		readonly allowed: Condition.Example
+		readonly refused: Condition.Example
+	}
+	Unknown: {
+		readonly condition: Ast
+		readonly reason: "predicate" | "budget"
+	}
+}>
+
+const coverages = Data.taggedEnum<AnyCoverage>()
+
+const coverageAny = (policy: Any, request: ScopedRequest): AnyCoverage => {
+	const scoped = scopedResiduals(policy, request)
+	const allowed = scoped.allow
+	const options = { schema: scoped.schema }
+	const some =
+		allowed._tag === "False"
+			? undefined
+			: Condition.satisfiable(allowed as Condition.Condition, options)
+	if (some === undefined || some._tag === "Unsatisfiable") {
+		return coverages.None({ condition: never })
+	}
+	if (some._tag === "Unknown") {
+		return coverages.Unknown({ condition: allowed, reason: some.reason })
+	}
+	// Only two nodes more than `allowed`, so it needs no size limit.
+	const refused: Ast = Condition.simplify(
+		Condition.and(
+			scoped.scope as Condition.Condition,
+			Condition.not(allowed as Condition.Condition),
+		),
+	)
+	const missing =
+		refused._tag === "False"
+			? undefined
+			: Condition.satisfiable(refused as Condition.Condition, options)
+	if (missing === undefined || missing._tag === "Unsatisfiable") {
+		return coverages.All({ condition: scoped.scope })
+	}
+	if (missing._tag === "Unknown") {
+		return coverages.Unknown({ condition: allowed, reason: missing.reason })
+	}
+	return coverages.Some({
+		condition: allowed,
+		allowed: some.example,
+		refused: missing.example,
+	})
+}
+
+/**
+ * Tells how much of a scope the policy allows: all of it, none of it, or some
+ * of it. See {@link Coverage}. With no scope (`within`), the scope is every
+ * value of the kind.
+ *
+ * The answer comes from {@link Condition.satisfiable} with the Schema of the
+ * resource, so it is exact for the values of the Schema. Schema checks other
+ * than finite and integer checks are left out, so `All` may be missed where
+ * such a check stops the other values, but `All` is never given wrongly.
+ *
+ * `Some` means that some value of the Schema is allowed. It does not mean that
+ * such a value is in your database. To know that, run `condition` as a query.
+ *
+ * @stability stable
+ * @category evaluation
+ * @since 0.5.0
+ */
+export const coverage: {
+	<const Req extends AnyKindRequest>(
+		request: Req,
+	): <D extends Domain.Any, E, R, O>(
+		policy: Policy<D, E, R, O> & Fits<Req, KindRequest<D>>,
+	) => Coverage<E, R, O, ResidualReads<D, Req["kind"]>>
+	<D extends Domain.Any, E, R, O, const Req extends KindRequest<NoInfer<D>>>(
+		policy: Policy<D, E, R, O>,
+		request: Req,
+	): Coverage<E, R, O, ResidualReads<D, Req["kind"]>>
+} = dual(2, coverageAny) as never
 
 // Schema
 

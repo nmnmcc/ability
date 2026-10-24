@@ -45,13 +45,29 @@ import { HttpRouter } from "effect/http"
 import { HttpApiSchema } from "effect/http-api"
 import * as Authorizer from "./Authorizer.ts"
 import type * as Domain from "./Domain.ts"
+import type * as Policy from "./Policy.ts"
 import * as Resource from "./Resource.ts"
 
 /**
- * One check that an endpoint needs: an action on a kind of resource. With
- * `load`, the middleware loads the resource value from the path parameters
- * and checks the action on that value. Without `load`, it checks the action
- * on the kind.
+ * The path parameters of a request.
+ *
+ * @stability unstable
+ * @category models
+ * @since 0.5.0
+ */
+export type Params = Readonly<Record<string, string | undefined>>
+
+/**
+ * One check that an endpoint needs: an action on a kind of resource.
+ * - With `load`, the middleware loads the resource value from the path
+ *   parameters and checks the action on that value.
+ * - With `within`, it makes a scope from the path parameters and checks the
+ *   action on every value in the scope.
+ * - With `list`, the endpoint gives a list. The handler gets the list query
+ *   with `Authorizer.filter`, so the middleware checks nothing, unless
+ *   `nonEmpty` is true: then it fails when the principal may act on no value
+ *   in the scope.
+ * - With none of them, it checks the action on every value of the kind.
  *
  * @stability unstable
  * @category models
@@ -60,9 +76,9 @@ import * as Resource from "./Resource.ts"
 export interface Requirement {
 	readonly action: string
 	readonly kind: string
-	readonly load?: (
-		params: Readonly<Record<string, string | undefined>>,
-	) => Effect.Effect<object, unknown, unknown>
+	readonly load?: (params: Params) => Effect.Effect<object, unknown, unknown>
+	readonly within?: (params: Params) => unknown
+	readonly list?: { readonly nonEmpty: boolean }
 }
 
 /**
@@ -95,11 +111,17 @@ export class GroupRequired extends Context.Service<
 
 /**
  * Makes a {@link Requirement} with the types of an authorizer. The action must
- * be an action of the kind, also when the kind has a union type, and `load`
- * must give a value of the kind.
+ * be an action of the kind, also when the kind has a union type.
  *
- * `load` may fail. Its errors must be errors of the middleware, and the
- * services that it needs must be given to {@link layer}.
+ * The last argument is one of:
+ * - a `load` function, which must give a value of the kind. It may fail. Its
+ *   errors must be errors of the middleware, and the services that it needs
+ *   must be given to {@link layer}.
+ * - `{ within }`, a function from the path parameters to a scope. Use it for
+ *   an act on a part of the kind, such as a new value with no id yet:
+ *   `{ within: (params) => ($) => $.under("org", params.org ?? null) }`. A path
+ *   parameter may be `undefined`, and a scope with `undefined` in it is a
+ *   defect, so give a value for it.
  *
  * @stability unstable
  * @category constructors
@@ -112,13 +134,49 @@ export const requires: <
 	authorizer: A,
 	action: Domain.CommonAction<A["domain"], K>,
 	kind: K,
-	load?: (
-		params: Readonly<Record<string, string | undefined>>,
-	) => Effect.Effect<Domain.ValueOf<A["domain"], K>, unknown, unknown>,
-) => Requirement = (_authorizer, action, kind, load) =>
-	load === undefined
+	how?:
+		| ((
+				params: Params,
+		  ) => Effect.Effect<Domain.ValueOf<A["domain"], K>, unknown, unknown>)
+		| { readonly within: (params: Params) => Policy.Scope<A["domain"], K> },
+) => Requirement = (_authorizer, action, kind, how) =>
+	how === undefined
 		? { action: action as string, kind }
-		: { action: action as string, kind, load }
+		: typeof how === "function"
+			? { action: action as string, kind, load: how }
+			: { action: action as string, kind, within: how.within }
+
+/**
+ * Makes a {@link Requirement} for an endpoint that gives a list. The middleware
+ * does not check that the principal may act on every value, because the list
+ * shows only the values that it may act on. The handler gets the list query
+ * with `Authorizer.filter`, with the same scope.
+ *
+ * When the principal may act on no value, the list is empty: that is not an
+ * error, so a client does not learn that hidden values are there. With
+ * `nonEmpty: true`, the middleware fails with `Forbidden` in that case.
+ *
+ * @stability unstable
+ * @category constructors
+ * @since 0.5.0
+ */
+export const lists: <
+	A extends { readonly domain: Domain.Any },
+	const K extends Domain.Kind<A["domain"]>,
+>(
+	authorizer: A,
+	action: Domain.CommonAction<A["domain"], K>,
+	kind: K,
+	options?: {
+		readonly within?: (params: Params) => Policy.Scope<A["domain"], K>
+		readonly nonEmpty?: boolean
+	},
+) => Requirement = (_authorizer, action, kind, options) => ({
+	action: action as string,
+	kind,
+	list: { nonEmpty: options?.nonEmpty ?? false },
+	...(options?.within === undefined ? {} : { within: options.within }),
+})
 
 /**
  * The Schema of a `PolicyUnavailable` response. It encodes only the `_tag`, so
@@ -199,10 +257,27 @@ const makeLayer = (
 				}
 				for (const requirement of requirements.value) {
 					if (requirement.load === undefined) {
-						yield* service.check({
+						const within =
+							requirement.within === undefined
+								? undefined
+								: requirement.within(yield* HttpRouter.params)
+						const target = {
 							action: requirement.action,
 							kind: requirement.kind,
-						} as never)
+							...(within === undefined ? {} : { within }),
+						} as never
+						if (requirement.list === undefined) {
+							yield* service.check(target)
+						} else if (requirement.list.nonEmpty) {
+							const covered: { readonly _tag: string } =
+								yield* service.coverage(target)
+							if (covered._tag === "None") {
+								return yield* Authorizer.Forbidden.make({
+									action: requirement.action,
+									kind: requirement.kind,
+								})
+							}
+						}
 					} else {
 						const params = yield* HttpRouter.params
 						const value = yield* Effect.provideContext(
