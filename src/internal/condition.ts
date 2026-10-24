@@ -267,6 +267,24 @@ const dedupe = (conditions: ReadonlyArray<Ast>): ReadonlyArray<Ast> => {
 	return output
 }
 
+/**
+ * Removes the children that the other children make useless. In an `Or`,
+ * `a OR (a AND b)` is `a`. In an `And`, `a AND (a OR b)` is `a`.
+ */
+const absorb = (
+	inner: "And" | "Or",
+	conditions: ReadonlyArray<Ast>,
+): ReadonlyArray<Ast> =>
+	conditions.filter(
+		(condition) =>
+			condition._tag !== inner ||
+			!conditions.some(
+				(other) =>
+					other !== condition &&
+					condition.conditions.some((part) => Equal.equals(part, other)),
+			),
+	)
+
 const flatten = (
 	tag: "And" | "Or",
 	conditions: ReadonlyArray<Ast>,
@@ -286,7 +304,7 @@ export const simplify = (ast: Ast): Ast => {
 			if (children.some((child) => child._tag === "False")) {
 				return never
 			}
-			const unique = dedupe(children)
+			const unique = absorb("Or", dedupe(children))
 			if (unique.length === 0) {
 				return always
 			}
@@ -299,7 +317,7 @@ export const simplify = (ast: Ast): Ast => {
 			if (children.some((child) => child._tag === "True")) {
 				return always
 			}
-			const unique = dedupe(children)
+			const unique = absorb("And", dedupe(children))
 			if (unique.length === 0) {
 				return never
 			}

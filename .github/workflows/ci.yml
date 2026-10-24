@@ -50,5 +50,5 @@ jobs:
       - name: Examples
         run: |
           devenv shell -- node examples/basic.ts
-          devenv shell -- node examples/advanced.ts
-          devenv shell -- node examples/acbc.ts
+          devenv shell -- node examples/authorizer.ts
+          devenv shell -- node examples/openbot-rbac.ts

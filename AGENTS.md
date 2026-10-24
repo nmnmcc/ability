@@ -1,8 +1,8 @@
 # Rules for working on @nmnmcc/ability
 
 This repository is a TypeScript authorization library. Authorization means the
-work of deciding if a person may do an act. The design comes from Effect and
-CASL.
+work of deciding if a principal may do an act. It is made with Effect only. Its
+ideas come from Effect, CASL and XACML, but it does not use CASL.
 
 These rules are for the whole repository. An `AGENTS.md` file in a folder can
 give more exact rules for that folder. The `references/` folder is reference
@@ -33,42 +33,45 @@ material. Do not change it unless the user asks.
   Effect checks into `tsc`. The check levels are in `tsconfig.json`.
 - Source files import each other with `.ts` extensions. Node.js runs `.ts` files
   itself, so the examples need no other runner.
-- Public entry points:
-  - `src/index.ts`
-  - `src/Ability.ts`
-  - `src/AbilityExtra.ts`
-- Internal code:
-  - `src/internal/ability.ts`
-  - `src/internal/serializable.ts`
+- Public entry points: `src/index.ts`, and one module for each concept:
+  `Resource`, `Principal`, `Domain`, `Condition`, `Rule`, `Policy`,
+  `Decision`, `Authorizer`.
+- `src/HttpApi.ts` is a separate entry point, because `effect/http-api` is not
+  stable. Do not export it from `src/index.ts`.
+- Internal code is in `src/internal/`, with one file for each module that has
+  code.
 - Examples are in `examples/`.
 - Tests are in `tests/`.
 
 ## Public API
 
-Keep the public API as it is unless the user asks for a change:
-
-- Use Effect module functions. Do not make a class with changing state.
-- `Ability.define()` is pure and synchronous. It gives back an `Ability`. Do not
-  put ability definition inside an `Effect`.
-- `ability.allow()` and `ability.deny()` give back `Rule` values.
-- A `Rule` must work with generators, so users can write
-  `yield* ability.allow(...)` inside `Ability.define`.
-- `Ability.check()` is the only authorization check function.
-- Do not add `Ability.allows()` again unless the user asks.
-- `Ability.check()` gives an `Effect` with `void` on success.
-- A "no" answer and a failed condition go into the Effect error channel. Do not
-  give check results as a `Result` unless the user asks.
-- A condition function may give a boolean or an `Effect<boolean, E, R>`. Keep
-  its error type and service type in the type of `Ability.check`.
+- Use Effect module functions and data that does not change. Do not make a
+  class with changing state.
+- All types come from the `Domain`. A rule may only use the actions of its
+  resource, and a condition may only use the fields of its resource and of the
+  principal. Keep these checks in the types.
+- `Resource.Class` works like `Schema.TaggedClass`. Every resource value has a
+  `_tag`. Do not find a resource from a constructor name.
+- `Policy.define()` is pure and synchronous. A `Rule` must work with
+  generators, so users can write `yield* _.allow(...)`.
+- A condition is plain data. Only a predicate may run code. A predicate keeps
+  its error type and service type in the types of the policy and of every
+  check. A policy with a predicate must not become JSON: keep the `Opaque`
+  marker in the types.
+- A decision is `Allow`, `Deny` or `NotApplicable`. `Policy.decide` gives a
+  decision. `Authorizer.check` puts a "no" into the error channel.
+- Fail closed. An error while loading a policy is never a "yes".
+- `Policy.residual` must agree with `Policy.decide`. The property tests in
+  `tests/Policy.test.ts` check this. Add a case there when you add an
+  algorithm, a combinator, or a kind of condition node.
 
 ## Code
 
-- Keep public types and their docs in `src/Ability.ts`.
-- Keep the code that makes and matches rules in `src/internal/ability.ts`.
-- Use data structures that do not change for rules and abilities.
-- Keep rule matching clear. The last rule that matches wins. The code does this
-  by looking at the rules from the end.
-- Use the code in `references/` as an example of Effect patterns.
+- Keep public types and their docs in the public modules in `src/`. Keep the
+  code in `src/internal/`.
+- Inside `src/internal/`, the error and service types of predicates are erased
+  to `unknown`. Those files turn off the `anyUnknownInErrorContext` check.
+  Keep the real types in the public modules.
 - Follow the style of the code near your change before you add new layers.
 - Keep each change to what the user asked for.
 - Do not change generated files or reference material by hand.
@@ -91,6 +94,8 @@ devenv shell -- pnpm typecheck
 devenv shell -- pnpm test
 devenv shell -- pnpm test-types
 devenv shell -- node examples/basic.ts
+devenv shell -- node examples/authorizer.ts
+devenv shell -- node examples/openbot-rbac.ts
 git diff --check
 ```
 
