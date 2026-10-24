@@ -962,10 +962,12 @@ const getField = (value: unknown, path: string): unknown =>
 		},
 	)
 
+// Any number is a scalar, also `Infinity` and `NaN`: a principal field may
+// hold them, and a test compares them as a fixed value of a condition does.
 const isScalar = (value: unknown): value is Scalar =>
 	typeof value === "string" ||
 	typeof value === "boolean" ||
-	(typeof value === "number" && Number.isFinite(value))
+	typeof value === "number"
 
 /**
  * Gives the value of an operand. A principal field that is `null`, missing, or
@@ -1035,9 +1037,12 @@ const testUnder = (prefix: ReadonlyArray<Operand>, input: Input): boolean => {
 	if (values === undefined || prefix.length > values.length) {
 		return false
 	}
-	return prefix.every(
-		(operand, index) => resolve(operand, input.principal) === values[index],
-	)
+	// An operand with no value never matches, also a hole in a path that gives
+	// `undefined` too.
+	return prefix.every((operand, index) => {
+		const value = resolve(operand, input.principal)
+		return value !== undefined && value === values[index]
+	})
 }
 
 /**

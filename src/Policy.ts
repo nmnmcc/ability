@@ -2360,8 +2360,8 @@ const domainsMeet = (
 	right: Resource.FieldDomain,
 ): boolean =>
 	// A principal field that is `null` is a missing value, and a test with a
-	// missing value is false. So `null` is not a value that the two share.
-	(left.object && right.object) ||
+	// missing value is false. A principal field that holds an object is not a
+	// scalar, and it is a missing value too. So only scalars can be shared.
 	(left.string && right.string) ||
 	(left.boolean && right.boolean) ||
 	(left.number !== "none" && right.number !== "none") ||

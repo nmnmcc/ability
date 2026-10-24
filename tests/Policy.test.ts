@@ -1872,6 +1872,70 @@ describe("Policy", () => {
 		assert.isTrue(Exit.isSuccess(decode("name", "a")))
 	})
 
+	it("does not take a path with a hole", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { id: Schema.String },
+			path: () => new Array<string>(1),
+		})
+		assert.throws(
+			() => Domain.make({ principal: Caller, resources: [Note] }),
+			/not a string or a field/,
+		)
+	})
+
+	it("compares a principal field that is not a finite number", () => {
+		class Limited extends Principal.Class<Limited>("Limited")({
+			// The test needs Infinity in this field.
+			// @effect-diagnostics-next-line schemaNumber:off
+			limit: Schema.Number,
+		}) {}
+		const Limits = Domain.make({ principal: Limited, resources: [Bot] })
+		const policy = Policy.define(Limits)(function* (_) {
+			yield* _.allow("read", Bot)
+			yield* _.deny("read", Bot, {
+				when: ($) => $.lt("level", $.principal("limit")),
+			})
+		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: Limited.make({ limit: Infinity }),
+				action: "read",
+				resource: aliceBot,
+			})._tag,
+			"Deny",
+		)
+	})
+
+	it("does not take a test with a principal field that is an object", () => {
+		class Timed extends Principal.Class<Timed>("Timed")({
+			until: Schema.Date,
+		}) {}
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { until: Schema.Date },
+		})
+		const Notes = Domain.make({ principal: Timed, resources: [Note] })
+		const exit = Schema.decodeExit(Policy.schema(Notes))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Deny",
+					actions: ["read"],
+					resources: ["Note"],
+					when: {
+						_tag: "Compare",
+						op: "eq",
+						field: "until",
+						value: { _tag: "Principal", path: "until" },
+					},
+				},
+			],
+		})
+		assert.isTrue(Exit.isFailure(exit))
+	})
+
 	it("does not cover a kind whose values a check may stop", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],

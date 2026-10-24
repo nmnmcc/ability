@@ -483,6 +483,16 @@ describe("Condition", () => {
 				Resource.hasValue(Schema.Struct({ x: Schema.Option(Schema.Never) })),
 			)
 			assert.isTrue(Resource.hasValue(Schema.Struct({ x: Schema.Json })))
+			assert.isFalse(Resource.hasValue(Schema.Struct({ x: Schema.Enum({}) })))
+			assert.isFalse(
+				Resource.hasValue(
+					Schema.Struct({
+						x: Schema.TemplateLiteral([
+							Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(0)),
+						]),
+					}),
+				),
+			)
 			assert.strictEqual(
 				Condition.satisfiable(Condition.always, {
 					schema: Schema.Struct({ x: Schema.Tuple([Schema.Never]) }),

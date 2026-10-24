@@ -677,8 +677,27 @@ const isSurelyInhabited = (
 			// or `Option.none()`. Another declaration may take no value.
 			return HashSet.has(inhabitedDeclarations, id)
 		}
-		default:
+		case "Enum":
+			return ast.enums.length > 0
+		case "TemplateLiteral":
+			return Arr.every(ast.parts, (part) => isSurelyInhabited(part, open))
+		case "String":
+		case "Number":
+		case "Boolean":
+		case "BigInt":
+		case "Symbol":
+		case "UniqueSymbol":
+		case "Literal":
+		case "Null":
+		case "Undefined":
+		case "Void":
+		case "Unknown":
+		case "Any":
+		case "ObjectKeyword":
 			return true
+		default:
+			// A node that this walk does not know may take no value.
+			return false
 	}
 }
 
@@ -1068,7 +1087,9 @@ const checkPath = (
 	fields: Schema.Struct.Fields,
 	path: ReadonlyArray<unknown>,
 ): ReadonlyArray<PathSegment> =>
-	Arr.map(path, (segment): PathSegment => {
+	// `Array.from` gives `undefined` for a hole of a sparse array, so the check
+	// sees each place.
+	Arr.map(Array.from(path), (segment): PathSegment => {
 		if (typeof segment === "string") {
 			return segment
 		}
