@@ -694,10 +694,10 @@ const matchesFrom = (
 		if (ast._tag !== "Objects") {
 			return false
 		}
-		const keys = Arr.dedupe([
-			part.replaceAll("*", ""),
-			part.replaceAll("*", "a"),
-		])
+		// Keys made from the part, and keys made from the key Schema. A key
+		// Schema such as `TemplateLiteral(["x", String])` takes neither "" nor
+		// "a", but it takes "x" and "xa".
+		const fromPart = [part.replaceAll("*", ""), part.replaceAll("*", "a")]
 		return (
 			Arr.some(
 				ast.propertySignatures,
@@ -712,7 +712,7 @@ const matchesFrom = (
 				part === "**"
 					? next(signature.type, index, true)
 					: Arr.some(
-							keys,
+							Arr.dedupe([...fromPart, ...sampleKeys(signature.parameter)]),
 							(key) =>
 								Schema.is(Schema.make(signature.parameter))(key) &&
 								fits(part, key) &&
@@ -721,6 +721,38 @@ const matchesFrom = (
 			)
 		)
 	})
+
+/**
+ * A few keys that a key Schema of a record takes: each part of a template
+ * literal gives its literal, or a short text for a string or a number. These
+ * are samples. A key that is not a sample may fit too, so a "no" from a test
+ * with them is only "not found".
+ */
+const sampleKeys = (ast: SchemaAST.AST): ReadonlyArray<string> => {
+	switch (ast._tag) {
+		case "String":
+			return ["", "a"]
+		case "Number":
+			return ["0", "1"]
+		case "Literal":
+			return [String(ast.literal)]
+		case "Union":
+			return Arr.flatMap(ast.types, sampleKeys)
+		case "TemplateLiteral":
+			// Each key of the parts before, with each key of this part. Two
+			// samples for each part keep the list short.
+			return Arr.reduce(ast.parts, [""], (keys: ReadonlyArray<string>, part) =>
+				Arr.take(
+					Arr.flatMap(keys, (key) =>
+						Arr.map(Arr.take(sampleKeys(part), 2), (end) => key + end),
+					),
+					64,
+				),
+			)
+		default:
+			return []
+	}
+}
 
 /**
  * Tests if a Schema surely has a value: each required field, at each depth,

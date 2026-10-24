@@ -2145,6 +2145,63 @@ describe("Policy", () => {
 		)
 	})
 
+	it("grants the whole value for a pattern into a record with key rules", () => {
+		const Store = Resource.make("KeyStore", {
+			actions: ["read"],
+			fields: {
+				entries: Schema.Record(
+					Schema.TemplateLiteral(["x", Schema.String]),
+					Schema.String,
+				),
+			},
+		})
+		const Stores = Domain.make({ principal: Caller, resources: [Store] })
+		const decide = (pattern: string) =>
+			Policy.decideSync(
+				Policy.define(Stores)(function* (_) {
+					// The pattern comes from a test case, as from JSON.
+					yield* _.allow("read", Store, { fields: [pattern as never] })
+				}),
+				{
+					principal: alice,
+					action: "read",
+					resource: Store.make({ entries: {} }),
+				},
+			)._tag
+		assert.strictEqual(decide("entries.*"), "Allow")
+		assert.strictEqual(decide("entries.y*"), "NotApplicable")
+	})
+
+	it("checks a path test only on kinds whose path may have its whole prefix", () => {
+		const Post = Resource.make("Post", {
+			actions: ["read"],
+			fields: { id: Schema.String },
+			path: (f) => ["item", f.id, "post"],
+		})
+		const Other = Resource.make("Other", {
+			actions: ["read"],
+			fields: { id: Schema.Finite },
+			path: (f) => ["item", f.id, "other"],
+		})
+		class User extends Principal.Class<User>("PrefixUser")({
+			id: Schema.String,
+		}) {}
+		const Items = Domain.make({ principal: User, resources: [Post, Other] })
+		const policy = Policy.define(Items)(function* (_) {
+			yield* _.allow("read", "*", {
+				when: ($) => $.under("item", $.principal("id"), "post"),
+			})
+		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: User.make({ id: "a" }),
+				action: "read",
+				resource: Post.make({ id: "a" }),
+			})._tag,
+			"Allow",
+		)
+	})
+
 	it("does not take a condition with a node that is not known", () => {
 		assert.isFalse(Schema.is(Condition.schema)({ _tag: "Broken" }))
 		assert.isFalse(

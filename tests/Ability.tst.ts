@@ -284,6 +284,13 @@ describe("Policy", () => {
 			expect(_.allow).type.toBeCallableWith("read", Bot, {
 				when: () => named,
 			})
+			const plain = {
+				...named,
+				run: (trigger: typeof aliceTrigger) => Effect.succeed(trigger.enabled),
+			}
+			expect(_.allow).type.not.toBeCallableWith("read", Bot, {
+				when: () => plain,
+			})
 		}
 	})
 

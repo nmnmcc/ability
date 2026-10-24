@@ -364,7 +364,9 @@ export type PredicateRun<E, R, I> = ((
 	value: never,
 	principal: never,
 ) => Effect.Effect<boolean, E, R>) & {
-	readonly "~Reads"?: (reads: I) => void
+	// Required, so a plain function, with no such field, is not the test of a
+	// predicate. Only the builder makes one.
+	readonly "~Reads": (reads: I) => void
 }
 
 /**

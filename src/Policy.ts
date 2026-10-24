@@ -2443,7 +2443,7 @@ const underRefsIn = (
 				return HashSet.fromIterable(
 					Arr.flatMap(node.prefix, (operand, index) =>
 						operand._tag === "Principal"
-							? [JSON.stringify([index, operand.path, strings.slice(0, index)])]
+							? [JSON.stringify([index, operand.path, strings])]
 							: [],
 					),
 				)
@@ -2464,7 +2464,7 @@ const underRefsIn = (
 
 /**
  * A principal field in a path test: its place in the prefix, its path, and
- * the fixed strings of the prefix before it, or `null` for another part.
+ * the fixed strings of the whole prefix, or `null` for another part.
  */
 type UnderRef = readonly [
 	index: number,
@@ -2479,14 +2479,16 @@ const underRefs = (node: ConditionNode): ReadonlyArray<UnderRef> =>
 	)
 
 /**
- * Tests if the path of a resource may start with the fixed strings of a
- * prefix. A string of the path that is not the string of the prefix at its
- * place never matches.
+ * Tests if the path of a resource may start with a prefix: it is as long as
+ * the prefix, and each fixed string of the prefix is the string of the path
+ * at its place, when the path has a string there.
  */
 const mayStartWith = (
 	descriptor: Resource.Descriptor,
 	strings: ReadonlyArray<string | null>,
 ): boolean =>
+	// A path shorter than the prefix never matches.
+	(descriptor.path?.length ?? 0) >= strings.length &&
 	Arr.every(strings, (string, index) => {
 		const segment = descriptor.path?.[index]
 		return string === null || typeof segment !== "string" || segment === string
