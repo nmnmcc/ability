@@ -172,6 +172,21 @@ export type FieldFor<D, K> =
 	Condition.FieldPath<DataFor<D, K>> | `${string}*${string}`
 
 /**
+ * A condition that a rule for the kinds `K` may have. Its predicates may read
+ * only the values of these kinds and the principal of the domain.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.4.0
+ */
+export type ConditionFor<D, K> = Condition.Condition<
+	any,
+	any,
+	any,
+	Condition.Reads<ValueFor<D, K>, Domain.Principal<D>>
+>
+
+/**
  * The options of a rule.
  *
  * @stability stable
@@ -206,7 +221,7 @@ export interface Builder<D> {
 	readonly allow: <
 		const T extends Target<D>,
 		const A extends ActionFor<D, KindOf<T>>,
-		const C extends Condition.Any = Condition.Condition,
+		const C extends ConditionFor<D, KindOf<T>> = Condition.Condition,
 	>(
 		action: SingleOrArray<A>,
 		resource: SingleOrArray<T>,
@@ -215,7 +230,7 @@ export interface Builder<D> {
 	readonly deny: <
 		const T extends Target<D>,
 		const A extends ActionFor<D, KindOf<T>>,
-		const C extends Condition.Any = Condition.Condition,
+		const C extends ConditionFor<D, KindOf<T>> = Condition.Condition,
 	>(
 		action: SingleOrArray<A>,
 		resource: SingleOrArray<T>,

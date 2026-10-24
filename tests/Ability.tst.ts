@@ -157,6 +157,52 @@ describe("Policy", () => {
 		expect<Policy.Policy<App>>().type.not.toBeAssignableFrom(other)
 	})
 
+	it("keeps a predicate in rules of its own kind", () => {
+		const _ = Rule.builder(App)
+		const leveled = Condition.builder<
+			Rule.DataFor<App, "Bot">,
+			Bot,
+			Caller
+		>().predicate("leveled", (bot) => bot.level >= 1)
+		expect(_.deny).type.toBeCallableWith("read", Bot, { when: () => leveled })
+		expect(_.deny).type.not.toBeCallableWith("read", Trigger, {
+			when: () => leveled,
+		})
+	})
+
+	it("ties the types of a node to its children", () => {
+		const failing = Condition.builder<unknown, Bot, Caller>().predicate(
+			"failing",
+			() => Effect.fail("no" as const),
+		)
+		expect<Condition.Condition>().type.not.toBeAssignableFrom({
+			...Condition.always,
+			_tag: "Not" as const,
+			condition: failing,
+		})
+		expect<Condition.Condition>().type.not.toBeAssignableFrom({
+			...Condition.always,
+			_tag: "Predicate" as const,
+			name: "hidden",
+			run: () => Effect.fail("no" as const),
+		})
+	})
+
+	it("gives a predicate what it reads", () => {
+		const leveled = Condition.builder<unknown, Bot, Caller>().predicate(
+			"leveled",
+			(bot) => bot.level >= 1,
+		)
+		expect(Condition.evaluate).type.toBeCallableWith(leveled, {
+			value: aliceBot,
+			principal: alice,
+		})
+		expect(Condition.evaluate).type.not.toBeCallableWith(leveled, {
+			value: aliceTrigger,
+			principal: alice,
+		})
+	})
+
 	it("takes only principal fields with a scalar type", () => {
 		const $ = Condition.builder<
 			{ readonly owner: string },

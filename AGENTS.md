@@ -57,7 +57,8 @@ material. Do not change it unless the user asks.
 - A condition is plain data. Only a predicate may run code. A predicate keeps
   its error type and service type in the types of the policy and of every check.
   A policy with a predicate must not become JSON: keep the `Opaque` marker in
-  the types.
+  the types. A condition also keeps what its predicates read (`Reads`), and each
+  child of a node has the types of its node.
 - A decision is `Allow`, `Deny` or `NotApplicable`. `Policy.decide` gives a
   decision. `Authorizer.check` puts a "no" into the error channel.
 - Fail closed. An error while loading a policy is never a "yes".

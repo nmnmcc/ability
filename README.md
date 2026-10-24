@@ -218,6 +218,10 @@ test for `null`, use a fixed value, as in `$.eq("ownerUserId", null)`.
 of the policy and of every check. A policy with a predicate can not become JSON
 or a query, and the type system stops you when you try.
 
+A predicate also keeps the types of the value and the principal that it reads.
+So a predicate for a Bot can not go into a rule for a Trigger. Make conditions
+with the builder: a node made by hand is not a condition in the types.
+
 ## Policies
 
 A list of rules has a combining algorithm. It decides which rule gives the

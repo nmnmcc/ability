@@ -155,7 +155,7 @@ describe("Condition", () => {
 				Effect.fail("no data" as const),
 			)
 			const exit = yield* Effect.exit(
-				Condition.evaluate(failing, { value: aliceBot }),
+				Condition.evaluate(failing, { value: aliceBot, principal: alice }),
 			)
 			assert.isTrue(Exit.isFailure(exit))
 		}),
@@ -196,7 +196,12 @@ describe("Condition", () => {
 	describe("keeps the work of predicates when it makes a condition smaller", () => {
 		const failing = $.predicate("offline", () => Effect.fail("offline"))
 		const run = (
-			condition: Condition.Condition<string, never, Condition.Opaque>,
+			condition: Condition.Condition<
+				string,
+				never,
+				Condition.Opaque,
+				Condition.Reads<Bot, Caller>
+			>,
 		) =>
 			Effect.exit(
 				Condition.evaluate(condition, { value: aliceBot, principal: alice }),
