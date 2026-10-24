@@ -510,10 +510,15 @@ const keyText = (value: unknown, seen: Set<object>): string | undefined => {
 		// in `map.get(role)`. The text can not show which object it is.
 		!Array.from((value as Map<unknown, unknown>).keys()).some(isObjectLike)
 	) {
-		const entries = all(
-			Array.from(value as Map<unknown, unknown>, ([key, item]) => [key, item]),
+		// The keys and the values go in one list, so a value that is an object
+		// does not go through the test of the elements of an array.
+		const parts = all(
+			Array.from(value as Map<unknown, unknown>).flatMap(([key, item]) => [
+				key,
+				item,
+			]),
 		)
-		text = entries === undefined ? undefined : `Map{${entries.join(",")}}`
+		text = parts === undefined ? undefined : `Map{${parts.join(",")}}`
 	} else if (
 		prototype === Set.prototype &&
 		own.length === 0 &&

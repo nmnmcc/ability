@@ -78,13 +78,14 @@ export interface PrincipalRef {
  * the type `P`. The type fields are only in the types. A reference with no
  * type does not have them, so it can not stand for a field of any type. A
  * test with the reference reads a principal of the type `P`, so it can not go
- * into a rule of a domain with another principal.
+ * into a rule of a domain with another principal. With no `P`, it is `never`,
+ * and a test with the reference fits no rule.
  *
  * @stability stable
  * @category models
  * @since 0.3.0
  */
-export type Ref<A, P = any> = PrincipalRef & {
+export type Ref<A, P = never> = PrincipalRef & {
 	readonly "~Ref": () => A
 	readonly "~Principal": (principal: P) => void
 }
@@ -479,7 +480,7 @@ export type PathValue<
  * @category models
  * @since 0.3.0
  */
-export type OperandOf<A> = Extract<A, Scalar> | Ref<A, any>
+export type OperandOf<A, P = never> = Extract<A, Scalar> | Ref<A, P>
 
 type ScalarPath<T> = {
 	[F in FieldPath<T>]: PathValue<T, F> extends Scalar ? F : never
@@ -533,7 +534,7 @@ export interface Builder<Data, Value, P> {
 	/** The field is equal to the value. */
 	readonly eq: <
 		const F extends FieldPath<Data>,
-		const V extends OperandOf<PathValue<Data, F>>,
+		const V extends OperandOf<PathValue<Data, F>, any>,
 	>(
 		field: F,
 		value: V,
@@ -541,35 +542,35 @@ export interface Builder<Data, Value, P> {
 	/** The field is not equal to the value. */
 	readonly ne: <
 		const F extends FieldPath<Data>,
-		const V extends OperandOf<PathValue<Data, F>>,
+		const V extends OperandOf<PathValue<Data, F>, any>,
 	>(
 		field: F,
 		value: V,
 	) => Test<Value, PrincipalOf<V, P>>
 	readonly lt: <
 		const F extends OrderedPath<Data>,
-		const V extends OperandOf<Exclude<PathValue<Data, F>, null>>,
+		const V extends OperandOf<Exclude<PathValue<Data, F>, null>, any>,
 	>(
 		field: F,
 		value: V,
 	) => Test<Value, PrincipalOf<V, P>>
 	readonly lte: <
 		const F extends OrderedPath<Data>,
-		const V extends OperandOf<Exclude<PathValue<Data, F>, null>>,
+		const V extends OperandOf<Exclude<PathValue<Data, F>, null>, any>,
 	>(
 		field: F,
 		value: V,
 	) => Test<Value, PrincipalOf<V, P>>
 	readonly gt: <
 		const F extends OrderedPath<Data>,
-		const V extends OperandOf<Exclude<PathValue<Data, F>, null>>,
+		const V extends OperandOf<Exclude<PathValue<Data, F>, null>, any>,
 	>(
 		field: F,
 		value: V,
 	) => Test<Value, PrincipalOf<V, P>>
 	readonly gte: <
 		const F extends OrderedPath<Data>,
-		const V extends OperandOf<Exclude<PathValue<Data, F>, null>>,
+		const V extends OperandOf<Exclude<PathValue<Data, F>, null>, any>,
 	>(
 		field: F,
 		value: V,
@@ -577,7 +578,7 @@ export interface Builder<Data, Value, P> {
 	/** The field is equal to one of the values. */
 	readonly in: <
 		const F extends FieldPath<Data>,
-		const Vs extends ReadonlyArray<OperandOf<PathValue<Data, F>>>,
+		const Vs extends ReadonlyArray<OperandOf<PathValue<Data, F>, any>>,
 	>(
 		field: F,
 		values: Vs,

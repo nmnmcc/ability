@@ -1057,6 +1057,42 @@ describe("Policy", () => {
 		assert.notInclude(fields, "data.value.secret")
 	})
 
+	it("does not find fields inside an Option codec", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: {
+				owner: Schema.OptionFromNullOr(Schema.Struct({ id: Schema.String })),
+			},
+		})
+		const schema = Resource.descriptor(Note).schema
+		assert.isTrue(Resource.hasPath(schema, "owner"))
+		assert.isFalse(Resource.hasPath(schema, "owner.id"))
+	})
+
+	it("keeps a field that holds a scalar or a struct", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: {
+				data: Schema.Union([
+					Schema.String,
+					Schema.Struct({ secret: Schema.String }),
+				]),
+			},
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.define(Notes)(function* (_) {
+			yield* _.allow("read", Note)
+		})
+		const fields = Effect.runSync(
+			Policy.permittedFields(policy, {
+				principal: alice,
+				action: "read",
+				resource: Note.make({ data: "text" }),
+			}),
+		)
+		assert.include(fields, "data")
+	})
+
 	it("does not let a rule for no fields cover a request", () => {
 		const policy = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot, { fields: [] })

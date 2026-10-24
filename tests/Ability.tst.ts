@@ -72,7 +72,7 @@ describe("Rule", () => {
 		})
 		_.allow("read", Bot, {
 			// The level is a number.
-			// @ts-expect-error 'OperandOf<number>'
+			// @ts-expect-error 'OperandOf<number, any>'
 			when: ($) => $.eq("level", "high"),
 		})
 		_.allow("read", Bot, {
@@ -82,12 +82,12 @@ describe("Rule", () => {
 		})
 		_.allow("read", Bot, {
 			// The role is not a number.
-			// @ts-expect-error 'OperandOf<number>'
+			// @ts-expect-error 'OperandOf<number, any>'
 			when: ($) => $.eq("level", $.principal("role")),
 		})
 		_.allow("read", Bot, {
 			// A string field is not a number field.
-			// @ts-expect-error 'OperandOf<number>'
+			// @ts-expect-error 'OperandOf<number, any>'
 			when: ($) => $.gt("level", "x"),
 		})
 	})
@@ -295,6 +295,16 @@ describe("Policy", () => {
 				$: Condition.Builder<Rule.DataFor<typeof Other, "Bot">, Bot, Numbered>,
 			) => $.eq("ownerUserId", foreign),
 		})
+	})
+
+	it("does not let a reference with no principal type go into a rule", () => {
+		const id: Condition.Ref<string> = Condition.builder<
+			unknown,
+			unknown,
+			Caller
+		>().principal("userId")
+		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
+		expect($.eq).type.not.toBeCallableWith("ownerUserId", id)
 	})
 
 	it("checks each member of a union of inputs", () => {

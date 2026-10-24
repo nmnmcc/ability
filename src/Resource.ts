@@ -169,16 +169,17 @@ class ResourceDescriptor extends DataClass<Descriptor> {}
 
 /**
  * Gives the struct of a `Schema.Class`. A class is a declaration with one
- * struct as its type parameter, and it has an encoding, with one step or with
- * more, as in `Schema.fromJsonString(User)`. Other declarations, such as
- * `Schema.Option` or `Schema.ReadonlyMap`, have no encoding.
+ * struct as its type parameter, and Effect marks it with a `"~constructor"`
+ * annotation, also through more codec steps, as in
+ * `Schema.fromJsonString(User)`. Other declarations, such as
+ * `Schema.OptionFromNullOr` or `Schema.ReadonlyMap`, have no such mark, and
+ * the fields of their type parameter are not fields of the value.
  */
 const classStruct = (
 	ast: SchemaAST.Declaration,
 ): SchemaAST.Objects | undefined => {
 	const [inner] = ast.typeParameters
-	return ast.encoding !== undefined &&
-		ast.encoding.length > 0 &&
+	return ast.annotations?.["~constructor"] !== undefined &&
 		ast.typeParameters.length === 1 &&
 		inner?._tag === "Objects"
 		? inner
@@ -266,8 +267,32 @@ const isScalar = (ast: SchemaAST.AST): boolean => {
 }
 
 /**
+ * Tests if a Schema holds, in some branch, a value that is not a struct: a
+ * scalar, or a value such as a record or an array.
+ */
+const holdsValue = (
+	ast: SchemaAST.AST,
+	open: ReadonlySet<SchemaAST.AST>,
+): boolean => {
+	switch (ast._tag) {
+		case "Objects":
+			return ast.propertySignatures.length === 0
+		case "Union":
+			return ast.types.some((type) => holdsValue(type, open))
+		case "Suspend":
+			return !open.has(ast) && holdsValue(ast.thunk(), new Set([...open, ast]))
+		case "Declaration":
+			return classStruct(ast) === undefined
+		default:
+			return true
+	}
+}
+
+/**
  * Visits the path of every field of a Schema, with a dot between the names of
- * nested fields. `leaf` is `false` for a field that is a struct.
+ * nested fields. `leaf` is `true` for a field that holds a value that is not a
+ * struct, and `false` for a field that holds a struct. A field of a union may
+ * be visited two times, one time as each.
  */
 const walkFields = (
 	ast: SchemaAST.AST,
@@ -288,9 +313,15 @@ const walkFields = (
 				throw new Error("A field name may not be empty")
 			}
 			const path = prefix === "" ? property.name : `${prefix}.${property.name}`
-			const leaf = structsOf(property.type, inner).length === 0
-			visit(path, leaf, property.type)
-			if (!leaf) walkFields(property.type, visit, path, inner)
+			// In a union, a field may hold a value in one branch and a struct in
+			// another. It is then visited as both.
+			if (holdsValue(property.type, inner)) {
+				visit(path, true, property.type)
+			}
+			if (structsOf(property.type, inner).length > 0) {
+				visit(path, false, property.type)
+				walkFields(property.type, visit, path, inner)
+			}
 		}
 	}
 }
@@ -333,7 +364,7 @@ const resolves = (
 	open: ReadonlySet<SchemaAST.AST>,
 ): boolean => {
 	if (index === names.length) {
-		return index > 0 && structsOf(ast, new Set()).length === 0
+		return index > 0 && holdsValue(ast, new Set())
 	}
 	const name = names[index]!
 	switch (ast._tag) {

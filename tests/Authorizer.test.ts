@@ -886,4 +886,45 @@ describe("Authorizer", () => {
 			assert.strictEqual(failureTag(exit), "Forbidden")
 		}),
 	)
+
+	it.effect("keeps a principal with objects as the values of a map", () =>
+		Effect.gen(function* () {
+			class Holder extends Principal.Class<Holder>("MapHolder")({
+				roles: Schema.ReadonlyMap(
+					Schema.String,
+					Schema.Struct({ role: Schema.String }),
+				),
+			}) {}
+			const Holders = Domain.make({ principal: Holder, resources: [Bot] })
+			class CurrentMapHolder extends Context.Service<
+				CurrentMapHolder,
+				Holder
+			>()("@nmnmcc/ability/tests/Authorizer.test/CurrentMapHolder") {}
+			class MapAuth extends Authorizer.Service<
+				MapAuth,
+				{ requires: CurrentMapHolder }
+			>()("test/MapAuth", Holders) {}
+			const loads = yield* Ref.make(0)
+			const layer = Authorizer.layer(MapAuth, {
+				principal: CurrentMapHolder,
+				policy: () =>
+					Ref.update(loads, (n) => n + 1).pipe(
+						Effect.as(
+							Policy.define(Holders)(function* (_) {
+								yield* _.allow("read", Bot)
+							}),
+						),
+					),
+			})
+			const user = Holder.make({ roles: new Map([["a", { role: "admin" }]]) })
+			yield* Effect.gen(function* () {
+				yield* MapAuth.check({ action: "read", resource: aliceBot })
+				yield* MapAuth.check({ action: "read", resource: aliceBot })
+			}).pipe(
+				Effect.provideService(CurrentMapHolder, user),
+				Effect.provide(layer),
+			)
+			assert.strictEqual(yield* Ref.get(loads), 1)
+		}),
+	)
 })
