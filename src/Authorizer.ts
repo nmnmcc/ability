@@ -468,6 +468,9 @@ const classId = (classes: ClassIds, constructor: object): string => {
 	return `#${String(id)}`
 }
 
+/** The most levels of objects in a principal that the cache takes. */
+const maxKeyDepth = 256
+
 /**
  * Gives a text that names a principal value. Two values get one text only when
  * they have the same types and the same data. So a string `"1"` and a bigint
@@ -484,11 +487,16 @@ const classId = (classes: ClassIds, constructor: object): string => {
  * loader may test it, as `set.has(value)` does.
  * The private fields (`#name`) of a class can not be seen, so a principal
  * class must not keep its data in them.
+ *
+ * It also gives `undefined` for a value with more than {@link maxKeyDepth}
+ * levels of objects. The walk calls itself for each level, so a deeper value
+ * could fill the stack. Such a principal is not cached.
  */
 const keyText = (
 	value: unknown,
 	seen: Set<object>,
 	classes: ClassIds,
+	depth: number = 0,
 ): string | undefined => {
 	const plain = (text: string): string => text
 	switch (typeof value) {
@@ -510,7 +518,7 @@ const keyText = (
 	if (value === null) {
 		return plain("null")
 	}
-	if (seen.has(value)) {
+	if (seen.has(value) || depth >= maxKeyDepth) {
 		return undefined
 	}
 	seen.add(value)
@@ -518,7 +526,9 @@ const keyText = (
 		items: ReadonlyArray<unknown>,
 		wrap: (texts: ReadonlyArray<string>) => string,
 	): string | undefined => {
-		const texts = Arr.map(items, (item) => keyText(item, seen, classes))
+		const texts = Arr.map(items, (item) =>
+			keyText(item, seen, classes, depth + 1),
+		)
 		return Arr.every(texts, (text) => text !== undefined)
 			? wrap(texts as ReadonlyArray<string>)
 			: undefined

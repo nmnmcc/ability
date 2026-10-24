@@ -1162,6 +1162,40 @@ describe("Authorizer", () => {
 		}),
 	)
 
+	it.effect("does not fill the stack with the key of a deep principal", () =>
+		Effect.gen(function* () {
+			class Deep extends Principal.Class<Deep>("Deep")({
+				info: Schema.Json,
+			}) {}
+			const Deeps = Domain.make({ principal: Deep, resources: [Bot] })
+			class CurrentDeep extends Context.Service<CurrentDeep, Deep>()(
+				"@nmnmcc/ability/tests/Authorizer.test/CurrentDeep",
+			) {}
+			class DeepAuth extends Authorizer.Service<
+				DeepAuth,
+				{ requires: CurrentDeep }
+			>()("test/DeepAuth", Deeps) {}
+			const layer = Authorizer.layer(DeepAuth, {
+				principal: CurrentDeep,
+				policy: () =>
+					Effect.succeed(
+						Policy.define(Deeps)(function* (_) {
+							yield* _.allow("read", Bot)
+						}),
+					),
+			})
+			const info = Arr.reduce(
+				Arr.range(1, 5000),
+				null as Schema.Json,
+				(child) => ({ child }),
+			)
+			yield* DeepAuth.check({ action: "read", resource: aliceBot }).pipe(
+				Effect.provideService(CurrentDeep, Deep.make({ info })),
+				Effect.provide(layer),
+			)
+		}),
+	)
+
 	it.effect("makes the cache key of a long list in a short time", () =>
 		Effect.gen(function* () {
 			class Many extends Principal.Class<Many>("Many")({
