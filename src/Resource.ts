@@ -635,11 +635,18 @@ const isSurelyInhabited = (
 		case "Never":
 			return false
 		case "Objects":
-			return Arr.every(
-				ast.propertySignatures,
-				(property) =>
-					SchemaAST.isOptional(property.type) ||
-					isSurelyInhabited(property.type, open),
+			// A named field must fit the record part too, as in
+			// `Schema.StructWithRest`, and the two types may share no value. That
+			// is not easy to know, so such a struct is not sure.
+			return (
+				(ast.propertySignatures.length === 0 ||
+					ast.indexSignatures.length === 0) &&
+				Arr.every(
+					ast.propertySignatures,
+					(property) =>
+						SchemaAST.isOptional(property.type) ||
+						isSurelyInhabited(property.type, open),
+				)
 			)
 		case "Union":
 			return Arr.some(ast.types, (type) => isSurelyInhabited(type, open))

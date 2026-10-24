@@ -2024,6 +2024,36 @@ describe("Policy", () => {
 		assert.isTrue(Exit.isFailure(wildcard))
 	})
 
+	it("checks a path test of a rule for every resource only on kinds of its actions", () => {
+		const Doc = Resource.make("Doc", {
+			actions: ["read"],
+			fields: { owner: Schema.String },
+			path: (f) => ["user", f.owner],
+		})
+		const Counter = Resource.make("Counter", {
+			actions: ["write"],
+			fields: { count: Schema.Finite },
+			path: (f) => ["seq", f.count],
+		})
+		class User extends Principal.Class<User>("PathUser")({
+			id: Schema.String,
+		}) {}
+		const Docs = Domain.make({ principal: User, resources: [Doc, Counter] })
+		const policy = Policy.define(Docs)(function* (_) {
+			yield* _.allow("read", "*", {
+				when: ($) => $.under("user", $.principal("id")),
+			})
+		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: User.make({ id: "a" }),
+				action: "read",
+				resource: Doc.make({ owner: "a" }),
+			})._tag,
+			"Allow",
+		)
+	})
+
 	it("does not take a test with a principal field that is an object", () => {
 		class Timed extends Principal.Class<Timed>("Timed")({
 			until: Schema.Date,

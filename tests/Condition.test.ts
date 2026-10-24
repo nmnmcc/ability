@@ -487,6 +487,15 @@ describe("Condition", () => {
 			assert.isFalse(
 				Resource.hasValue(
 					Schema.Struct({
+						x: Schema.StructWithRest(Schema.Struct({ name: Schema.String }), [
+							Schema.Record(Schema.String, Schema.Finite),
+						]),
+					}),
+				),
+			)
+			assert.isFalse(
+				Resource.hasValue(
+					Schema.Struct({
 						x: Schema.TemplateLiteral([
 							Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(0)),
 						]),

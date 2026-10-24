@@ -2658,7 +2658,13 @@ const validate = (
 							all
 								? Arr.filter(
 										known,
-										(descriptor) => descriptor.path?.[index] !== undefined,
+										(descriptor) =>
+											descriptor.path?.[index] !== undefined &&
+											// The rule runs only on a kind with one of its actions.
+											(value.actions.includes("*") ||
+												Arr.some(value.actions, (action) =>
+													descriptor.actions.includes(action),
+												)),
 									)
 								: descriptors,
 							(descriptor) =>
