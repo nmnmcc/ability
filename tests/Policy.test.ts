@@ -701,6 +701,58 @@ describe("Policy", () => {
 				assert.isTrue(Exit.isFailure(result))
 			})
 
+		it.effect("in the deny rules of permitOverrides", () =>
+			check(
+				Policy.rules(App, [offline("deny")], {
+					algorithm: "permitOverrides",
+				}),
+			),
+		)
+
+		it.effect("does not run a child of all after a deny", () =>
+			Effect.gen(function* () {
+				const policy = Policy.any([
+					Policy.all([
+						Policy.rules(App, [_.deny("read", Bot)]),
+						Policy.rules(App, [offline("allow")]),
+					]),
+					Policy.rules(App, [_.allow("read", Bot)]),
+				])
+				const residual = Policy.residual(policy, request)
+				assert.deepStrictEqual(
+					yield* Effect.exit(Condition.evaluate(residual, { value: aliceBot })),
+					Exit.succeed(true),
+				)
+			}),
+		)
+
+		it.effect("runs each predicate as many times as decide", () =>
+			Effect.gen(function* () {
+				let calls = 0
+				const policy = Policy.all([
+					Policy.rules(App, [
+						_.deny("read", Bot, {
+							when: ($) =>
+								$.predicate("first", () => {
+									calls = calls + 1
+									return calls === 1
+								}),
+						}),
+						_.allow("read", Bot),
+					]),
+				])
+				const decision = yield* Policy.decide(policy, {
+					...request,
+					resource: aliceBot,
+				})
+				assert.strictEqual(decision._tag, "Deny")
+				calls = 0
+				const residual = Policy.residual(policy, request)
+				assert.isFalse(yield* Condition.evaluate(residual, { value: aliceBot }))
+				assert.strictEqual(calls, 1)
+			}),
+		)
+
 		it.effect("in a list of rules", () =>
 			check(
 				Policy.rules(App, [offline("allow"), _.allow("read", Bot)], {
@@ -787,6 +839,15 @@ describe("Policy", () => {
 		])
 	})
 
+	it("does not let a field name have a dot", () => {
+		assert.throws(() =>
+			Resource.make("Note", {
+				actions: ["read"],
+				fields: { "owner.id": Schema.String },
+			}),
+		)
+	})
+
 	it("does not let a resource have a field named _tag", () => {
 		assert.throws(() =>
 			Resource.make("Secret", {
@@ -805,6 +866,7 @@ describe("Policy", () => {
 		const rule = Rule.builder(App).allow("read", Bot, {
 			when: ($) => $.eq("ownerUserId", null),
 		})
-		assert.throws(() => Policy.rules(Other, [rule]))
+		// The types stop this. The test casts the rule, to check the code too.
+		assert.throws(() => Policy.rules(Other, [rule as Rule.Any]))
 	})
 })

@@ -402,4 +402,44 @@ describe("Authorizer", () => {
 			assert.strictEqual(failureTag(exit), "Forbidden")
 		}),
 	)
+
+	it.effect("does not give one cached policy to two URL values", () =>
+		Effect.gen(function* () {
+			class Site extends Principal.Class<Site>("Site")({
+				url: Schema.URL,
+			}) {}
+			const Web = Domain.make({ principal: Site, resources: [Bot] })
+			class CurrentSite extends Context.Service<CurrentSite, Site>()(
+				"@nmnmcc/ability/tests/Authorizer.test/CurrentSite",
+			) {}
+			class WebAuth extends Authorizer.Service<
+				WebAuth,
+				{ requires: CurrentSite }
+			>()("test/WebAuth", Web) {}
+			const layer = Authorizer.layer(WebAuth, {
+				principal: CurrentSite,
+				policy: (site) =>
+					Effect.succeed(
+						Policy.define(Web)(function* (_) {
+							if (site.url.host === "admin.example") {
+								yield* _.allow("read", Bot)
+							}
+						}),
+					),
+			})
+			const exit = yield* Effect.gen(function* () {
+				yield* Effect.provideService(
+					WebAuth.check({ action: "read", resource: aliceBot }),
+					CurrentSite,
+					Site.make({ url: new URL("https://admin.example") }),
+				)
+				yield* Effect.provideService(
+					WebAuth.check({ action: "read", resource: aliceBot }),
+					CurrentSite,
+					Site.make({ url: new URL("https://guest.example") }),
+				)
+			}).pipe(Effect.provide(layer), Effect.exit)
+			assert.strictEqual(failureTag(exit), "Forbidden")
+		}),
+	)
 })

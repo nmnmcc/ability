@@ -369,7 +369,10 @@ const fromNode = (domain: Domain.Any, node: Node): any =>
  * @category constructors
  * @since 0.3.0
  */
-export const rules: <D extends Domain.Any, Rules extends Rule.Any>(
+export const rules: <
+	D extends Domain.Any,
+	Rules extends Rule.Rule<any, any, any, D>,
+>(
 	domain: D,
 	rules: Iterable<Rules>,
 	options?: Options,
@@ -956,19 +959,10 @@ const firstApplicableResidual = (
 	return { allow, deny }
 }
 
-/**
- * A condition that is always true, but that tests both conditions of a pair
- * first. It runs every predicate that `decide` runs for the node, so a failure
- * of a predicate is not lost.
- */
-const runAll = (pair: Pair): Ast => or(pair.allow, pair.deny, always)
-
 const residualNode = (node: Node, context: ResidualContext): Pair => {
 	switch (node._tag) {
 		case "Rules": {
 			switch (node.algorithm) {
-				// The parts of each condition are in the order that `decide` tests
-				// the rules. So a predicate that fails in `decide` fails here too.
 				case "denyOverrides": {
 					const deny = or(
 						...node.rules
@@ -1014,23 +1008,12 @@ const residualNode = (node: Node, context: ResidualContext): Pair => {
 			}
 			const pairs = node.policies.map((child) => residualNode(child, context))
 			const deny = or(...pairs.map((pair) => pair.deny))
-			// `decide` tests every child, also after a child that does not allow.
-			// So the predicates of every child run first.
-			const allow = and(
-				...pairs.map(runAll),
-				...pairs.map((pair) => pair.allow),
-				not(deny),
-			)
+			const allow = and(...pairs.map((pair) => pair.allow), not(deny))
 			return { allow, deny }
 		}
 		case "Any": {
-			// `decide` tests each child in full before it goes to the next one, so
-			// the predicates of a child that does not allow run first.
-			let allow: Ast = never
 			const pairs = node.policies.map((child) => residualNode(child, context))
-			for (const pair of pairs.slice().reverse()) {
-				allow = or(pair.allow, and(runAll(pair), allow))
-			}
+			const allow = or(...pairs.map((pair) => pair.allow))
 			const deny = and(not(allow), or(...pairs.map((pair) => pair.deny)))
 			return { allow, deny }
 		}
@@ -1049,10 +1032,34 @@ const residualNode = (node: Node, context: ResidualContext): Pair => {
 			const cap = residualNode(node.cap, context)
 			const inner = residualNode(node.policy, context)
 			return {
-				allow: and(runAll(cap), not(cap.deny), inner.allow),
+				allow: and(not(cap.deny), inner.allow),
 				deny: or(cap.deny, inner.deny),
 			}
 		}
+	}
+}
+
+/** The name of the predicate of a residual condition that runs `decide`. */
+const policyPredicate = "policy"
+
+/** Tests if a rule that the request may use has a predicate. */
+const usesPredicate = (node: Node, context: ResidualContext): boolean => {
+	switch (node._tag) {
+		case "Rules":
+			return node.rules.some(
+				(value) =>
+					value.when !== undefined &&
+					Condition.hasPredicate(value.when) &&
+					Rule.matchesTarget(value, context),
+			)
+		case "All":
+		case "Any":
+		case "FirstOf":
+			return node.policies.some((child) => usesPredicate(child, context))
+		case "Ceiling":
+			return (
+				usesPredicate(node.cap, context) || usesPredicate(node.policy, context)
+			)
 	}
 }
 
@@ -1069,12 +1076,40 @@ const residualsAny = (
 	if (descriptor === undefined) {
 		return { allow: never, deny: never }
 	}
-	return residualNode(policy.node, {
+	const context: ResidualContext = {
 		action: request.action,
 		kind: request.kind,
 		field: request.field,
 		input: { principal: request.principal, path: descriptor.path },
-	})
+	}
+	if (!usesPredicate(policy.node, context)) {
+		return residualNode(policy.node, context)
+	}
+	// A predicate may fail, and it may give another answer each time it runs.
+	// A tree of `And` and `Or` nodes can not run the predicates in the same
+	// order and the same number of times as `decide`. So the residual is one
+	// predicate that runs `decide` for each value.
+	const decision = (value: object) =>
+		decideNode(
+			policy.node,
+			{
+				action: request.action,
+				kind: request.kind,
+				field: request.field,
+				input: {
+					value,
+					principal: request.principal,
+					path: descriptor.path,
+				},
+				trace: undefined,
+			},
+			[],
+		)
+	const test = (tag: Decision.Decision["_tag"]): Ast =>
+		Condition.builder<any, any, any>().predicate(policyPredicate, (value) =>
+			Effect.map(decision(value), (result) => result._tag === tag),
+		)
+	return { allow: test("Allow"), deny: test("Deny") }
 }
 
 /**
@@ -1083,7 +1118,10 @@ const residualsAny = (
  * to `Condition.fold`. It is `True` when the policy allows every value of the
  * kind, and `False` when it allows none.
  *
- * Predicates stay in the condition. They take the principal with them.
+ * When a rule that the request may use has a predicate, the condition is one
+ * predicate with the name `"policy"`. It runs the whole policy for each value,
+ * so its answers and its failures are the same as those of {@link decide}. It
+ * takes the principal with it.
  *
  * @stability stable
  * @category evaluation

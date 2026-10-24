@@ -96,8 +96,12 @@ describe("Rule", () => {
 		const rule = _.allow("read", Bot, {
 			when: ($) => $.predicate("quota", () => Effect.fail("no quota" as const)),
 		})
-		expect(rule).type.toBe<Rule.Rule<"no quota", never, Condition.Opaque>>()
-		expect(_.allow("read", Bot)).type.toBe<Rule.Rule>()
+		expect(rule).type.toBe<
+			Rule.Rule<"no quota", never, Condition.Opaque, App>
+		>()
+		expect(_.allow("read", Bot)).type.toBe<
+			Rule.Rule<never, never, never, App>
+		>()
 	})
 
 	it("checks the extra data", () => {
@@ -135,6 +139,13 @@ describe("Policy", () => {
 				condition: $.predicate("quota", () => Effect.fail("empty" as const)),
 			}),
 		})
+	})
+
+	it("takes only rules of its own domain", () => {
+		const Other = Domain.make({ principal: Caller, resources: [Trigger] })
+		const rule = Rule.builder(App).allow("read", Bot)
+		expect(Policy.rules).type.toBeCallableWith(App, [rule])
+		expect(Policy.rules).type.not.toBeCallableWith(Other, [rule])
 	})
 
 	it("takes only principal fields with a scalar type", () => {

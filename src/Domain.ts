@@ -187,6 +187,8 @@ export const make: <
 		}
 		resources.set(value.kind, value)
 	}
+	// This checks the field names of the principal. See `Resource.fieldPaths`.
+	Resource.fieldPaths(options.principal)
 	return new DomainData({
 		principal: options.principal,
 		resources,

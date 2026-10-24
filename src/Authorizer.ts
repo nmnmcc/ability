@@ -363,7 +363,10 @@ class PrincipalKey implements Equal.Equal {
  * they have the same types and the same data. So a string `"1"` and a bigint
  * `1n` get two texts. The text keeps the name of the class of each object.
  *
- * It gives `undefined` for a value that it can not name with no loss, such as
+ * It reads only the fields of plain objects and of `Schema.Class` values. An
+ * object of another class may keep its data where the text can not see it, as
+ * a `URL` does. So it gives `undefined` for such an object, unless it is a
+ * `Date`, a `URL`, an array, a `Map` or a `Set`. It also gives `undefined` for
  * a function, a symbol, an object with symbol keys, or a value that contains
  * itself.
  */
@@ -403,8 +406,13 @@ const keyText = (value: unknown, seen: Set<object>): string | undefined => {
 		return output
 	}
 	let text: string | undefined
+	const prototype: unknown = Object.getPrototypeOf(value)
+	const constructor =
+		prototype === null ? undefined : (prototype as object).constructor
 	if (value instanceof Date) {
 		text = `d${String(value.getTime())}`
+	} else if (value instanceof URL) {
+		text = `u${JSON.stringify(value.href)}`
 	} else if (Array.isArray(value)) {
 		const items = all(value)
 		text = items === undefined ? undefined : `[${items.join(",")}]`
@@ -415,14 +423,19 @@ const keyText = (value: unknown, seen: Set<object>): string | undefined => {
 	} else if (value instanceof Set) {
 		const items = all(value)
 		text = items === undefined ? undefined : `Set{${items.sort().join(",")}}`
-	} else if (Object.getOwnPropertySymbols(value).length > 0) {
+	} else if (
+		Object.getOwnPropertySymbols(value).length > 0 ||
+		(prototype !== null &&
+			prototype !== Object.prototype &&
+			!Schema.isSchema(constructor))
+	) {
 		text = undefined
 	} else {
 		const keys = Object.keys(value).sort()
 		const items = all(
 			keys.map((key) => (value as Record<string, unknown>)[key]),
 		)
-		const name = Object.getPrototypeOf(value)?.constructor?.name ?? ""
+		const name = constructor?.name ?? ""
 		text =
 			items === undefined
 				? undefined

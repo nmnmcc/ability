@@ -27,16 +27,19 @@ import * as Resource from "./Resource.ts"
 
 /**
  * A rule. `E`, `R` and `O` come from its condition. See
- * `Condition.Condition`.
+ * `Condition.Condition`. `D` is the domain of the rule. A predicate reads the
+ * values and the principal of its domain, so a rule may go only into a policy
+ * of its own domain. A rule from {@link make} has the domain `any`.
  *
  * @stability stable
  * @category models
  * @since 0.3.0
  */
-export interface Rule<E = never, R = never, O = never>
+export interface Rule<E = never, R = never, O = never, D = any>
 	extends Shape<E, R, O>, Pipeable.Pipeable {
 	readonly "~Rule"?: Condition.Variance<E, R, O>
-	[Symbol.iterator](): Generator<Rule<E, R, O>, Rule<E, R, O>, unknown>
+	readonly "~Domain"?: (domain: D) => D
+	[Symbol.iterator](): Generator<Rule<E, R, O, D>, Rule<E, R, O, D>, unknown>
 }
 
 /**
@@ -64,7 +67,7 @@ export interface Shape<E = never, R = never, O = never> {
  * @category models
  * @since 0.3.0
  */
-export type Any = Rule<any, any, any>
+export type Any = Rule<any, any, any, any>
 
 /**
  * The error type of a rule.
@@ -208,7 +211,7 @@ export interface Builder<D> {
 		action: SingleOrArray<A>,
 		resource: SingleOrArray<T>,
 		options?: Options<D, KindOf<T>, C>,
-	) => Rule<Condition.Error<C>, Condition.Services<C>, Condition.OpaqueOf<C>>
+	) => Rule<Condition.Error<C>, Condition.Services<C>, Condition.OpaqueOf<C>, D>
 	readonly deny: <
 		const T extends Target<D>,
 		const A extends ActionFor<D, KindOf<T>>,
@@ -217,7 +220,7 @@ export interface Builder<D> {
 		action: SingleOrArray<A>,
 		resource: SingleOrArray<T>,
 		options?: Options<D, KindOf<T>, C>,
-	) => Rule<Condition.Error<C>, Condition.Services<C>, Condition.OpaqueOf<C>>
+	) => Rule<Condition.Error<C>, Condition.Services<C>, Condition.OpaqueOf<C>, D>
 }
 
 /**

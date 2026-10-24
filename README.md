@@ -275,6 +275,10 @@ the resource fields only. It is `True` when the policy allows every value of the
 kind, and `False` when it allows none. Use it to ask "may this principal do this
 act on some value of this kind?", or to make a database query.
 
+When a rule that the request may use has a predicate, the residual is one
+predicate with the name `"policy"`. It runs the whole policy for each value, so
+it gives the same answers and the same failures as `Policy.decide`.
+
 ## Queries
 
 Change a residual condition into a query with `Condition.fold`. You give one
@@ -300,7 +304,9 @@ const where =
 `fold` fails with `Untranslatable` on a predicate, unless you give a `predicate`
 function too. Take care with `null`: in this library `ne` is true when the field
 is `null`, but in SQL `x <> 'a'` is not true when `x` is `NULL`. Use
-`IS DISTINCT FROM` or a similar form.
+`IS DISTINCT FROM` or a similar form. Give the values to the database as bound
+parameters. A value from a principal may have a quote in it, and in the SQL text
+it could change the query. `examples/openbot-rbac.ts` shows how.
 
 ## JSON
 

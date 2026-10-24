@@ -209,6 +209,11 @@ const walkFields = (
 	for (const [struct, inner] of structsOf(ast, open)) {
 		for (const property of struct.propertySignatures) {
 			if (typeof property.name !== "string") continue
+			// A dot in a path is the step into a nested field. A field name with a
+			// dot would make two fields have one path, so it is a defect.
+			if (property.name.includes(".")) {
+				throw new Error(`A field name may not have a dot: "${property.name}"`)
+			}
 			const path = prefix === "" ? property.name : `${prefix}.${property.name}`
 			const leaf = structsOf(property.type, inner).length === 0
 			visit(path, leaf)
@@ -220,7 +225,8 @@ const walkFields = (
 /**
  * Gives the paths of all the fields of a Schema, with dots for nested fields.
  * A nested struct gives its own path and the paths of its fields. Arrays are
- * left out.
+ * left out. It throws when a field name has a dot, because such a name would
+ * give two fields one path.
  *
  * @stability stable
  * @category getters

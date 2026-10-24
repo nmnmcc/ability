@@ -65,19 +65,43 @@ const alice = Caller.make({ userId: "alice", organizationId: "acme" })
 const own = Bot.make({ id: "b1", organizationId: "acme", ownerUserId: "alice" })
 
 // The residual condition is the list filter. Change it into SQL with fold.
-const toSql = Condition.fold<string>({
-	true: () => "TRUE",
-	false: () => "FALSE",
+// The values go into the query as bound parameters, not into the SQL text. A
+// value from a principal may have a quote in it, and in the SQL text it could
+// change the query.
+interface Query {
+	readonly sql: string
+	readonly params: ReadonlyArray<Condition.Scalar>
+}
+
+const operators = {
+	eq: "=",
+	ne: "<>",
+	lt: "<",
+	lte: "<=",
+	gt: ">",
+	gte: ">=",
+} as const
+
+const join = (parts: ReadonlyArray<Query>, glue: string): Query => ({
+	sql: `(${parts.map((part) => part.sql).join(glue)})`,
+	params: parts.flatMap((part) => part.params),
+})
+
+const toSql = Condition.fold<Query>({
+	true: () => ({ sql: "TRUE", params: [] }),
+	false: () => ({ sql: "FALSE", params: [] }),
 	compare: (op, field, value) =>
 		value === null
-			? `${field} IS ${op === "eq" ? "" : "NOT "}NULL`
-			: `${field} ${op === "eq" ? "=" : "<>"} '${String(value)}'`,
-	in: (field, values) =>
-		`${field} IN (${values.map((v) => `'${String(v)}'`).join(", ")})`,
-	exists: (field) => `${field} IS NOT NULL`,
-	and: (parts) => `(${parts.join(" AND ")})`,
-	or: (parts) => `(${parts.join(" OR ")})`,
-	not: (part) => `NOT ${part}`,
+			? { sql: `${field} IS ${op === "eq" ? "" : "NOT "}NULL`, params: [] }
+			: { sql: `${field} ${operators[op]} ?`, params: [value] },
+	in: (field, values) => ({
+		sql: `${field} IN (${values.map(() => "?").join(", ")})`,
+		params: values,
+	}),
+	exists: (field) => ({ sql: `${field} IS NOT NULL`, params: [] }),
+	and: (parts) => join(parts, " AND "),
+	or: (parts) => join(parts, " OR "),
+	not: (part) => ({ sql: `NOT ${part.sql}`, params: part.params }),
 })
 
 const program = Effect.gen(function* () {
