@@ -1,7 +1,7 @@
 {
 	"name": "@nmnmcc/ability",
-	"version": "0.2.0",
-	"description": "Authorization tools for Effect programs, on the CASL rule engine.",
+	"version": "0.3.0",
+	"description": "Typed, composable authorization policies for Effect programs.",
 	"license": "Apache-2.0",
 	"type": "module",
 	"packageManager": "pnpm@12.15.0",
@@ -20,8 +20,15 @@
 	],
 	"exports": {
 		".": "./dist/index.js",
-		"./Ability": "./dist/Ability.js",
-		"./AbilityExtra": "./dist/AbilityExtra.js"
+		"./Authorizer": "./dist/Authorizer.js",
+		"./Condition": "./dist/Condition.js",
+		"./Decision": "./dist/Decision.js",
+		"./Domain": "./dist/Domain.js",
+		"./HttpApi": "./dist/HttpApi.js",
+		"./Policy": "./dist/Policy.js",
+		"./Principal": "./dist/Principal.js",
+		"./Resource": "./dist/Resource.js",
+		"./Rule": "./dist/Rule.js"
 	},
 	"scripts": {
 		"prepare": "effect-tsgo patch --typescript --no-oxlint",
@@ -39,7 +46,6 @@
 		"registry": "https://registry.npmjs.org"
 	},
 	"devDependencies": {
-		"@casl/ability": "7.0.2",
 		"@effect/tsgo": "0.56.0",
 		"@effect/vitest": "4.0.6",
 		"@types/node": "26.6.5",
@@ -51,7 +57,6 @@
 		"vitest": "5.0.5"
 	},
 	"peerDependencies": {
-		"@casl/ability": "^7.0.2",
 		"effect": "^4.0.6"
 	}
 }

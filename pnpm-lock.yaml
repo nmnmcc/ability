@@ -166,9 +166,6 @@ importers:
 
   .:
     devDependencies:
-      '@casl/ability':
-        specifier: 7.0.2
-        version: 7.0.2
       '@effect/tsgo':
         specifier: 0.56.0
         version: 0.56.0
@@ -198,9 +195,6 @@ importers:
         version: 5.0.5(@types/node@26.6.5)(vite@8.3.5(@types/node@26.6.5))
 
 packages:
-
-  '@casl/ability@7.0.2':
-    resolution: {integrity: sha512-NOYbLTaw080a1Na4CpBtyGpL+i9NZhtGGt/tPrrNpLEv8EawFusHZCgc58ewyPBiZ0NER0iudB0et+IP8xJbLg==}
 
   '@effect/tsgo-darwin-arm64@0.56.0':
     resolution: {integrity: sha512-08yYRU3OOw/jKzy582EF741xKvLJ2HK6GO+L2zuSR97b61ES7fER2fxg1xp4mv8u2Fc3bBRvk7026GzdKEGFgw==}
@@ -493,18 +487,6 @@ packages:
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [win32]
-
-  '@ucast/core@2.0.0':
-    resolution: {integrity: sha512-4XVx6LzPXZGvnZO5jp39cm/G4UvuwvEdtmg+9+4+zl6uFkCcB7UJacvtMYeBE56GJVT99Zqy6Pii7dGJq3Kz9Q==}
-
-  '@ucast/js@4.0.1':
-    resolution: {integrity: sha512-9O5xPBvwEWQk2WvO69Eh2WJB8QljVZ2vRVdFvfnKjlZwWXcYxp1lqLBhwXBU1AtuSgCvKhJPkXdjKJggUmAmQQ==}
-
-  '@ucast/mongo2js@2.0.0':
-    resolution: {integrity: sha512-vNBZzRnsfLr/TSxEoxz6W6hHQ5tmWsfEeC0nCq5z8RezC1AqIRy3cfHm8AGvlGtcn+cTSFQcZremfqnz6wm+nQ==}
-
-  '@ucast/mongo@3.0.0':
-    resolution: {integrity: sha512-kwuSH+kdB4GCR0LGhy/PEDm4PCflur89AlK82kNiYD0FvsA8A/p+0sx7m+/R8mMFAlmlkAd3VXp7sM/cLLYWYg==}
 
   '@vitest/mocker@5.0.5':
     resolution: {integrity: sha512-xLL3lkDegJZw+MGoGaCCsFayDZthGgpAtr3Vziyfc4p7xH89K7KRPcRBBh/kEYm0Aqkt5DtTmkYpBtRV/FrHZg==}
@@ -983,10 +965,6 @@ packages:
 
 snapshots:
 
-  '@casl/ability@7.0.2':
-    dependencies:
-      '@ucast/mongo2js': 2.0.0
-
   '@effect/tsgo-darwin-arm64@0.56.0':
     optional: true
 
@@ -1157,22 +1135,6 @@ snapshots:
 
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
-
-  '@ucast/core@2.0.0': {}
-
-  '@ucast/js@4.0.1':
-    dependencies:
-      '@ucast/core': 2.0.0
-
-  '@ucast/mongo2js@2.0.0':
-    dependencies:
-      '@ucast/core': 2.0.0
-      '@ucast/js': 4.0.1
-      '@ucast/mongo': 3.0.0
-
-  '@ucast/mongo@3.0.0':
-    dependencies:
-      '@ucast/core': 2.0.0
 
   '@vitest/mocker@5.0.5(vite@8.3.5(@types/node@26.6.5))':
     dependencies:
