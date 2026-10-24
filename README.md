@@ -12,9 +12,8 @@ The library is made with [Effect](https://effect.website) only:
   the principal, change it into a database query, and keep it as JSON.
 - A policy is a tree. Lists of rules are its leaves, and you put policies
   together with `all`, `any`, `firstOf` and `ceiling`.
-- An `Authorizer` is an Effect service. A "no" goes into the error channel.
-  When a policy can not be loaded, the check fails, so an error is never a
-  "yes".
+- An `Authorizer` is an Effect service. A "no" goes into the error channel. When
+  a policy can not be loaded, the check fails, so an error is never a "yes".
 
 ## Requirements
 
@@ -84,8 +83,8 @@ class Post extends Resource.Class<Post>()("Post", {
 const Blog = Domain.make({ principal: User, resources: [Post] })
 ```
 
-Make a policy. Each `yield*` gives one rule. The function runs at once and
-gives back the policy:
+Make a policy. Each `yield*` gives one rule. The function runs at once and gives
+back the policy:
 
 ```ts
 const policy = Policy.define(Blog)(function* (_) {
@@ -105,9 +104,9 @@ const policy = Policy.define(Blog)(function* (_) {
 ```
 
 The types check every name. `_.allow("fly", Post)` is a type error, because
-`fly` is not an action of `Post`. `$.eq("authorId", 5)` is a type error,
-because `authorId` is a string. `$.principal("name")` is a type error, because
-the principal has no `name` field.
+`fly` is not an action of `Post`. `$.eq("authorId", 5)` is a type error, because
+`authorId` is a string. `$.principal("name")` is a type error, because the
+principal has no `name` field.
 
 Get a decision:
 
@@ -180,20 +179,19 @@ _.allow("read", "*", {
 
 ## Rules
 
-- `_.allow(action, resource, options)` and `_.deny(...)` make rules. The
-  action and the resource may be lists.
-- The action `"*"` means every action. The resource `"*"` means every
-  resource.
+- `_.allow(action, resource, options)` and `_.deny(...)` make rules. The action
+  and the resource may be lists.
+- The action `"*"` means every action. The resource `"*"` means every resource.
 - `when` is the condition. It gets a builder with the types of the resource.
-- `fields` makes the rule about some fields only. `*` stands for any part of
-  one field name, and `**` for any number of parts: `settings.*` covers
+- `fields` makes the rule about some fields only. `*` stands for any part of one
+  field name, and `**` for any number of parts: `settings.*` covers
   `settings.model`.
 - `reason`, `id` and `meta` are kept with the rule. `meta` is extra data, such
   as the scope of a grant. Give its Schema to `Domain.make({ meta })`.
 
-An allow rule with fields covers a request for the whole value: "may update
-some fields" is a yes. A deny rule with fields does not stop a request for the
-whole value.
+An allow rule with fields covers a request for the whole value: "may update some
+fields" is a yes. A deny rule with fields does not stop a request for the whole
+value.
 
 ## Conditions
 
@@ -212,10 +210,10 @@ The builder in `when` has these functions:
 
 A missing field has the value `null`.
 
-`predicate` is the one way out of plain data. Its test may give a boolean or
-an `Effect`. The error type and the service type of the `Effect` go into the
-types of the policy and of every check. A policy with a predicate can not
-become JSON or a query, and the type system stops you when you try.
+`predicate` is the one way out of plain data. Its test may give a boolean or an
+`Effect`. The error type and the service type of the `Effect` go into the types
+of the policy and of every check. A policy with a predicate can not become JSON
+or a query, and the type system stops you when you try.
 
 ## Policies
 
@@ -255,8 +253,8 @@ const forToken = Policy.all([memberPolicy, tokenPolicy]).pipe(
 )
 ```
 
-A decision is one of three answers: `Allow`, `Deny`, or `NotApplicable`, when
-no rule gives an answer. A check treats `NotApplicable` as a "no", but an
+A decision is one of three answers: `Allow`, `Deny`, or `NotApplicable`, when no
+rule gives an answer. A check treats `NotApplicable` as a "no", but an
 authorizer with a decider asks the decider first.
 
 ## Questions to a Policy
@@ -270,9 +268,9 @@ authorizer with a decider asks the decider first.
 | `Policy.permittedFields` | The fields of a value that the policy lets a request use.      |
 
 `Policy.residual` puts the principal into every rule and gives a condition on
-the resource fields only. It is `True` when the policy allows every value of
-the kind, and `False` when it allows none. Use it to ask "may this principal
-do this act on some value of this kind?", or to make a database query.
+the resource fields only. It is `True` when the policy allows every value of the
+kind, and `False` when it allows none. Use it to ask "may this principal do this
+act on some value of this kind?", or to make a database query.
 
 ## Queries
 
@@ -296,10 +294,10 @@ const where =
 	toSql(Policy.residual(policy, { principal, action: "read", kind: "Post" }))
 ```
 
-`fold` fails with `Untranslatable` on a predicate, unless you give a
-`predicate` function too. Take care with `null`: in this library `ne` is
-true when the field is `null`, but in SQL `x <> 'a'` is not true when `x` is
-`NULL`. Use `IS DISTINCT FROM` or a similar form.
+`fold` fails with `Untranslatable` on a predicate, unless you give a `predicate`
+function too. Take care with `null`: in this library `ne` is true when the field
+is `null`, but in SQL `x <> 'a'` is not true when `x` is `NULL`. Use
+`IS DISTINCT FROM` or a similar form.
 
 ## JSON
 
@@ -313,8 +311,8 @@ const again = Schema.decodeUnknownSync(PolicySchema)(json)
 ```
 
 Decoding checks every kind, action, field and principal field against the
-domain, and `meta` against the `meta` Schema of the domain. So a policy from
-a database can not name a field that does not exist.
+domain, and `meta` against the `meta` Schema of the domain. So a policy from a
+database can not name a field that does not exist.
 
 ## Authorizer
 
@@ -373,8 +371,8 @@ The errors of a check:
 ### Deciders
 
 When no rule gives an answer, the authorizer asks the decider, if there is one.
-A decider may answer at once, or fail with `Pending` when a person or a Bot
-must answer later:
+A decider may answer at once, or fail with `Pending` when a person or a Bot must
+answer later:
 
 ```ts
 Authorizer.layer(Auth, {
@@ -392,9 +390,9 @@ comes first: `Policy.firstOf([grants, rules])`.
 
 ## HttpApi
 
-`@nmnmcc/ability/HttpApi` checks requests in an `effect/http-api` server.
-Each endpoint says what it needs. An endpoint with no annotation is closed, so
-a new endpoint does nothing until you say what it needs:
+`@nmnmcc/ability/HttpApi` checks requests in an `effect/http-api` server. Each
+endpoint says what it needs. An endpoint with no annotation is closed, so a new
+endpoint does nothing until you say what it needs:
 
 ```ts
 import * as AbilityHttpApi from "@nmnmcc/ability/HttpApi"
@@ -420,9 +418,9 @@ const health = HttpApiEndpoint.get("health", "/health").annotate(
 const AuthorizationLive = AbilityHttpApi.layer(Authorization, Auth)
 ```
 
-`GroupRequired` gives a default for a whole group: one list for GET requests
-and one for every other method. `AbilityHttpApi.errors` gives the errors with
-HTTP status codes: 403, 503, and 409.
+`GroupRequired` gives a default for a whole group: one list for GET requests and
+one for every other method. `AbilityHttpApi.errors` gives the errors with HTTP
+status codes: 403, 503, and 409.
 
 ## Examples
 
