@@ -25,6 +25,11 @@
  *   this kind?"
  * - {@link permittedFields}: the fields that the policy lets a request use.
  *
+ * Each of them also takes the request first and the policy later. In a `pipe`,
+ * the policy gives the domain. Outside a `pipe`, give the domain by hand, as
+ * in `Policy.decide<typeof App>(request)`. Without it the request has the type
+ * `never`, so TypeScript can still check it.
+ *
  * A policy without predicates can become JSON with {@link schema}.
  *
  * @stability stable
@@ -214,6 +219,20 @@ export type Target<D> = {
 }[Domain.Kind<D>]
 
 /**
+ * A {@link Target} with no field. Each kind keeps its own actions.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+export type FieldlessTarget<D> = {
+	[K in Domain.Kind<D>]: {
+		readonly action: Domain.ActionOf<D, K>
+		readonly resource: Domain.ValueOf<D, K>
+	}
+}[Domain.Kind<D>]
+
+/**
  * One act on one kind of resource, with no value.
  *
  * @stability stable
@@ -236,6 +255,17 @@ export type KindTarget<D> = {
  * @since 0.3.0
  */
 export type Request<D> = Target<D> & { readonly principal: Domain.Principal<D> }
+
+/**
+ * A {@link Request} with no field.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+export type FieldlessRequest<D> = FieldlessTarget<D> & {
+	readonly principal: Domain.Principal<D>
+}
 
 /**
  * A request about a kind of resource, with no value.
@@ -424,7 +454,7 @@ export const ceiling: {
  * @since 0.3.0
  */
 export const decide: {
-	<D extends Domain.Any>(
+	<D extends Domain.Any = never>(
 		request: Request<D>,
 	): <E, R, O>(
 		policy: Policy<D, E, R, O>,
@@ -443,7 +473,7 @@ export const decide: {
  * @since 0.3.0
  */
 export const decideSync: {
-	<D extends Domain.Any>(
+	<D extends Domain.Any = never>(
 		request: Request<D>,
 	): (policy: Policy<D>) => Decision.Decision
 	<D extends Domain.Any>(
@@ -460,7 +490,7 @@ export const decideSync: {
  * @since 0.3.0
  */
 export const explain: {
-	<D extends Domain.Any>(
+	<D extends Domain.Any = never>(
 		request: Request<D>,
 	): <E, R, O>(policy: Policy<D, E, R, O>) => Effect.Effect<Explanation, E, R>
 	<D extends Domain.Any, E, R, O>(
@@ -482,7 +512,7 @@ export const explain: {
  * @since 0.3.0
  */
 export const residual: {
-	<D extends Domain.Any>(
+	<D extends Domain.Any = never>(
 		request: KindRequest<D>,
 	): <E, R, O>(policy: Policy<D, E, R, O>) => Condition.Condition<E, R, O>
 	<D extends Domain.Any, E, R, O>(
@@ -500,14 +530,14 @@ export const residual: {
  * @since 0.3.0
  */
 export const permittedFields: {
-	<D extends Domain.Any>(
-		request: Omit<Request<D>, "field">,
+	<D extends Domain.Any = never>(
+		request: FieldlessRequest<D>,
 	): <E, R, O>(
 		policy: Policy<D, E, R, O>,
 	) => Effect.Effect<ReadonlyArray<string>, E, R>
 	<D extends Domain.Any, E, R, O>(
 		policy: Policy<D, E, R, O>,
-		request: Omit<Request<NoInfer<D>>, "field">,
+		request: FieldlessRequest<NoInfer<D>>,
 	): Effect.Effect<ReadonlyArray<string>, E, R>
 } = internal.permittedFields as never
 

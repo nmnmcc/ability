@@ -163,6 +163,23 @@ const ServerLive = Layer.mergeAll(BotsLive, AdminLive).pipe(
 	Layer.provideMerge(PlatformLive),
 )
 
+const BrokenServerLive = Layer.mergeAll(BotsLive, AdminLive).pipe(
+	Layer.provideMerge(
+		Layer.mergeAll(
+			AuthenticationLive,
+			Authorization.layer(Authorize, Auth),
+		).pipe(
+			Layer.provide(
+				Authorizer.layer(Auth, {
+					principal: Identity,
+					policy: () => Effect.fail({ password: "secret" }),
+				}),
+			),
+		),
+	),
+	Layer.provideMerge(PlatformLive),
+)
+
 describe("HttpApi", () => {
 	it.effect("checks a loaded resource for an endpoint", () =>
 		Effect.gen(function* () {
@@ -202,5 +219,20 @@ describe("HttpApi", () => {
 			const exit = yield* Effect.exit(client.admin.stats())
 			assert.isTrue(Exit.isFailure(exit))
 		}).pipe(Effect.scoped, Effect.provide(ServerLive)),
+	)
+
+	it.effect("does not send the cause of PolicyUnavailable", () =>
+		Effect.gen(function* () {
+			const client = yield* HttpApiTest.groups(Api, ["bots", "admin"])
+			const exit = yield* Effect.exit(
+				client.bots.rename({ params: { id: "b1" } }),
+			)
+			const error = Exit.findErrorOption(exit)
+			assert.isTrue(
+				error._tag === "Some" &&
+					error.value instanceof Authorizer.PolicyUnavailable,
+			)
+			assert.notInclude(JSON.stringify(error), "secret")
+		}).pipe(Effect.scoped, Effect.provide(BrokenServerLive)),
 	)
 })

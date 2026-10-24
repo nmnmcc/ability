@@ -156,8 +156,15 @@ export interface Authorizer<D extends Domain.Any, E, R> {
 	readonly domain: D
 	/** The principal of the current request. */
 	readonly principal: Effect.Effect<Domain.Principal<D>, E, R>
-	/** The policy of the principal of the current request. */
-	readonly policy: Effect.Effect<Policy.Policy<D, E>, PolicyUnavailable | E, R>
+	/**
+	 * The policy of the principal of the current request. Its predicates have
+	 * the services of the layer. It may have predicates, so it is opaque.
+	 */
+	readonly policy: Effect.Effect<
+		Policy.Policy<D, E, never, Condition.Opaque>,
+		PolicyUnavailable | E,
+		R
+	>
 	/** Gives the decision of the policy. It does not ask the decider. */
 	readonly decide: (
 		target: Policy.Target<D>,
@@ -189,7 +196,7 @@ export interface Authorizer<D extends Domain.Any, E, R> {
 	>
 	/** Gives the fields of a value that the principal may use. */
 	readonly permittedFields: (
-		target: Omit<Policy.Target<D>, "field">,
+		target: Policy.FieldlessTarget<D>,
 	) => Effect.Effect<ReadonlyArray<string>, PolicyUnavailable | E, R>
 	/**
 	 * Removes the cached policy of a principal, or of every principal. Call it
@@ -240,7 +247,7 @@ export interface ServiceClass<
 		R | Self
 	>
 	readonly permittedFields: (
-		target: Omit<Policy.Target<D>, "field">,
+		target: Policy.FieldlessTarget<D>,
 	) => Effect.Effect<ReadonlyArray<string>, PolicyUnavailable | E, R | Self>
 }
 

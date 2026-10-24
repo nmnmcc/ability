@@ -15,6 +15,7 @@ import type * as Condition from "../Condition.ts"
 import * as Decision from "../Decision.ts"
 import type * as Domain from "../Domain.ts"
 import type * as Policy from "../Policy.ts"
+import * as condition from "./condition.ts"
 import { kindOf } from "./domain.ts"
 import * as policy from "./policy.ts"
 
@@ -115,11 +116,23 @@ export const layer = (
 	},
 ) => {
 	const domain: Domain.Any = service.domain
+	// The JSON codec turns every value into JSON with no loss. A plain encoder
+	// may give a value that JSON can not hold, such as a `Map` or a `bigint`,
+	// and two other principals may then get one key.
 	const encode = Schema.encodeUnknownSync(
-		domain.principal as unknown as Schema.Codec<unknown, unknown>,
+		Schema.toCodecJson(
+			domain.principal as unknown as Schema.Codec<unknown, unknown>,
+		),
 	)
-	const keyOf = (principal: object) =>
-		new PrincipalKey(principal, JSON.stringify(encode(principal)))
+	// It gives `undefined` when the principal has no key. Such a principal does
+	// not use the cache.
+	const keyOf = (principal: object): PrincipalKey | undefined => {
+		try {
+			return new PrincipalKey(principal, JSON.stringify(encode(principal)))
+		} catch {
+			return undefined
+		}
+	}
 	return Layer.effect(
 		service,
 		Effect.gen(function* () {
@@ -127,10 +140,13 @@ export const layer = (
 			// layer, so a check does not need them.
 			const services = yield* Effect.context<never>()
 
+			// The predicates of the policy get the services of the layer, so the
+			// policy and its residual conditions need no services.
 			const load = (principal: object) =>
 				options.policy(principal).pipe(
 					Effect.provideContext(services),
 					Effect.mapError((cause) => PolicyUnavailable.make({ cause })),
+					Effect.map((value) => policy.provideContext(value, services)),
 				)
 
 			const cache =
@@ -143,10 +159,10 @@ export const layer = (
 						})
 
 			const policyFor = (principal: object) => {
-				if (cache === undefined) {
+				const key = cache === undefined ? undefined : keyOf(principal)
+				if (cache === undefined || key === undefined) {
 					return load(principal)
 				}
-				const key = keyOf(principal)
 				// A failed lookup is kept in the cache. Remove it, so the next check
 				// tries again.
 				return Cache.get(cache, key).pipe(
@@ -184,10 +200,13 @@ export const layer = (
 				if (pair.allow._tag === "True") {
 					return Decision.Allow({})
 				}
-				if (pair.deny._tag === "True") {
-					return Decision.Deny({})
+				// The decider may answer for the whole kind only when no value is
+				// denied, and when no predicate may fail. Else some value may get a
+				// "no" from the policy, so the answer for the kind is "no".
+				if (pair.deny._tag === "False" && !condition.hasPredicate(pair.allow)) {
+					return Decision.NotApplicable
 				}
-				return Decision.NotApplicable
+				return Decision.Deny({})
 			}
 
 			const check = Effect.fnUntraced(function* (target: AnyTarget) {
@@ -248,12 +267,16 @@ export const layer = (
 				)
 			})
 
-			const invalidate = (principal?: object) =>
-				cache === undefined
-					? Effect.void
-					: principal === undefined
-						? Cache.invalidateAll(cache)
-						: Cache.invalidate(cache, keyOf(principal))
+			const invalidate = (principal?: object) => {
+				if (cache === undefined) {
+					return Effect.void
+				}
+				if (principal === undefined) {
+					return Cache.invalidateAll(cache)
+				}
+				const key = keyOf(principal)
+				return key === undefined ? Effect.void : Cache.invalidate(cache, key)
+			}
 
 			return {
 				domain,

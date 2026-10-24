@@ -1,8 +1,15 @@
 // Each test gives its own layer, so it uses Effect.provide.
 // @effect-diagnostics strictEffectProvide:off
 import { assert, describe, it } from "@effect/vitest"
-import { Context, Effect, Exit, Layer, Ref } from "effect"
-import { Authorizer, Condition, Decision, Policy } from "../src/index.ts"
+import { Context, Effect, Exit, Layer, Ref, Schema } from "effect"
+import {
+	Authorizer,
+	Condition,
+	Decision,
+	Domain,
+	Policy,
+	Principal,
+} from "../src/index.ts"
 import {
 	alice,
 	aliceBot,
@@ -276,6 +283,83 @@ describe("Authorizer", () => {
 				Effect.exit,
 			)
 			assert.isTrue(Exit.isSuccess(exit))
+			const filtered = yield* Effect.gen(function* () {
+				const condition = yield* Auth2.filter({ action: "read", kind: "Bot" })
+				return yield* Condition.evaluate(condition, { value: aliceBot })
+			}).pipe(
+				Effect.provideService(Identity, alice),
+				Effect.provide(layer),
+				Effect.exit,
+			)
+			assert.isTrue(Exit.isSuccess(filtered) && filtered.value)
+		}),
+	)
+
+	it.effect("does not let the decider allow a kind with a denied value", () =>
+		Effect.gen(function* () {
+			class Auth3 extends Authorizer.Service<Auth3, { requires: Identity }>()(
+				"test/Auth3",
+				App,
+			) {}
+			const layer = Authorizer.layer(Auth3, {
+				principal: Identity,
+				policy: () =>
+					Effect.succeed(
+						Policy.define(App)(function* (_) {
+							yield* _.allow("read", Bot)
+							yield* _.deny("read", Bot, { when: ($) => $.eq("id", "b1") })
+						}),
+					),
+				decider: () => Effect.succeed(Decision.Allow({})),
+			})
+			const exit = yield* Auth3.check({ action: "read", kind: "Bot" }).pipe(
+				Effect.provideService(Identity, alice),
+				Effect.provide(layer),
+				Effect.exit,
+			)
+			assert.strictEqual(failureTag(exit), "Forbidden")
+		}),
+	)
+
+	it.effect("does not give one cached policy to two principals", () =>
+		Effect.gen(function* () {
+			class User extends Principal.Class<User>("User")({
+				claims: Schema.ReadonlyMap(Schema.String, Schema.String),
+			}) {}
+			const Shop = Domain.make({ principal: User, resources: [Bot] })
+			class Current extends Context.Service<Current, User>()(
+				"@nmnmcc/ability/tests/Authorizer.test/Current",
+			) {}
+			class ShopAuth extends Authorizer.Service<
+				ShopAuth,
+				{ requires: Current }
+			>()("test/ShopAuth", Shop) {}
+			const layer = Authorizer.layer(ShopAuth, {
+				principal: Current,
+				policy: (user) =>
+					Effect.succeed(
+						Policy.define(Shop)(function* (_) {
+							if (user.claims.get("role") === "admin") {
+								yield* _.allow("read", Bot)
+							}
+						}),
+					),
+			})
+			const admin = User.make({ claims: new Map([["role", "admin"]]) })
+			const guest = User.make({ claims: new Map([["role", "guest"]]) })
+			const exit = yield* Effect.gen(function* () {
+				yield* Effect.provideService(
+					ShopAuth.check({ action: "read", resource: aliceBot }),
+					Current,
+					admin,
+				)
+				yield* Effect.provideService(
+					ShopAuth.check({ action: "read", resource: aliceBot }),
+					Current,
+					guest,
+				)
+			}).pipe(Effect.provide(layer), Effect.exit)
+			assert.strictEqual(failureTag(exit), "Forbidden")
 		}),
 	)
 })

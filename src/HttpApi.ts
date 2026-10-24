@@ -109,13 +109,17 @@ export const requires: <
  * The errors of the middleware, with HTTP status codes: 403 for
  * `Forbidden`, 503 for `PolicyUnavailable`, and 409 for `Pending`.
  *
+ * The body of a `PolicyUnavailable` response has only its `_tag`. The cause
+ * may have private details, such as an error from the database, so it stays
+ * on the server.
+ *
  * @stability unstable
  * @category errors
  * @since 0.3.0
  */
 export const errors = [
 	Authorizer.Forbidden.pipe(HttpApiSchema.status(403)),
-	Authorizer.PolicyUnavailable.pipe(HttpApiSchema.status(503)),
+	internal.PolicyUnavailableResponse.pipe(HttpApiSchema.status(503)),
 	Authorizer.Pending.pipe(HttpApiSchema.status(409)),
 ] as const
 

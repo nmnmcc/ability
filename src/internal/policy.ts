@@ -2,6 +2,7 @@
 // the public types. Inside this file they are erased to `unknown`, so the
 // language service check for `unknown` in an Effect is off here.
 // @effect-diagnostics anyUnknownInErrorContext:off
+import type * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Equal from "effect/Equal"
 import * as Formatter from "effect/Formatter"
@@ -19,6 +20,7 @@ import type * as Policy from "../Policy.ts"
 import type * as Rule from "../Rule.ts"
 import * as condition from "./condition.ts"
 import { getDescriptor, kindOf } from "./domain.ts"
+import { structFields } from "./resource.ts"
 import * as rule from "./rule.ts"
 
 /** @internal */
@@ -166,6 +168,51 @@ export const ceiling = dual(2, (policy: unknown, cap: unknown): any => {
 		}),
 	)
 })
+
+const provideNode = (node: Node, context: Context.Context<never>): Node => {
+	switch (node._tag) {
+		case "Rules":
+			return Object.freeze({
+				...node,
+				rules: Object.freeze(
+					node.rules.map((value) =>
+						value.when === undefined || !condition.hasPredicate(value.when)
+							? value
+							: rule.make({
+									...rule.toData(value),
+									when: condition.provideContext(value.when, context),
+								}),
+					),
+				),
+			})
+		case "All":
+		case "Any":
+		case "FirstOf":
+			return Object.freeze({
+				_tag: node._tag,
+				policies: Object.freeze(
+					node.policies.map((child) => provideNode(child, context)),
+				),
+			})
+		case "Ceiling":
+			return Object.freeze({
+				_tag: "Ceiling",
+				cap: provideNode(node.cap, context),
+				policy: provideNode(node.policy, context),
+			})
+	}
+}
+
+/**
+ * Gives the services in `context` to every predicate of a policy, so the
+ * policy needs no services when it runs.
+ *
+ * @internal
+ */
+export const provideContext = (
+	policy: unknown,
+	context: Context.Context<never>,
+): any => fromNode(domainOf(policy), provideNode(nodeOf(policy), context))
 
 // Decisions
 
@@ -368,17 +415,20 @@ export const decideSync = dual(
 export const explainOf = (
 	policy: unknown,
 	request: Policy.AnyRequest,
-): Effect.Effect<Policy.Explanation, unknown, unknown> => {
-	const trace: Array<Policy.Step> = []
-	const context = makeContext(domainOf(policy), request, trace)
-	if (context === undefined) {
-		return Effect.succeed({ decision: Decision.NotApplicable, steps: [] })
-	}
-	return Effect.map(decideNode(nodeOf(policy), context, []), (decision) => ({
-		decision,
-		steps: Object.freeze(trace),
-	}))
-}
+): Effect.Effect<Policy.Explanation, unknown, unknown> =>
+	// Each run of the Effect needs its own trace, so the trace is made inside
+	// the Effect.
+	Effect.suspend(() => {
+		const trace: Array<Policy.Step> = []
+		const context = makeContext(domainOf(policy), request, trace)
+		if (context === undefined) {
+			return Effect.succeed({ decision: Decision.NotApplicable, steps: [] })
+		}
+		return Effect.map(decideNode(nodeOf(policy), context, []), (decision) => ({
+			decision,
+			steps: Object.freeze(trace),
+		}))
+	})
 
 /** @internal */
 export const explain = dual(2, explainOf)
@@ -466,10 +516,19 @@ const firstApplicableResidual = (
 	return { allow, deny }
 }
 
+/**
+ * A condition that is always true, but that tests both conditions of a pair
+ * first. It runs every predicate that `decide` runs for the node, so a failure
+ * of a predicate is not lost.
+ */
+const runAll = (pair: Pair): Ast => or(pair.allow, pair.deny, always)
+
 const residualNode = (node: Node, context: ResidualContext): Pair => {
 	switch (node._tag) {
 		case "Rules": {
 			switch (node.algorithm) {
+				// The parts of each condition are in the order that `decide` tests
+				// the rules. So a predicate that fails in `decide` fails here too.
 				case "denyOverrides": {
 					const deny = or(
 						...node.rules
@@ -477,12 +536,12 @@ const residualNode = (node: Node, context: ResidualContext): Pair => {
 							.map((value) => ruleCondition(value, context)),
 					)
 					const allow = and(
+						not(deny),
 						or(
 							...node.rules
 								.filter((value) => value._tag === "Allow")
 								.map((value) => ruleCondition(value, context)),
 						),
-						not(deny),
 					)
 					return { allow, deny }
 				}
@@ -493,12 +552,12 @@ const residualNode = (node: Node, context: ResidualContext): Pair => {
 							.map((value) => ruleCondition(value, context)),
 					)
 					const deny = and(
+						not(allow),
 						or(
 							...node.rules
 								.filter((value) => value._tag === "Deny")
 								.map((value) => ruleCondition(value, context)),
 						),
-						not(allow),
 					)
 					return { allow, deny }
 				}
@@ -519,9 +578,14 @@ const residualNode = (node: Node, context: ResidualContext): Pair => {
 			return { allow, deny }
 		}
 		case "Any": {
+			// `decide` tests each child in full before it goes to the next one, so
+			// the predicates of a child that does not allow run first.
+			let allow: Ast = never
 			const pairs = node.policies.map((child) => residualNode(child, context))
-			const allow = or(...pairs.map((pair) => pair.allow))
-			const deny = and(or(...pairs.map((pair) => pair.deny)), not(allow))
+			for (const pair of pairs.slice().reverse()) {
+				allow = or(pair.allow, and(runAll(pair), allow))
+			}
+			const deny = and(not(allow), or(...pairs.map((pair) => pair.deny)))
 			return { allow, deny }
 		}
 		case "FirstOf": {
@@ -539,7 +603,7 @@ const residualNode = (node: Node, context: ResidualContext): Pair => {
 			const cap = residualNode(node.cap, context)
 			const inner = residualNode(node.policy, context)
 			return {
-				allow: and(not(cap.deny), inner.allow),
+				allow: and(runAll(cap), not(cap.deny), inner.allow),
 				deny: or(cap.deny, inner.deny),
 			}
 		}
@@ -625,17 +689,12 @@ const encodedNodeSchema = (
 const principalFieldPaths = (domain: Domain.Any): ReadonlySet<string> => {
 	const output = new Set<string>()
 	const visit = (schema: unknown, prefix: string): void => {
-		if (
-			!Predicate.hasProperty(schema, "fields") ||
-			!Predicate.isObject(schema.fields)
-		) {
-			return
-		}
-		const fields = schema.fields as Record<string, unknown>
-		for (const key of Object.keys(fields)) {
-			const path = prefix === "" ? key : `${prefix}.${key}`
-			output.add(path)
-			visit(fields[key], path)
+		for (const fields of structFields(schema)) {
+			for (const key of Object.keys(fields)) {
+				const path = prefix === "" ? key : `${prefix}.${key}`
+				output.add(path)
+				visit(fields[key], path)
+			}
 		}
 	}
 	visit(domain.principal, "")

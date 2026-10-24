@@ -6,10 +6,34 @@ import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
 import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
+import * as SchemaTransformation from "effect/SchemaTransformation"
 import { HttpRouter } from "effect/http"
 import type * as Authorizer from "../Authorizer.ts"
 import type * as HttpApi from "../HttpApi.ts"
 import { GroupRequired, Required } from "../HttpApi.ts"
+import { PolicyUnavailable } from "./authorizer.ts"
+
+/**
+ * The Schema of a `PolicyUnavailable` response. It encodes only the `_tag`, so
+ * the cause does not go to the client.
+ *
+ * @internal
+ */
+export const PolicyUnavailableResponse = Schema.TaggedStruct(
+	"PolicyUnavailable",
+	{},
+).pipe(
+	Schema.decodeTo(
+		Schema.declare(
+			(u): u is PolicyUnavailable => u instanceof PolicyUnavailable,
+		),
+		SchemaTransformation.transform({
+			decode: () => PolicyUnavailable.make({ cause: undefined }),
+			encode: () => ({ _tag: "PolicyUnavailable" as const }),
+		}),
+	),
+)
 
 /** @internal */
 export const requires = (

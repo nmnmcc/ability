@@ -128,6 +128,12 @@ describe("Policy", () => {
 	})
 
 	it("keeps the types of predicates", () => {
+		const rule = Rule.builder(App).allow("read", Bot, {
+			when: ($) => $.predicate("quota", () => Effect.fail("empty" as const)),
+		})
+		expect(rule.when).type.toBe<
+			Condition.Condition<"empty", never, Condition.Opaque> | undefined
+		>()
 		expect(policy).type.toBe<Policy.Policy<App>>()
 		expect(effectful).type.toBe<
 			Policy.Policy<App, "empty", Quota, Condition.Opaque>
@@ -166,6 +172,43 @@ describe("Policy", () => {
 			principal: alice,
 			action: "write",
 			kind: "Trigger",
+		})
+		expect(Policy.permittedFields).type.toBeCallableWith(policy, {
+			principal: alice,
+			action: "read",
+			resource: aliceBot,
+		})
+		expect(Policy.permittedFields).type.not.toBeCallableWith(policy, {
+			principal: alice,
+			action: "write",
+			resource: aliceBot,
+		})
+	})
+
+	it("needs the domain of a request with no policy", () => {
+		expect(
+			policy.pipe(
+				Policy.decideSync({
+					principal: alice,
+					action: "read",
+					resource: aliceBot,
+				}),
+			),
+		).type.toBe<Decision.Decision>()
+		expect(Policy.decideSync<App>).type.toBeCallableWith({
+			principal: alice,
+			action: "read",
+			resource: aliceBot,
+		})
+		expect(Policy.decideSync<App>).type.not.toBeCallableWith({
+			principal: alice,
+			action: "fly",
+			resource: aliceBot,
+		})
+		expect(Policy.decideSync).type.not.toBeCallableWith({
+			principal: alice,
+			action: "fly",
+			resource: aliceBot,
 		})
 	})
 
@@ -210,6 +253,24 @@ describe("Authorizer", () => {
 			action: "write",
 			resource: aliceBot,
 		})
+		expect(Auth.permittedFields).type.not.toBeCallableWith({
+			action: "write",
+			resource: aliceBot,
+		})
+	})
+
+	it("keeps a loaded policy opaque", () => {
+		const policy = Effect.gen(function* () {
+			const auth = yield* Auth
+			return yield* auth.policy
+		})
+		expect(policy).type.toBe<
+			Effect.Effect<
+				Policy.Policy<App, "no session", never, Condition.Opaque>,
+				Authorizer.PolicyUnavailable | "no session",
+				Identity | Auth
+			>
+		>()
 	})
 
 	it("checks the options of the layer", () => {

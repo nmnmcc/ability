@@ -13,10 +13,34 @@ const fieldRefs = (fields: Schema.Struct.Fields) => {
 	return Object.freeze(refs)
 }
 
-const hasFields = (
+/**
+ * Gives the struct fields inside a Schema. It looks through the wrappers of
+ * `Schema.optionalKey` and `Schema.optional`, and through the members of a
+ * union, such as `Schema.NullOr`. A union of structs gives the fields of each
+ * struct.
+ *
+ * @internal
+ */
+export const structFields = (
 	schema: unknown,
-): schema is { readonly fields: Schema.Struct.Fields } =>
-	Predicate.hasProperty(schema, "fields") && Predicate.isObject(schema.fields)
+): ReadonlyArray<Schema.Struct.Fields> => {
+	if (
+		Predicate.hasProperty(schema, "fields") &&
+		Predicate.isObject(schema.fields)
+	) {
+		return [schema.fields as Schema.Struct.Fields]
+	}
+	if (
+		Predicate.hasProperty(schema, "members") &&
+		Array.isArray(schema.members)
+	) {
+		return schema.members.flatMap(structFields)
+	}
+	if (Predicate.hasProperty(schema, "schema")) {
+		return structFields(schema.schema)
+	}
+	return []
+}
 
 /**
  * Gives the paths of all data fields. A nested struct gives one path for each
@@ -25,15 +49,15 @@ const hasFields = (
 const collectFieldPaths = (
 	fields: Schema.Struct.Fields,
 	prefix: string,
-	output: Array<string>,
+	output: Set<string>,
 ): void => {
 	for (const key of Object.keys(fields)) {
-		const schema = fields[key]
 		const path = prefix === "" ? key : `${prefix}.${key}`
-		if (hasFields(schema)) {
-			collectFieldPaths(schema.fields, path, output)
+		const nested = structFields(fields[key])
+		if (nested.length > 0) {
+			for (const inner of nested) collectFieldPaths(inner, path, output)
 		} else {
-			output.push(path)
+			output.add(path)
 		}
 	}
 }
@@ -43,7 +67,7 @@ const makeDescriptor = (
 	options: Resource.Options<ReadonlyArray<string>, Schema.Struct.Fields>,
 	schema: Schema.Top,
 ): Resource.Descriptor => {
-	const fieldPaths: Array<string> = []
+	const fieldPaths = new Set<string>()
 	collectFieldPaths(options.fields, "", fieldPaths)
 	return Object.freeze({
 		kind,
@@ -52,7 +76,7 @@ const makeDescriptor = (
 			options.path === undefined
 				? undefined
 				: Object.freeze([...options.path(fieldRefs(options.fields))]),
-		fieldPaths: Object.freeze(fieldPaths),
+		fieldPaths: Object.freeze(Array.from(fieldPaths)),
 		schema,
 	})
 }

@@ -2,6 +2,7 @@
 // Inside this file they are erased to `unknown`, so the language service check
 // for `unknown` in an Effect is off here.
 // @effect-diagnostics anyUnknownInErrorContext:off
+import type * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Equal from "effect/Equal"
 import { dual } from "effect/Function"
@@ -195,6 +196,39 @@ export const hasPredicate = (ast: Ast): boolean => {
 	}
 }
 
+/**
+ * Gives the services in `context` to every predicate of a condition, so the
+ * condition needs no services when it runs.
+ *
+ * @internal
+ */
+export const provideContext = (
+	ast: Ast,
+	context: Context.Context<never>,
+): Ast => {
+	switch (ast._tag) {
+		case "Predicate":
+			return Object.freeze({
+				_tag: "Predicate",
+				name: ast.name,
+				run: (value: unknown, principal: unknown) =>
+					Effect.provideContext(ast.run(value, principal), context),
+			})
+		case "And":
+			return and(
+				...ast.conditions.map((child) => provideContext(child, context)),
+			)
+		case "Or":
+			return or(
+				...ast.conditions.map((child) => provideContext(child, context)),
+			)
+		case "Not":
+			return not(provideContext(ast.condition, context))
+		default:
+			return ast
+	}
+}
+
 /** @internal */
 export const evaluateSyncOf = (ast: Ast, input: Condition.Input): boolean => {
 	switch (ast._tag) {
@@ -289,6 +323,8 @@ const absorb = (
 	conditions.filter(
 		(condition) =>
 			condition._tag !== inner ||
+			// A predicate may fail, so a child with a predicate stays.
+			hasPredicate(condition) ||
 			!conditions.some(
 				(other) =>
 					other !== condition &&
@@ -305,16 +341,35 @@ const flatten = (
 		return simple._tag === tag ? simple.conditions : [simple]
 	})
 
+/**
+ * Gives the result of an `And` with a `False` child, or of an `Or` with a
+ * `True` child. The children are tested in order, so a predicate before the
+ * constant still runs, and it may fail. Such predicates stay in front of the
+ * constant, so the failure is not lost.
+ */
+const shortCircuit = (
+	tag: "And" | "Or",
+	children: ReadonlyArray<Ast>,
+	index: number,
+): Ast => {
+	const constant = tag === "And" ? never : always
+	const before = children.slice(0, index).filter(hasPredicate)
+	if (before.length === 0) {
+		return constant
+	}
+	return tag === "And" ? and(...before, constant) : or(...before, constant)
+}
+
 /** @internal */
 export const simplify = (ast: Ast): Ast => {
 	switch (ast._tag) {
 		case "And": {
-			const children = flatten("And", ast.conditions).filter(
-				(child) => child._tag !== "True",
-			)
-			if (children.some((child) => child._tag === "False")) {
-				return never
+			const flat = flatten("And", ast.conditions)
+			const stop = flat.findIndex((child) => child._tag === "False")
+			if (stop !== -1) {
+				return shortCircuit("And", flat, stop)
 			}
+			const children = flat.filter((child) => child._tag !== "True")
 			const unique = absorb("Or", dedupe(children))
 			if (unique.length === 0) {
 				return always
@@ -322,12 +377,12 @@ export const simplify = (ast: Ast): Ast => {
 			return unique.length === 1 ? unique[0]! : and(...unique)
 		}
 		case "Or": {
-			const children = flatten("Or", ast.conditions).filter(
-				(child) => child._tag !== "False",
-			)
-			if (children.some((child) => child._tag === "True")) {
-				return always
+			const flat = flatten("Or", ast.conditions)
+			const stop = flat.findIndex((child) => child._tag === "True")
+			if (stop !== -1) {
+				return shortCircuit("Or", flat, stop)
 			}
+			const children = flat.filter((child) => child._tag !== "False")
 			const unique = absorb("And", dedupe(children))
 			if (unique.length === 0) {
 				return never

@@ -1,6 +1,14 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Equal, Exit, Schema } from "effect"
-import { Condition, Decision, Policy, type Rule } from "../src/index.ts"
+import {
+	Condition,
+	Decision,
+	Domain,
+	Policy,
+	Principal,
+	Resource,
+	Rule,
+} from "../src/index.ts"
 import {
 	alice,
 	aliceBot,
@@ -605,8 +613,9 @@ describe("Policy", () => {
 					for (const spec of specs) yield* toRule(builder, spec)
 				})
 				const node = policy.node as Policy.RulesNode
+				// A node keeps no types. These rules have no predicates.
 				const conditions = node.rules.flatMap((rule) =>
-					rule.when === undefined ? [] : [rule.when],
+					rule.when === undefined ? [] : [rule.when as Condition.Condition],
 				)
 				const whole = Condition.not(
 					Condition.or(...conditions, Condition.and(...conditions)),
@@ -648,5 +657,106 @@ describe("Policy", () => {
 			),
 			"Allow",
 		)
+	})
+
+	it.effect("gives a new trace each time an explanation runs", () =>
+		Effect.gen(function* () {
+			const policy = Policy.define(App)(function* (_) {
+				yield* _.allow("read", Bot)
+			})
+			const explain = Policy.explain(policy, {
+				principal: alice,
+				action: "read",
+				resource: aliceBot,
+			})
+			const first = yield* explain
+			const second = yield* explain
+			assert.strictEqual(first.steps.length, 1)
+			assert.strictEqual(second.steps.length, 1)
+		}),
+	)
+
+	describe("keeps a predicate that may fail in the residual", () => {
+		const _ = Rule.builder(App)
+		const offline = (tag: "allow" | "deny") =>
+			_[tag]("read", Bot, {
+				when: ($) => $.predicate("offline", () => Effect.fail("offline")),
+			})
+		const request = {
+			principal: alice,
+			action: "read",
+			kind: "Bot",
+		} as const
+		const check = (policy: Policy.Policy<App, string, never, any>) =>
+			Effect.gen(function* () {
+				const decision = yield* Effect.exit(
+					Policy.decide(policy, { ...request, resource: aliceBot }),
+				)
+				assert.isTrue(Exit.isFailure(decision))
+				const residual = Policy.residual(policy, request)
+				assert.notStrictEqual(residual._tag, "True")
+				const result = yield* Effect.exit(
+					Condition.evaluate(residual, { value: aliceBot }),
+				)
+				assert.isTrue(Exit.isFailure(result))
+			})
+
+		it.effect("in a list of rules", () =>
+			check(
+				Policy.rules(App, [offline("allow"), _.allow("read", Bot)], {
+					algorithm: "firstApplicable",
+				}),
+			),
+		)
+
+		it.effect("in a child that does not allow", () =>
+			check(
+				Policy.any([
+					Policy.rules(App, [offline("deny")], {
+						algorithm: "permitOverrides",
+					}),
+					Policy.rules(App, [_.allow("read", Bot)]),
+				]),
+			),
+		)
+	})
+
+	it("gives the fields inside an optional struct", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: {
+				settings: Schema.optionalKey(
+					Schema.Struct({ open: Schema.String, secret: Schema.String }),
+				),
+			},
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.define(Notes)(function* (_) {
+			yield* _.allow("read", Note)
+			yield* _.deny("read", Note, { fields: ["settings.secret"] })
+		})
+		const fields = Effect.runSync(
+			Policy.permittedFields(policy, {
+				principal: alice,
+				action: "read",
+				resource: Note.make({ settings: { open: "a", secret: "b" } }),
+			}),
+		)
+		assert.deepStrictEqual(fields, ["settings.open"])
+	})
+
+	it("decodes a rule with a field of an optional principal struct", () => {
+		class User extends Principal.Class<User>("User")({
+			user: Schema.optionalKey(Schema.Struct({ id: Schema.String })),
+		}) {}
+		const Blog = Domain.make({ principal: User, resources: [Bot] })
+		const policy = Policy.define(Blog)(function* (_) {
+			yield* _.allow("read", Bot, {
+				when: ($) => $.eq("ownerUserId", $.principal("user.id")),
+			})
+		})
+		const PolicySchema = Policy.schema(Blog)
+		const json = Schema.encodeSync(PolicySchema)(policy)
+		assert.isTrue(Equal.equals(Schema.decodeSync(PolicySchema)(json), policy))
 	})
 })

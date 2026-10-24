@@ -55,7 +55,7 @@ export interface Rule<E = never, R = never, O = never>
 	readonly _tag: "Allow" | "Deny"
 	readonly actions: ReadonlyArray<string>
 	readonly resources: ReadonlyArray<string>
-	readonly when?: Condition.Ast
+	readonly when?: Condition.Condition<E, R, O>
 	readonly fields?: ReadonlyArray<string>
 	readonly reason?: string
 	readonly id?: string
