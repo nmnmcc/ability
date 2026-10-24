@@ -1,5 +1,5 @@
 {
-  "$schema": "./node_modules/tstyche/schemas/config.json",
-  "testFileMatch": ["tests/**/*.tst.*"],
-  "tsconfig": "./tsconfig.json"
+	"$schema": "./node_modules/tstyche/schemas/config.json",
+	"testFileMatch": ["tests/**/*.tst.*"],
+	"tsconfig": "./tsconfig.json"
 }

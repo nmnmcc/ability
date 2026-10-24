@@ -1,67 +1,69 @@
-import {Effect} from "effect"
-import {Ability} from "../src/index"
+import { Effect } from "effect"
+import { Ability } from "../src/index.ts"
 
 interface Post {
-  readonly id: string
-  readonly authorId: string
-  readonly published: boolean
-  readonly title: string
-  readonly body: string
+	readonly id: string
+	readonly authorId: string
+	readonly published: boolean
+	readonly title: string
+	readonly body: string
 }
 
 type Subjects = {
-  readonly Post: Post
+	readonly Post: Post
 }
 
 const ability = Ability.define<Subjects>()(function* (ability) {
-  yield* ability.allow("read", "Post")
+	yield* ability.allow("read", "Post")
 
-  yield* ability.allow("update", "Post", {
-    fields: ["title", "body"],
-    conditions: {authorId: "u1"},
-    reason: "Authors can edit their own draft content"
-  })
+	yield* ability.allow("update", "Post", {
+		fields: ["title", "body"],
+		conditions: { authorId: "u1" },
+		reason: "Writers may change their own draft posts",
+	})
 
-  yield* ability.deny("delete", "Post", {
-    conditions: {published: true},
-    reason: "Published posts cannot be deleted"
-  })
+	yield* ability.deny("delete", "Post", {
+		conditions: { published: true },
+		reason: "No one may delete a published post",
+	})
 })
 
 const program = Effect.gen(function* () {
-  const post: Post = {
-    id: "p1",
-    authorId: "u1",
-    published: true,
-    title: "Hello",
-    body: "World"
-  }
+	const post: Post = {
+		id: "p1",
+		authorId: "u1",
+		published: true,
+		title: "Hello",
+		body: "World",
+	}
 
-  const canUpdateTitle = yield* Ability.check(ability, {
-    action: "update",
-    subject: "Post",
-    value: post,
-    field: "title"
-  }).pipe(
-    Effect.match({
-      onFailure: () => false,
-      onSuccess: () => true
-    })
-  )
+	const canUpdateTitle = yield* Ability.check(ability, {
+		action: "update",
+		subject: "Post",
+		value: post,
+		field: "title",
+	}).pipe(
+		Effect.match({
+			onFailure: () => false,
+			onSuccess: () => true,
+		}),
+	)
 
-  const deleteResult = yield* Ability.check(ability, {
-    action: "delete",
-    subject: "Post",
-    value: post
-  }).pipe(
-    Effect.catchTag("AuthorizationError", (error) => Effect.succeed(error.reason)),
-    Effect.catch(() => Effect.succeed("unexpected failure"))
-  )
+	const deleteResult = yield* Ability.check(ability, {
+		action: "delete",
+		subject: "Post",
+		value: post,
+	}).pipe(
+		Effect.catchTag("AuthorizationError", (error) =>
+			Effect.succeed(error.reason),
+		),
+		Effect.orElseSucceed(() => "some other error"),
+	)
 
-  return {
-    canUpdateTitle,
-    deleteResult
-  }
+	return {
+		canUpdateTitle,
+		deleteResult,
+	}
 })
 
 console.log(Effect.runSync(program))

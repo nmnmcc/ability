@@ -1,150 +1,150 @@
 # @nmnmcc/ability
 
-Authorization primitives for Effect programs, backed by CASL's rule engine.
+Authorization tools for Effect programs. Authorization means the work of
+deciding if a person may do an act. The rules run on the CASL rule engine.
 
-This package models authorization checks as `Effect` values and keeps failures
-in the typed error channel, while preserving the familiar CASL rule model:
+A check is an `Effect` value. When a check says no, the answer goes into the
+typed error channel of the `Effect`. The rule model is the same as in CASL:
 actions, subjects, fields, conditions, allow rules, and deny rules.
 
 ## Requirements
 
-- TypeScript projects should use strict type checking to get the full public API
-  guarantees.
-- `effect` and `@casl/ability` are peer dependencies.
-- CASL APIs are not re-exported. Import official CASL helpers directly from
+- Use strict type checking. Without it, the types do not give all of their
+  safety.
+- `effect` and `@casl/ability` are peer dependencies. Your project must install
+  them.
+- This package does not export CASL functions again. Import CASL functions from
   `@casl/ability`.
 
-## Installation
+## Install
 
 ```sh
-yarn add @nmnmcc/ability effect @casl/ability
+pnpm add @nmnmcc/ability effect @casl/ability
 ```
 
 ## Overview
 
-The main entry point is the following import:
+Import the package like this:
 
 ```ts
-import {Ability, AbilityExtra} from "@nmnmcc/ability"
+import { Ability, AbilityExtra } from "@nmnmcc/ability"
 ```
 
-| Concept | Description |
-| ------- | ----------- |
-| `Ability` | An immutable, ordered set of authorization rules. |
-| `Rule` | A yieldable allow or deny rule recorded by `Ability.define`. |
-| `Ability.define` | Synchronously builds an `Ability` from a generator DSL. |
-| `Ability.check` | The authorization decision API. It succeeds with `void` or fails through the Effect error channel. |
-| `Ability.subject` | Wraps a plain object with an explicit subject name without mutating the object. |
-| `AbilityExtra` | Helpers for compact rule transport and rule-to-query transforms. |
+| Name              | What it is                                                                                  |
+| ----------------- | ------------------------------------------------------------------------------------------- |
+| `Ability`         | A list of authorization rules. The list is in order and does not change.                    |
+| `Rule`            | One allow rule or one deny rule. `Ability.define` keeps each rule you give with `yield*`.   |
+| `Ability.define`  | Makes an `Ability` from a generator function. It does not run an `Effect`.                  |
+| `Ability.check`   | Makes the decision. It gives `void` when the answer is yes. It fails when the answer is no. |
+| `Ability.subject` | Puts a subject name on a plain object. It does not change the object.                       |
+| `AbilityExtra`    | Tools to make rules smaller for sending, and to change rules into queries.                  |
 
-Important behavior:
+Some important behavior:
 
-- Last matching rule wins.
-- `manage` means any action.
-- `all` means any subject.
-- Checks do not return booleans. Use Effect combinators to derive booleans when
-  needed.
+- The last rule that matches decides.
+- The action `manage` means every action.
+- The subject `all` means every subject.
+- A check does not give a boolean. When you need a boolean, use an Effect
+  function such as `Effect.match`.
 
-## Getting Started
+## First Steps
 
-Define your domain subjects as a type-level map:
+Give your subjects as a type map:
 
 ```ts
-import {Effect} from "effect"
-import {Ability} from "@nmnmcc/ability"
+import { Effect } from "effect"
+import { Ability } from "@nmnmcc/ability"
 
 interface Post {
-  readonly id: string
-  readonly authorId: string
-  readonly published: boolean
-  readonly title: string
-  readonly body: string
+	readonly id: string
+	readonly authorId: string
+	readonly published: boolean
+	readonly title: string
+	readonly body: string
 }
 
 type Subjects = {
-  readonly Post: Post
+	readonly Post: Post
 }
 ```
 
-Define an ability synchronously:
+Make an ability:
 
 ```ts
 const ability = Ability.define<Subjects>()(function* (ability) {
-  yield* ability.allow("read", "Post")
+	yield* ability.allow("read", "Post")
 
-  yield* ability.allow("update", "Post", {
-    fields: ["title", "body"],
-    conditions: {authorId: "u1"},
-    reason: "Authors can edit their own content"
-  })
+	yield* ability.allow("update", "Post", {
+		fields: ["title", "body"],
+		conditions: { authorId: "u1" },
+		reason: "Writers may change their own posts",
+	})
 
-  yield* ability.deny("delete", "Post", {
-    conditions: {published: true},
-    reason: "Published posts cannot be deleted"
-  })
+	yield* ability.deny("delete", "Post", {
+		conditions: { published: true },
+		reason: "No one may delete a published post",
+	})
 })
 ```
 
-Check permissions inside an Effect program:
+Do a check in an Effect program:
 
 ```ts
 const post: Post = {
-  id: "p1",
-  authorId: "u1",
-  published: true,
-  title: "Hello",
-  body: "World"
+	id: "p1",
+	authorId: "u1",
+	published: true,
+	title: "Hello",
+	body: "World",
 }
 
 const program = Effect.gen(function* () {
-  yield* Ability.check(ability, {
-    action: "update",
-    subject: "Post",
-    value: post,
-    field: "title"
-  })
+	yield* Ability.check(ability, {
+		action: "update",
+		subject: "Post",
+		value: post,
+		field: "title",
+	})
 
-  const deleteResult = yield* Ability.check(ability, {
-    action: "delete",
-    subject: "Post",
-    value: post
-  }).pipe(
-    Effect.match({
-      onFailure: (error) =>
-        error._tag === "AuthorizationError" ? error.reason : "unexpected failure",
-      onSuccess: () => "deleted"
-    })
-  )
+	const deleteResult = yield* Ability.check(ability, {
+		action: "delete",
+		subject: "Post",
+		value: post,
+	}).pipe(
+		Effect.match({
+			onFailure: (error) =>
+				error._tag === "AuthorizationError" ? error.reason : "some other error",
+			onSuccess: () => "deleted",
+		}),
+	)
 
-  return deleteResult
+	return deleteResult
 })
 ```
 
-## Defining Rules
+## Rules
 
-**Syntax**
+**Form**
 
 ```ts
-Ability.define<Subjects>()(
-  function* (ability) {
-    yield* ability.allow(action, subject, options)
-    yield* ability.deny(action, subject, options)
-  },
-  options
-)
+Ability.define<Subjects>()(function* (ability) {
+	yield* ability.allow(action, subject, options)
+	yield* ability.deny(action, subject, options)
+}, options)
 ```
 
-`Ability.define` returns an `Ability` directly. It is not wrapped in `Effect`.
-The yielded `Rule` values are collected in order and stored immutably.
+`Ability.define` gives back an `Ability`. It does not give an `Effect`. It keeps
+the `Rule` values in the order you give them, and they do not change after
+that.
 
-**Example** (Multiple Actions)
+**Example** (more than one action)
 
 ```ts
 const ability = Ability.define<Subjects>()(function* (ability) {
-  yield* ability.allow(["read", "update"], "Post", {
-    fields: ["title", "body"],
-    conditions: {authorId: "u1"}
-  })
+	yield* ability.allow(["read", "update"], "Post", {
+		fields: ["title", "body"],
+		conditions: { authorId: "u1" },
+	})
 })
 ```
 
@@ -152,257 +152,266 @@ const ability = Ability.define<Subjects>()(function* (ability) {
 
 ```ts
 const ability = Ability.define<Subjects>()(function* (ability) {
-  yield* ability.allow("manage", "all")
-  yield* ability.deny("delete", "Post", {
-    conditions: {published: true},
-    reason: "Published posts cannot be deleted"
-  })
+	yield* ability.allow("manage", "all")
+	yield* ability.deny("delete", "Post", {
+		conditions: { published: true },
+		reason: "No one may delete a published post",
+	})
 })
 ```
 
-Rules are resolved from the end of the rule list. In the example above, the
-later `deny("delete", "Post")` can override the earlier `allow("manage", "all")`
-when its condition matches.
+The check looks at the rules from the end of the list. In this example, the
+later `deny("delete", "Post")` rule wins over the earlier
+`allow("manage", "all")` rule when its condition matches.
 
-## Checking Permissions
+## Checks
 
-**Syntax**
+**Form**
 
 ```ts
 Ability.check(ability, request)
 ability.pipe(Ability.check(request))
 ```
 
-`Ability.check` returns:
+`Ability.check` gives this type:
 
 ```ts
-Effect.Effect<void, Ability.AuthorizationError | Ability.ConditionError | Ability.SubjectDetectionError>
+Effect.Effect<
+	void,
+	| Ability.AuthorizationError
+	| Ability.ConditionError
+	| Ability.SubjectDetectionError
+>
 ```
 
-- Success means the request is authorized.
-- `AuthorizationError` means no allow rule matched, or the winning rule was a
-  deny rule.
-- `ConditionError` means condition matching threw while evaluating a rule.
-- `SubjectDetectionError` means the request did not provide a subject and the
-  subject could not be detected from the value.
+- Success means the answer is yes.
+- `AuthorizationError` means no allow rule matched, or a deny rule won.
+- `ConditionError` means a condition threw an error while the check ran.
+- `SubjectDetectionError` means the request had no subject, and the check could
+  not get the subject from the value.
 
-**Example** (Boolean Derived From Effect)
+**Example** (get a boolean from the Effect)
 
 ```ts
-const canUpdateTitle = yield* Ability.check(ability, {
-  action: "update",
-  subject: "Post",
-  value: post,
-  field: "title"
+const canUpdateTitle = Ability.check(ability, {
+	action: "update",
+	subject: "Post",
+	value: post,
+	field: "title",
 }).pipe(
-  Effect.match({
-    onFailure: () => false,
-    onSuccess: () => true
-  })
+	Effect.match({
+		onFailure: () => false,
+		onSuccess: () => true,
+	}),
 )
 ```
 
-There is no synchronous `can`, `cannot`, or `allows` API in this package.
+This package has no `can`, `cannot`, or `allows` function that gives a boolean
+at once.
 
-## Conditions And Fields
+## Conditions and Fields
 
-Conditions use CASL's Mongo-style matcher and `MongoQuery` type.
+Conditions use the CASL Mongo matcher and the CASL `MongoQuery` type. Mongo is a
+database, and its query form is well known.
 
-**Example** (Mongo-Style Conditions)
+**Example** (Mongo conditions)
 
 ```ts
 interface Comment {
-  readonly authorId: string
-  readonly body: string
+	readonly authorId: string
+	readonly body: string
 }
 
 interface PostWithComments extends Post {
-  readonly comments: ReadonlyArray<Comment>
+	readonly comments: ReadonlyArray<Comment>
 }
 
 type Subjects = {
-  readonly Post: PostWithComments
+	readonly Post: PostWithComments
 }
 
 const ability = Ability.define<Subjects>()(function* (ability) {
-  yield* ability.allow("read", "Post", {
-    conditions: {
-      published: {$eq: false},
-      comments: {$elemMatch: {authorId: "u1"}}
-    }
-  })
+	yield* ability.allow("read", "Post", {
+		conditions: {
+			published: { $eq: false },
+			comments: { $elemMatch: { authorId: "u1" } },
+		},
+	})
 })
 ```
 
-Fields are typed as dot paths, with bounded recursion for predictable
-type-checking. CASL-style field patterns are also accepted.
+A field is a path with dots, such as `address.city`. The types go down only a
+small number of levels, so type checking stays fast. CASL field patterns such
+as `address.**` also work.
 
-**Example** (Field Restrictions)
+**Example** (limit the fields)
 
 ```ts
 interface Address {
-  readonly city: string
-  readonly street: string
+	readonly city: string
+	readonly street: string
 }
 
 interface PostWithAddress extends Post {
-  readonly address: Address
+	readonly address: Address
 }
 
 type Subjects = {
-  readonly Post: PostWithAddress
+	readonly Post: PostWithAddress
 }
 
 const ability = Ability.define<Subjects>()(function* (ability) {
-  yield* ability.allow("update", "Post", {
-    fields: ["title", "address.**"],
-    conditions: {authorId: "u1"}
-  })
+	yield* ability.allow("update", "Post", {
+		fields: ["title", "address.**"],
+		conditions: { authorId: "u1" },
+	})
 })
 
-const post = {} as PostWithAddress
+declare const post: PostWithAddress
 
-yield* Ability.check(ability, {
-  action: "update",
-  subject: "Post",
-  value: post,
-  field: "address.city"
+const program = Ability.check(ability, {
+	action: "update",
+	subject: "Post",
+	value: post,
+	field: "address.city",
 })
 ```
 
-When you check a request without `value`, conditional allow rules can still
-authorize the action for the subject type. Pass `value` when you need object
-conditions to be evaluated for a specific resource. Conditional deny rules also
-need a value before their conditions can match; unconditional deny rules still
-apply without a value.
+When a request has no `value`, an allow rule with conditions can still say yes
+for the subject type. Give a `value` when the conditions must be tested on one
+object. A deny rule with conditions also needs a value before its conditions
+can match. A deny rule with no conditions works without a value.
 
 ## Permitted Fields
 
-Use `Ability.permittedFields` to derive the request fields allowed by matching
-rules. Allow rules add fields; deny rules remove fields.
+`Ability.permittedFields` gives the fields that the matching rules let a request
+use. Allow rules add fields. Deny rules take fields away.
 
-**Syntax**
+**Form**
 
 ```ts
 Ability.permittedFields(ability, request, {
-  fieldsFrom: (rule) => rule.fields ?? fallbackFields
+	fieldsFrom: (rule) => rule.fields ?? fallbackFields,
 })
 ```
 
 **Example**
 
 ```ts
-const fields = yield* Ability.permittedFields(
-  ability,
-  {
-    action: "update",
-    subject: "Post",
-    value: post
-  },
-  {
-    fieldsFrom: (rule) => rule.fields ?? ["id", "authorId", "published", "title", "body"]
-  }
+const fields = Ability.permittedFields(
+	ability,
+	{
+		action: "update",
+		subject: "Post",
+		value: post,
+	},
+	{
+		fieldsFrom: (rule) =>
+			rule.fields ?? ["id", "authorId", "published", "title", "body"],
+	},
 )
 ```
 
-`fieldsFrom` is used when a matching rule does not declare explicit fields.
+The check uses `fieldsFrom` when a matching rule has no `fields` list.
 
 ## Subjects
 
-A check request can provide the subject name explicitly:
+A request can give the subject name:
 
 ```ts
-yield* Ability.check(ability, {
-  action: "read",
-  subject: "Post",
-  value: post
+const program = Ability.check(ability, {
+	action: "read",
+	subject: "Post",
+	value: post,
 })
 ```
 
-You can also wrap a value with a subject name:
+You can also put the subject name on the value:
 
 ```ts
 const wrapped = Ability.subject("Post", post)
 
-yield* Ability.check(ability, {
-  action: "read",
-  value: wrapped
+const program = Ability.check(ability, {
+	action: "read",
+	value: wrapped,
 })
 
 const original = Ability.unwrapSubject(wrapped)
 ```
 
-`Ability.subject` is pure and does not mutate the wrapped object.
+`Ability.subject` is pure. It does not change the object.
 
-If neither `subject` nor a typed subject wrapper is provided, configure subject
-detection:
+When a request has no `subject` and the value has no subject name, give a
+function that gets the subject from the value:
 
 ```ts
 const ability = Ability.define<Subjects>()(
-  function* (ability) {
-    yield* ability.allow("read", "Post")
-  },
-  {
-    detectSubjectType: (value) => (value as {readonly __typename: "Post"}).__typename
-  }
+	function* (ability) {
+		yield* ability.allow("read", "Post")
+	},
+	{
+		detectSubjectType: (value) =>
+			(value as { readonly __typename: "Post" }).__typename,
+	},
 )
 
-yield* Ability.check(ability, {
-  action: "read",
-  value: {
-    ...post,
-    __typename: "Post"
-  }
+const program = Ability.check(ability, {
+	action: "read",
+	value: {
+		...post,
+		__typename: "Post",
+	},
 })
 ```
 
-Without a custom detector, subject detection falls back to constructor metadata
-when available.
+Without this function, the check uses the name of the constructor of the value,
+when there is one.
 
 ## Action Aliases
 
-Action aliases expand one rule action into additional checkable actions.
+An alias is a second name. An action alias makes one rule action cover more
+actions.
 
 **Example**
 
 ```ts
 const ability = Ability.define<Subjects>()(
-  function* (ability) {
-    yield* ability.allow("modify", "Post", {
-      fields: ["title", "body"],
-      conditions: {authorId: "u1"}
-    })
-  },
-  {
-    actionAliases: {
-      modify: ["update", "delete"]
-    } as const
-  }
+	function* (ability) {
+		yield* ability.allow("modify", "Post", {
+			fields: ["title", "body"],
+			conditions: { authorId: "u1" },
+		})
+	},
+	{
+		actionAliases: {
+			modify: ["update", "delete"],
+		} as const,
+	},
 )
 
-yield* Ability.check(ability, {
-  action: "update",
-  subject: "Post",
-  value: post,
-  field: "title"
+const program = Ability.check(ability, {
+	action: "update",
+	subject: "Post",
+	value: post,
+	field: "title",
 })
 ```
 
-Aliases are one-directional. A `modify` rule matches `update` and `delete`, but
-separate `update` and `delete` rules do not imply `modify`.
+Aliases go one way only. A `modify` rule matches `update` and `delete`. But an
+`update` rule and a `delete` rule together do not give `modify`.
 
-Invalid aliases fail fast:
+A bad alias throws an error at once:
 
-- `manage` cannot be used as an alias name.
-- Aliases cannot target `manage`.
-- Aliases cannot target an empty list.
-- Cyclic aliases are rejected.
+- An alias may not have the name `manage`.
+- An alias may not point to `manage`.
+- An alias may not point to an empty list.
+- Aliases may not make a loop.
 
-## Raw Rules And Updates
+## Raw Rules and Updates
 
-Raw rules are JSON-safe data structures.
+Raw rules are plain data. You can turn them into JSON and back with no loss.
 
-**Syntax**
+**Form**
 
 ```ts
 Ability.fromRawRules<Subjects>(rules, options)
@@ -414,70 +423,79 @@ ability.pipe(Ability.update(rules))
 **Example**
 
 ```ts
-const ability = yield* Ability.fromRawRules<Subjects>([
-  {
-    action: "read",
-    subject: "Post",
-    conditions: {authorId: "u1"}
-  },
-  {
-    action: "delete",
-    subject: "Post",
-    inverted: true,
-    reason: "No deletes"
-  }
-])
+const program = Effect.gen(function* () {
+	const ability = yield* Ability.fromRawRules<Subjects>([
+		{
+			action: "read",
+			subject: "Post",
+			conditions: { authorId: "u1" },
+		},
+		{
+			action: "delete",
+			subject: "Post",
+			inverted: true,
+			reason: "No deletes",
+		},
+	])
 
-const rules = yield* Ability.toRawRules(ability)
+	const rules = yield* Ability.toRawRules(ability)
 
-const nextAbility = yield* Ability.update(ability, [
-  {
-    action: "read",
-    subject: "Post"
-  }
-])
+	const nextAbility = yield* Ability.update(ability, [
+		{
+			action: "read",
+			subject: "Post",
+		},
+	])
+
+	return { rules, nextAbility }
+})
 ```
 
-`Ability.update` returns a new immutable ability and reuses the current ability
-options, including action aliases and subject detection.
+`Ability.update` gives a new ability. The old ability does not change. The new
+ability keeps the options of the old one, such as action aliases and subject
+detection.
 
 `Ability.fromRawRules` and `Ability.update` can fail with:
 
-- `RawRuleError` for invalid raw rules.
-- `AliasError` for invalid action alias configuration.
+- `RawRuleError` when a raw rule is not right.
+- `AliasError` when the action aliases are not right.
 
-## Introspection
+## Looking at Rules
 
-The introspection helpers are also Effect values and support data-first and
-data-last usage.
+These functions also give Effect values. You can give the ability as the first
+argument, or use them with `pipe`.
 
-| Function | Behavior |
-| -------- | -------- |
-| `Ability.possibleRulesFor` | Returns rules that may apply before field and condition checks. |
-| `Ability.rulesFor` | Returns rules that may apply after field checks, but before condition checks. |
-| `Ability.relevantRuleFor` | Returns the winning rule after field and condition checks. |
-| `Ability.actionsFor` | Returns actions that have rules for a subject. |
+| Function                   | What it gives                                                                 |
+| -------------------------- | ----------------------------------------------------------------------------- |
+| `Ability.possibleRulesFor` | The rules that may apply, before the field and condition tests.               |
+| `Ability.rulesFor`         | The rules that may apply, after the field test and before the condition test. |
+| `Ability.relevantRuleFor`  | The rule that wins, after the field and condition tests.                      |
+| `Ability.actionsFor`       | The actions that have rules for a subject.                                    |
 
 **Example**
 
 ```ts
-const rules = yield* Ability.rulesFor(ability, {
-  action: "update",
-  subject: "Post",
-  field: "title"
-})
+const program = Effect.gen(function* () {
+	const rules = yield* Ability.rulesFor(ability, {
+		action: "update",
+		subject: "Post",
+		field: "title",
+	})
 
-const rule = yield* Ability.relevantRuleFor(ability, {
-  action: "delete",
-  subject: "Post",
-  value: post
-})
+	const rule = yield* Ability.relevantRuleFor(ability, {
+		action: "delete",
+		subject: "Post",
+		value: post,
+	})
 
-const actions = yield* ability.pipe(
-  Ability.actionsFor({
-    subject: "Post"
-  })
-)
+	const actions = yield* ability.pipe(
+		Ability.actionsFor({
+			subject: "Post",
+		}),
+	)
+
+	return { rules, rule, actions }
+})
 ```
 
 `possibleRulesFor`, `rulesFor`, and `actionsFor` can fail with
@@ -485,97 +503,98 @@ const actions = yield* ability.pipe(
 
 ## AbilityExtra
 
-`AbilityExtra` works with already-defined abilities and JSON-safe rules.
+`AbilityExtra` works on abilities you already made, and on raw rules.
 
-### Compact Rule Transport
+### Small Rules for Sending
 
 ```ts
-import {AbilityExtra} from "@nmnmcc/ability"
+import { AbilityExtra } from "@nmnmcc/ability"
 
 const packed = AbilityExtra.packRules(rules)
 const unpacked = AbilityExtra.unpackRules(packed)
 ```
 
-`packRules` converts raw rules into compact tuples. `unpackRules` restores the
-raw rule objects.
+`packRules` changes raw rules into short arrays. `unpackRules` changes them back
+into raw rule objects.
 
-### Default Fields From Conditions
+### Starting Values from Conditions
 
-`rulesToFields` extracts scalar condition values from matching allow rules. This
-is useful when creating initial values from authorization rules.
+`rulesToFields` takes the simple condition values from the matching allow rules.
+This helps when you make the first values of a new object.
 
 ```ts
-const defaults = yield* AbilityExtra.rulesToFields(ability, {
-  action: "read",
-  subject: "Post"
+const defaults = AbilityExtra.rulesToFields(ability, {
+	action: "read",
+	subject: "Post",
 })
 ```
 
-For a rule with `{conditions: {authorId: "u1"}}`, the returned object includes
-`{authorId: "u1"}`.
+For a rule with `{ conditions: { authorId: "u1" } }`, the result has
+`{ authorId: "u1" }`.
 
-### Rule-To-Query Conversion
+### Rules to Queries
 
-Use `rulesToCondition` when you own the logical query representation:
+Use `rulesToCondition` when you have your own query form:
 
 ```ts
-const condition = yield* AbilityExtra.rulesToCondition(
-  ability,
-  {
-    action: "read",
-    subject: "Post"
-  },
-  (rule) => rule.conditions ?? {},
-  {
-    and: (conditions) => ({$and: conditions}),
-    or: (conditions) => ({$or: conditions}),
-    not: (condition) => ({$not: condition}),
-    empty: () => ({})
-  }
+const condition = AbilityExtra.rulesToCondition(
+	ability,
+	{
+		action: "read",
+		subject: "Post",
+	},
+	(rule) => rule.conditions ?? {},
+	{
+		and: (conditions) => ({ $and: conditions }),
+		or: (conditions) => ({ $or: conditions }),
+		not: (condition) => ({ $not: condition }),
+		empty: () => ({}),
+	},
 )
 ```
 
-Use `rulesToQuery` for the built-in generic logical shape:
+Use `rulesToQuery` for the general query form of this package:
 
 ```ts
-const query = yield* ability.pipe(
-  AbilityExtra.rulesToQuery(
-    {
-      action: "read",
-      subject: "Post"
-    },
-    (rule) => rule.conditions ?? {}
-  )
+const query = ability.pipe(
+	AbilityExtra.rulesToQuery(
+		{
+			action: "read",
+			subject: "Post",
+		},
+		(rule) => rule.conditions ?? {},
+	),
 )
 ```
 
-Rule conversion callbacks may return plain values or Effects. If a conversion
-callback throws, the helper fails with `QueryGenerationError`.
+A rule change function may give a plain value or an Effect. When it throws an
+error, the result fails with `QueryGenerationError`.
 
-## CASL Peer Dependency
+## CASL
 
-This package uses the official CASL rule engine for indexing and Mongo-style
-condition matching, but it does not re-export CASL APIs.
+This package uses the CASL rule engine to index rules and to match Mongo
+conditions. It does not export CASL functions again.
 
-Import CASL APIs from `@casl/ability` when you need them:
+When you need CASL functions, import them from `@casl/ability`:
 
 ```ts
-import {AbilityBuilder, createMongoAbility, subject} from "@casl/ability"
+import { AbilityBuilder, createMongoAbility, subject } from "@casl/ability"
 
-const {can, cannot, build} = new AbilityBuilder(createMongoAbility)
+const { can, cannot, build } = new AbilityBuilder(createMongoAbility)
 
 can("read", "Post")
-cannot("delete", "Post", {published: true})
+cannot("delete", "Post", { published: true })
 
 const caslAbility = build()
 const canRead = caslAbility.can("read", subject("Post", post))
 ```
 
-ORM adapters and `accessibleBy`-style helpers are not implemented here. Use the
-official CASL ecosystem packages for those integrations.
+This package has no database adapters and no `accessibleBy` functions. Use the
+CASL packages for that work.
 
 ## Examples
 
 - [examples/basic.ts](./examples/basic.ts)
 - [examples/advanced.ts](./examples/advanced.ts)
+- [examples/acbc.ts](./examples/acbc.ts)
 - [tests/Ability.test.ts](./tests/Ability.test.ts)
