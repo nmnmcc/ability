@@ -275,9 +275,10 @@ the resource fields only. It is `True` when the policy allows every value of the
 kind, and `False` when it allows none. Use it to ask "may this principal do this
 act on some value of this kind?", or to make a database query.
 
-When a rule that the request may use has a predicate, the residual is one
-predicate with the name `"policy"`. It runs the whole policy for each value, so
-it gives the same answers and the same failures as `Policy.decide`.
+When a rule that the request may use has a predicate, or when the residual would
+have more than 10000 nodes, the residual is one predicate with the name
+`"policy"`. It runs the whole policy for each value, so it gives the same
+answers and the same failures as `Policy.decide`.
 
 ## Queries
 
@@ -424,8 +425,17 @@ const health = HttpApiEndpoint.get("health", "/health").annotate(
 	[],
 )
 
+// The checks run only in a group that uses the middleware.
+const posts = HttpApiGroup.make("posts")
+	.add(update, health)
+	.middleware(Authorization)
+
 const AuthorizationLive = AbilityHttpApi.layer(Authorization, Auth)
 ```
+
+The annotations and the layer do nothing alone. Give the middleware to every
+group with `.middleware(Authorization)`, or to the whole API. An endpoint in a
+group without the middleware is not checked.
 
 `GroupRequired` gives a default for a whole group: one list for GET requests and
 one for every other method. `AbilityHttpApi.errors` gives the errors with HTTP

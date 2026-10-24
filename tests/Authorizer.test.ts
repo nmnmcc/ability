@@ -491,4 +491,75 @@ describe("Authorizer", () => {
 				assert.strictEqual(failureTag(exit), "Forbidden")
 			}),
 	)
+
+	describe("does not cache a principal with data that the key can not see", () => {
+		class Member extends Context.Service<Member, object>()(
+			"@nmnmcc/ability/tests/Authorizer.test/Member",
+		) {}
+		const Plain = Domain.make({
+			principal: Schema.Struct({
+				role: Schema.String,
+				roles: Schema.Array(Schema.String),
+			}),
+			resources: [Bot],
+		})
+		class PlainAuth extends Authorizer.Service<
+			PlainAuth,
+			{ requires: Member }
+		>()("test/PlainAuth", Plain) {}
+		const roleOf = (principal: object): unknown =>
+			(principal as { readonly role: unknown }).role ??
+			(principal as { readonly roles: { readonly role?: unknown } }).roles.role
+		const layer = Authorizer.layer(PlainAuth, {
+			principal: Member as never,
+			policy: (principal) =>
+				Effect.succeed(
+					Policy.define(Plain)(function* (_) {
+						if (roleOf(principal) === "admin") {
+							yield* _.allow("read", Bot)
+						}
+					}),
+				),
+		})
+		const run = (admin: object, guest: object) =>
+			Effect.gen(function* () {
+				yield* Effect.provideService(
+					PlainAuth.check({ action: "read", resource: aliceBot }),
+					Member,
+					admin,
+				)
+				yield* Effect.provideService(
+					PlainAuth.check({ action: "read", resource: aliceBot }),
+					Member,
+					guest,
+				)
+			}).pipe(Effect.provide(layer), Effect.exit)
+
+		it.effect("in a field that a loop can not see", () =>
+			Effect.gen(function* () {
+				const hidden = (role: string) =>
+					Object.defineProperty({ roles: [] }, "role", {
+						value: role,
+						enumerable: false,
+					})
+				assert.strictEqual(
+					failureTag(yield* run(hidden("admin"), hidden("guest"))),
+					"Forbidden",
+				)
+			}),
+		)
+
+		it.effect("in an extra key of an array", () =>
+			Effect.gen(function* () {
+				const withRole = (role: string) => {
+					const roles = Object.assign(["user"], { role })
+					return { role: undefined, roles }
+				}
+				assert.strictEqual(
+					failureTag(yield* run(withRole("admin"), withRole("guest"))),
+					"Forbidden",
+				)
+			}),
+		)
+	})
 })

@@ -358,6 +358,22 @@ class PrincipalKey implements Equal.Equal {
 	}
 }
 
+const isIndex = (key: string | symbol): boolean =>
+	typeof key === "string" && /^(?:0|[1-9][0-9]*)$/.test(key)
+
+/**
+ * Tests if an own key of an object holds plain data that the text shows: it
+ * can be seen in a loop over the keys, and it is not a getter.
+ */
+const isPlainField = (value: object, key: string): boolean => {
+	const descriptor = Object.getOwnPropertyDescriptor(value, key)
+	return (
+		descriptor !== undefined &&
+		descriptor.enumerable === true &&
+		"value" in descriptor
+	)
+}
+
 const classIds = new WeakMap<object, number>()
 let nextClassId = 0
 
@@ -378,12 +394,14 @@ const classId = (constructor: object): string => {
  * `1n` get two texts. The text keeps the class of each object, by a number
  * that is its own, because two classes may have one name.
  *
- * It reads only the fields of plain objects and of `Schema.Class` values. An
- * object of another class may keep its data where the text can not see it, as
- * a `URL` does. So it gives `undefined` for such an object, unless it is a
- * `Date`, a `URL`, an array, a `Map` or a `Set`. It also gives `undefined` for
- * a function, a symbol, an object with symbol keys, or a value that contains
- * itself.
+ * It reads only the fields of plain objects and of `Schema.Class` values, and
+ * only when each own key is a plain field that a loop over the keys can see.
+ * An object of another class may keep its data where the text can not see it,
+ * as a `URL` does. So it gives `undefined` for such an object, unless it is a
+ * plain `Date`, `URL`, array, `Map` or `Set` with no extra own keys. It also
+ * gives `undefined` for a function, a symbol, or a value that contains itself.
+ * The private fields (`#name`) of a class can not be seen, so a principal
+ * class must not keep its data in them.
  */
 const keyText = (value: unknown, seen: Set<object>): string | undefined => {
 	switch (typeof value) {
@@ -422,39 +440,46 @@ const keyText = (value: unknown, seen: Set<object>): string | undefined => {
 	}
 	let text: string | undefined
 	const prototype: unknown = Object.getPrototypeOf(value)
-	const constructor =
-		prototype === null ? undefined : (prototype as object).constructor
-	if (value instanceof Date) {
-		text = `d${String(value.getTime())}`
-	} else if (value instanceof URL) {
-		text = `u${JSON.stringify(value.href)}`
-	} else if (Array.isArray(value)) {
-		const items = all(value)
+	// The own keys of the value. A built-in value keeps its data inside, so it
+	// may have no own keys, and the elements of an array are its own keys. An
+	// extra own key is data that the text does not show.
+	const own = Reflect.ownKeys(value)
+	if (prototype === Date.prototype && own.length === 0) {
+		text = `d${String((value as Date).getTime())}`
+	} else if (prototype === URL.prototype && own.length === 0) {
+		text = `u${JSON.stringify((value as URL).href)}`
+	} else if (
+		prototype === Array.prototype &&
+		own.length === (value as Array<unknown>).length + 1 &&
+		own.every((key) => key === "length" || isIndex(key))
+	) {
+		const items = all(value as Array<unknown>)
 		text = items === undefined ? undefined : `[${items.join(",")}]`
-	} else if (value instanceof Map) {
-		const entries = all(Array.from(value, ([key, item]) => [key, item]))
+	} else if (prototype === Map.prototype && own.length === 0) {
+		const entries = all(
+			Array.from(value as Map<unknown, unknown>, ([key, item]) => [key, item]),
+		)
 		text =
 			entries === undefined ? undefined : `Map{${entries.sort().join(",")}}`
-	} else if (value instanceof Set) {
-		const items = all(value)
+	} else if (prototype === Set.prototype && own.length === 0) {
+		const items = all(value as Set<unknown>)
 		text = items === undefined ? undefined : `Set{${items.sort().join(",")}}`
 	} else if (
-		Object.getOwnPropertySymbols(value).length > 0 ||
-		(prototype !== null &&
-			prototype !== Object.prototype &&
-			!Schema.isSchema(constructor))
+		(prototype === null ||
+			prototype === Object.prototype ||
+			Schema.isSchema((prototype as object).constructor)) &&
+		own.every((key) => typeof key === "string" && isPlainField(value, key))
 	) {
-		text = undefined
-	} else {
-		const keys = Object.keys(value).sort()
+		const keys = (own as Array<string>).slice().sort()
 		const items = all(
 			keys.map((key) => (value as Record<string, unknown>)[key]),
 		)
-		const name = constructor === undefined ? "" : classId(constructor)
+		const name =
+			prototype === null ? "" : classId((prototype as object).constructor)
 		text =
 			items === undefined
 				? undefined
-				: `${String(name)}{${keys.map((key, index) => `${JSON.stringify(key)}:${items[index]!}`).join(",")}}`
+				: `${name}{${keys.map((key, index) => `${JSON.stringify(key)}:${items[index]!}`).join(",")}}`
 	}
 	seen.delete(value)
 	return text

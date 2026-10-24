@@ -4,9 +4,10 @@
  * Each endpoint says what it needs with the {@link Required} annotation. A
  * group can give a default with {@link GroupRequired}: one list for GET
  * requests and one list for all other methods. A middleware checks the
- * requirements before the handler runs. An endpoint with no annotation is a
- * defect, so a new endpoint is closed until you say what it needs. An empty
- * list means the endpoint is open.
+ * requirements before the handler runs, in each group that uses it. An
+ * endpoint with no annotation is a defect, so a new endpoint is closed until
+ * you say what it needs. An empty list means the endpoint is open. An endpoint
+ * in a group without the middleware is not checked at all.
  *
  * ```ts
  * class Authorization extends HttpApiMiddleware.Service<
@@ -18,6 +19,8 @@
  *   .annotate(HttpApi.Required, [
  *     HttpApi.requires(Auth, "update", "Bot", (params) => Bots.find(params.id)),
  *   ])
+ *
+ * const bots = HttpApiGroup.make("bots").add(endpoint).middleware(Authorization)
  *
  * const AuthorizationLive = HttpApi.layer(Authorization, Auth)
  * ```

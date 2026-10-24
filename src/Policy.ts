@@ -950,14 +950,55 @@ export interface Residuals<E = never, R = never, O = never> {
 
 const always: Ast = Condition.always
 const never: Ast = Condition.never
+
+/**
+ * The most nodes that a residual condition may have. A policy tree may use a
+ * condition of a child two times, in its allow condition and in its deny
+ * condition, so a small policy may give a very large condition. Past this
+ * size, the residual is one predicate that runs `decide`.
+ */
+const maxResidualSize = 10_000
+
+/** A residual condition is too large. See {@link maxResidualSize}. */
+class TooLarge {}
+
+const sizes = new WeakMap<Ast, number>()
+
+/** Gives the number of nodes in a condition, as JSON would have them. */
+const sizeOf = (ast: Ast): number => {
+	const cached = sizes.get(ast)
+	if (cached !== undefined) {
+		return cached
+	}
+	let size = 1
+	switch (ast._tag) {
+		case "And":
+		case "Or":
+			for (const child of ast.conditions) size = size + sizeOf(child)
+			break
+		case "Not":
+			size = size + sizeOf(ast.condition)
+			break
+	}
+	sizes.set(ast, size)
+	return size
+}
+
+const limit = (ast: Ast): Ast => {
+	if (sizeOf(ast) > maxResidualSize) {
+		throw new TooLarge()
+	}
+	return ast
+}
+
 // These helpers work on nodes with no types, so they leave out the type field
-// of a condition.
+// of a condition. Each one stops the work when the condition is too large.
 const and = (...values: ReadonlyArray<Ast>): Ast =>
-	Condition.simplify(Condition.and(...(values as ReadonlyArray<never>)))
+	limit(Condition.simplify(Condition.and(...(values as ReadonlyArray<never>))))
 const or = (...values: ReadonlyArray<Ast>): Ast =>
-	Condition.simplify(Condition.or(...(values as ReadonlyArray<never>)))
+	limit(Condition.simplify(Condition.or(...(values as ReadonlyArray<never>))))
 const not = (value: Ast): Ast =>
-	Condition.simplify(Condition.not(value as never))
+	limit(Condition.simplify(Condition.not(value as never)))
 
 /** The two residual conditions of a node, with no types. */
 interface Pair {
@@ -1129,12 +1170,19 @@ const residualsAny = (
 		input: { principal: request.principal, path: descriptor.path },
 	}
 	if (!usesPredicate(policy.node, context)) {
-		return residualNode(policy.node, context)
+		try {
+			return residualNode(policy.node, context)
+		} catch (error) {
+			if (!(error instanceof TooLarge)) {
+				throw error
+			}
+		}
 	}
 	// A predicate may fail, and it may give another answer each time it runs.
 	// A tree of `And` and `Or` nodes can not run the predicates in the same
 	// order and the same number of times as `decide`. So the residual is one
-	// predicate that runs `decide` for each value.
+	// predicate that runs `decide` for each value. The same is true for a
+	// residual that is too large.
 	const decision = (value: object) =>
 		decideNode(
 			policy.node,
@@ -1164,10 +1212,11 @@ const residualsAny = (
  * to `Condition.fold`. It is `True` when the policy allows every value of the
  * kind, and `False` when it allows none.
  *
- * When a rule that the request may use has a predicate, the condition is one
- * predicate with the name `"policy"`. It runs the whole policy for each value,
- * so its answers and its failures are the same as those of {@link decide}. It
- * takes the principal with it.
+ * When a rule that the request may use has a predicate, or when the condition
+ * would have more than 10000 nodes, the condition is one predicate with the
+ * name `"policy"`. It runs the whole policy for each value, so its answers and
+ * its failures are the same as those of {@link decide}. It takes the principal
+ * with it.
  *
  * @stability stable
  * @category evaluation
@@ -1387,8 +1436,14 @@ const validate = (
 						const everywhere =
 							kinds !== undefined &&
 							descriptors.length > 0 &&
-							descriptors.every((descriptor) =>
-								descriptor.fieldPaths.includes(field),
+							descriptors.every(
+								(descriptor) =>
+									descriptor.fieldPaths.includes(field) ||
+									// A part of a field that holds more than one value,
+									// such as a key of a record.
+									descriptor.openPaths.some((open) =>
+										field.startsWith(`${open}.`),
+									),
 							)
 						if (!everywhere) {
 							issues.push({

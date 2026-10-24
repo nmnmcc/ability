@@ -882,6 +882,64 @@ describe("Policy", () => {
 		assert.isFalse(Rule.matchesInside("name.*", "settings"))
 	})
 
+	it("matches patterns by Unicode code points", () => {
+		assert.isTrue(Rule.matchesField("🔒*", "🔒secret"))
+		assert.isTrue(Rule.matchesField("a*", "a🔒"))
+		assert.isFalse(Rule.matchesField("🔒*", "🔓secret"))
+	})
+
+	it("takes a rule on a part of a record field", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { settings: Schema.Record(Schema.String, Schema.String) },
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.define(Notes)(function* (_) {
+			yield* _.allow("read", Note, {
+				when: ($) => $.eq("settings.mode", "open"),
+			})
+		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: Note.make({ settings: { mode: "open" } }),
+			})._tag,
+			"Allow",
+		)
+		const PolicySchema = Policy.schema(Notes)
+		const json = Schema.encodeSync(PolicySchema)(policy)
+		assert.isTrue(Equal.equals(Schema.decodeSync(PolicySchema)(json), policy))
+	})
+
+	it("gives a residual of a deep policy in a short time", () => {
+		let policy: Policy.Policy<App> = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot, { when: ($) => $.eq("level", 1) })
+			yield* _.deny("read", Bot, { when: ($) => $.eq("name", "Team") })
+		})
+		for (let depth = 0; depth < 24; depth++) {
+			policy = depth % 2 === 0 ? Policy.any([policy]) : Policy.all([policy])
+		}
+		const start = Date.now()
+		const residual = Policy.residual(policy, {
+			principal: alice,
+			action: "read",
+			kind: "Bot",
+		})
+		assert.isBelow(Date.now() - start, 1000)
+		for (const value of [aliceBot, sharedBot]) {
+			const decision = Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: value,
+			})
+			assert.strictEqual(
+				Effect.runSync(Condition.evaluate(residual, { value })),
+				decision._tag === "Allow",
+			)
+		}
+	})
+
 	it("matches a pattern with many stars in a short time", () => {
 		const start = Date.now()
 		assert.isFalse(

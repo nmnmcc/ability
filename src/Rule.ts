@@ -327,7 +327,7 @@ export const builder = <D extends Domain.Any>(_domain: D): Builder<D> =>
 export const isRule = (u: unknown): u is Any => u instanceof RuleData
 
 /**
- * A part of a field pattern: `"**"`, `"*"`, or one plain character.
+ * A part of a field pattern: `"**"`, `"*"`, or one plain Unicode code point.
  */
 type Token = string
 
@@ -338,14 +338,16 @@ const tokensOf = (pattern: string): ReadonlyArray<Token> => {
 	if (cached !== undefined) {
 		return cached
 	}
+	// The pattern is read by Unicode code points, as the field is in `run`.
+	const chars = Array.from(pattern)
 	const tokens: Array<Token> = []
 	let index = 0
-	while (index < pattern.length) {
-		if (pattern.startsWith("**", index)) {
+	while (index < chars.length) {
+		if (chars[index] === "*" && chars[index + 1] === "*") {
 			tokens.push("**")
 			index = index + 2
 		} else {
-			tokens.push(pattern[index]!)
+			tokens.push(chars[index]!)
 			index = index + 1
 		}
 	}
