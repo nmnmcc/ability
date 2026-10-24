@@ -938,7 +938,13 @@ const deniesInside = (
 	node: Node,
 	target: { readonly action: string; readonly kind: string },
 	field: string,
+	seen: Set<Node> = new Set(),
 ): boolean => {
+	// One node may be a child of many nodes. It is tested one time.
+	if (seen.has(node)) {
+		return false
+	}
+	seen.add(node)
 	switch (node._tag) {
 		case "Rules":
 			return node.rules.some(
@@ -954,11 +960,13 @@ const deniesInside = (
 		case "All":
 		case "Any":
 		case "FirstOf":
-			return node.policies.some((child) => deniesInside(child, target, field))
+			return node.policies.some((child) =>
+				deniesInside(child, target, field, seen),
+			)
 		case "Ceiling":
 			return (
-				deniesInside(node.cap, target, field) ||
-				deniesInside(node.policy, target, field)
+				deniesInside(node.cap, target, field, seen) ||
+				deniesInside(node.policy, target, field, seen)
 			)
 	}
 }
@@ -1162,17 +1170,29 @@ const firstApplicableResidual = (
 	values: ReadonlyArray<Rule.Any>,
 	context: ResidualContext,
 ): Pair => {
+	// The rules go in runs of one tag, from the last run to the first. The
+	// conditions of a run go into one node at once. With one node for each
+	// rule, each step would flatten the whole condition again.
 	let allow: Ast = never
 	let deny: Ast = never
-	for (const value of values.slice().reverse()) {
-		const applies = ruleCondition(value, context)
-		if (value._tag === "Allow") {
-			allow = or(applies, allow)
-			deny = and(not(applies), deny)
-		} else {
-			deny = or(applies, deny)
-			allow = and(not(applies), allow)
+	let end = values.length
+	while (end > 0) {
+		const tag = values[end - 1]!._tag
+		let start = end - 1
+		while (start > 0 && values[start - 1]!._tag === tag) {
+			start = start - 1
 		}
+		const run = or(
+			...values.slice(start, end).map((value) => ruleCondition(value, context)),
+		)
+		if (tag === "Allow") {
+			allow = or(run, allow)
+			deny = and(not(run), deny)
+		} else {
+			deny = or(run, deny)
+			allow = and(not(run), allow)
+		}
+		end = start
 	}
 	return { allow, deny }
 }

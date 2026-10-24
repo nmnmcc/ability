@@ -470,8 +470,8 @@ export const matchesInside = (pattern: string, field: string): boolean =>
  * Tests the parts of a rule that do not need the resource value: the action,
  * the kind and the field.
  *
- * A rule with fields covers a request with no field only when it is an allow
- * rule. So "may update some fields" is a yes. A deny rule for some fields does
+ * A rule with an empty list of fields covers no request. A rule with fields
+ * covers a request with no field only when it is an allow rule. So "may update some fields" is a yes. A deny rule for some fields does
  * not stop a request for the whole value.
  *
  * @stability stable
@@ -494,6 +494,11 @@ export const matchesTarget = (
 	}
 	if (rule.fields === undefined) {
 		return true
+	}
+	// A rule for no fields is a rule for nothing. A grant with its last field
+	// taken away must not cover the whole value.
+	if (rule.fields.length === 0) {
+		return false
 	}
 	if (target.field === undefined) {
 		return rule._tag === "Allow"

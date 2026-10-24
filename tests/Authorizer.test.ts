@@ -802,4 +802,46 @@ describe("Authorizer", () => {
 			assert.isBelow(Date.now() - start, 1000)
 		}),
 	)
+
+	it.effect("does not cache a principal with an object in a set", () =>
+		Effect.gen(function* () {
+			class Role extends Schema.Class<Role>("Role")({ name: Schema.String }) {}
+			const admin = Role.make({ name: "admin" })
+			class Member extends Principal.Class<Member>("Member")({
+				roles: Schema.ReadonlySet(Role),
+			}) {}
+			const Members = Domain.make({ principal: Member, resources: [Bot] })
+			class CurrentMember extends Context.Service<CurrentMember, Member>()(
+				"@nmnmcc/ability/tests/Authorizer.test/CurrentMember",
+			) {}
+			class MemberAuth extends Authorizer.Service<
+				MemberAuth,
+				{ requires: CurrentMember }
+			>()("test/MemberAuth", Members) {}
+			const layer = Authorizer.layer(MemberAuth, {
+				principal: CurrentMember,
+				policy: (user) =>
+					Effect.succeed(
+						Policy.define(Members)(function* (_) {
+							if (user.roles.has(admin)) {
+								yield* _.allow("read", Bot)
+							}
+						}),
+					),
+			})
+			const exit = yield* Effect.gen(function* () {
+				yield* Effect.provideService(
+					MemberAuth.check({ action: "read", resource: aliceBot }),
+					CurrentMember,
+					Member.make({ roles: new Set([admin]) }),
+				)
+				yield* Effect.provideService(
+					MemberAuth.check({ action: "read", resource: aliceBot }),
+					CurrentMember,
+					Member.make({ roles: new Set([Role.make({ name: "admin" })]) }),
+				)
+			}).pipe(Effect.provide(layer), Effect.exit)
+			assert.strictEqual(failureTag(exit), "Forbidden")
+		}),
+	)
 })

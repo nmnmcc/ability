@@ -406,6 +406,9 @@ const isPlainField = (value: object, key: string): boolean => {
 	)
 }
 
+const isObjectLike = (value: unknown): boolean =>
+	(typeof value === "object" && value !== null) || typeof value === "function"
+
 const classIds = new WeakMap<object, number>()
 let nextClassId = 0
 
@@ -491,12 +494,23 @@ const keyText = (value: unknown, seen: Set<object>): string | undefined => {
 	) {
 		const items = all(value as Array<unknown>)
 		text = items === undefined ? undefined : `[${items.join(",")}]`
-	} else if (prototype === Map.prototype && own.length === 0) {
+	} else if (
+		prototype === Map.prototype &&
+		own.length === 0 &&
+		// A map finds an object key by the object itself, not by its data, as
+		// in `map.get(role)`. The text can not show which object it is.
+		!Array.from((value as Map<unknown, unknown>).keys()).some(isObjectLike)
+	) {
 		const entries = all(
 			Array.from(value as Map<unknown, unknown>, ([key, item]) => [key, item]),
 		)
 		text = entries === undefined ? undefined : `Map{${entries.join(",")}}`
-	} else if (prototype === Set.prototype && own.length === 0) {
+	} else if (
+		prototype === Set.prototype &&
+		own.length === 0 &&
+		// A set finds an object by the object itself, as in `set.has(role)`.
+		!Array.from(value as Set<unknown>).some(isObjectLike)
+	) {
 		const items = all(value as Set<unknown>)
 		text = items === undefined ? undefined : `Set{${items.join(",")}}`
 	} else if (

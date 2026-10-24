@@ -487,6 +487,17 @@ type OrderedPath<T> = {
 }[FieldPath<T>]
 
 /**
+ * A test made by a {@link Builder}. It runs no code, but it keeps the value
+ * type of its resource, so a test on the fields of one resource can not go
+ * into a rule for another resource.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.4.0
+ */
+export type Test<Value> = Condition<never, never, never, Reads<Value, unknown>>
+
+/**
  * Makes conditions for a resource with the data type `Data` and the value type
  * `Value`, and a principal with the type `P`.
  *
@@ -499,39 +510,39 @@ export interface Builder<Data, Value, P> {
 	readonly eq: <const F extends FieldPath<Data>>(
 		field: F,
 		value: OperandOf<PathValue<Data, F>>,
-	) => Condition
+	) => Test<Value>
 	/** The field is not equal to the value. */
 	readonly ne: <const F extends FieldPath<Data>>(
 		field: F,
 		value: OperandOf<PathValue<Data, F>>,
-	) => Condition
+	) => Test<Value>
 	readonly lt: <const F extends OrderedPath<Data>>(
 		field: F,
 		value: OperandOf<Exclude<PathValue<Data, F>, null>>,
-	) => Condition
+	) => Test<Value>
 	readonly lte: <const F extends OrderedPath<Data>>(
 		field: F,
 		value: OperandOf<Exclude<PathValue<Data, F>, null>>,
-	) => Condition
+	) => Test<Value>
 	readonly gt: <const F extends OrderedPath<Data>>(
 		field: F,
 		value: OperandOf<Exclude<PathValue<Data, F>, null>>,
-	) => Condition
+	) => Test<Value>
 	readonly gte: <const F extends OrderedPath<Data>>(
 		field: F,
 		value: OperandOf<Exclude<PathValue<Data, F>, null>>,
-	) => Condition
+	) => Test<Value>
 	/** The field is equal to one of the values. */
 	readonly in: <const F extends FieldPath<Data>>(
 		field: F,
 		values: ReadonlyArray<OperandOf<PathValue<Data, F>>>,
-	) => Condition
+	) => Test<Value>
 	/** The field has a value that is not `null`. */
-	readonly exists: <const F extends FieldPath<Data>>(field: F) => Condition
+	readonly exists: <const F extends FieldPath<Data>>(field: F) => Test<Value>
 	/** The path of the resource starts with these parts. */
 	readonly under: (
 		...prefix: ReadonlyArray<string | null | Ref<string | null>>
-	) => Condition
+	) => Test<Value>
 	/**
 	 * A field of the principal, to use as a value. The field must have a
 	 * {@link Scalar} type.

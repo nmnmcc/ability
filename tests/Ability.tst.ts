@@ -239,6 +239,21 @@ describe("Policy", () => {
 		expect(fly).type.not.toBeCallableWith(policy)
 	})
 
+	it("keeps the resource of a plain test", () => {
+		const _ = Rule.builder(App)
+		const enabled = Condition.builder<
+			Rule.DataFor<App, "Trigger">,
+			Rule.ValueFor<App, "Trigger">,
+			Caller
+		>().eq("enabled", true)
+		expect(_.allow).type.toBeCallableWith("read", "Trigger", {
+			when: () => enabled,
+		})
+		expect(_.allow).type.not.toBeCallableWith("read", Bot, {
+			when: () => enabled,
+		})
+	})
+
 	it("keeps the domain of the rules of a node", () => {
 		const Other = Domain.make({ principal: Caller, resources: [Bot] })
 		const node = Policy.define(App)(function* (_) {

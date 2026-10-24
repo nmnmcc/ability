@@ -489,7 +489,7 @@ describe("Policy", () => {
 		type BotBuilder = Condition.Builder<Rule.DataFor<App, "Bot">, Bot, Caller>
 		const conditions: Record<
 			Exclude<(typeof Spec.Type)["when"], "none">,
-			($: BotBuilder) => Condition.Condition
+			($: BotBuilder) => Condition.Test<Bot>
 		> = {
 			owner: ($) => $.eq("ownerUserId", $.principal("userId")),
 			shared: ($) => $.eq("ownerUserId", null),
@@ -511,7 +511,7 @@ describe("Policy", () => {
 		const toRule = (
 			_: Rule.Builder<App>,
 			spec: typeof Spec.Type,
-		): Rule.Rule => {
+		): Rule.Rule<never, never, never, App, Condition.Reads<Bot, unknown>> => {
 			const make = spec.tag === "Allow" ? _.allow : _.deny
 			return make(spec.action, Bot, {
 				...(spec.fields ? { fields: ["name"] } : {}),
@@ -1005,6 +1005,76 @@ describe("Policy", () => {
 			})._tag,
 			"Allow",
 		)
+	})
+
+	it("does not let a rule for no fields cover a request", () => {
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot, { fields: [] })
+		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: aliceBot,
+			})._tag,
+			"NotApplicable",
+		)
+		assert.deepStrictEqual(
+			Policy.residual(policy, {
+				principal: alice,
+				action: "read",
+				kind: "Bot",
+			}),
+			Condition.never,
+		)
+	})
+
+	it("lists the fields of a deep shared policy in a short time", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: {
+				title: Schema.String,
+				settings: Schema.Record(Schema.String, Schema.String),
+			},
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		let policy: Policy.Policy<typeof Notes> = Policy.define(Notes)(
+			function* (_) {
+				yield* _.allow("read", Note)
+			},
+		)
+		for (let depth = 0; depth < 30; depth++) {
+			policy = Policy.all([policy, policy])
+		}
+		const start = Date.now()
+		const fields = Effect.runSync(
+			Policy.permittedFields(policy, {
+				principal: alice,
+				action: "read",
+				resource: Note.make({ title: "a", settings: {} }),
+			}),
+		)
+		assert.deepStrictEqual(fields, ["title", "settings"])
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
+	it("gives the residual of many ordered rules in a short time", () => {
+		const ids = Array.from({ length: 4000 }, (_, index) => `b${String(index)}`)
+		const policy = Policy.define(App, { algorithm: "firstApplicable" })(
+			function* (_) {
+				for (const id of ids) {
+					yield* _.allow("read", Bot, { when: ($) => $.eq("id", id) })
+				}
+			},
+		)
+		const start = Date.now()
+		const residual = Policy.residual(policy, {
+			principal: alice,
+			action: "read",
+			kind: "Bot",
+		})
+		assert.isBelow(Date.now() - start, 1000)
+		assert.isTrue(Condition.evaluateSync(residual, { value: aliceBot }))
 	})
 
 	it("simplifies a long list of tests in a short time", () => {
