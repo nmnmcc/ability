@@ -516,17 +516,17 @@ export const matchesInside = (pattern: string, field: string): boolean =>
 
 /**
  * Tests if a field pattern may match a field of a kind: a field in its list, a
- * part inside one, such as a key of a record, or a path that the Schema has,
- * such as a getter.
+ * part inside a field that holds more than one value, such as a key of a
+ * record, or a path that the Schema has, such as a getter.
  */
 const fitsSomeField = (
 	pattern: string,
 	descriptor: Resource.Descriptor,
 ): boolean =>
-	Arr.some(
-		descriptor.fieldPaths,
-		(field) => matchesField(pattern, field) || matchesInside(pattern, field),
-	) ||
+	Arr.some(descriptor.fieldPaths, (field) => matchesField(pattern, field)) ||
+	// Only a field that holds more than one value, such as a record or an
+	// array, has parts inside. A scalar field has none.
+	Arr.some(descriptor.openPaths, (field) => matchesInside(pattern, field)) ||
 	(!pattern.includes("*") &&
 		(Resource.hasPath(descriptor.schema, pattern) ||
 			Resource.hasGetter(descriptor.schema, pattern)))

@@ -722,9 +722,10 @@ export const ceiling: {
  * each path to it.
  */
 const remember = <K, A>(memo: Map<K, A>, key: K, work: () => A): A => {
-	const cached = memo.get(key)
-	if (cached !== undefined) {
-		return cached
+	// A result may be `undefined`, as the result of a fold may be, so the test
+	// asks for the key.
+	if (memo.has(key)) {
+		return memo.get(key) as A
 	}
 	const result = work()
 	memo.set(key, result)

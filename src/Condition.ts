@@ -43,6 +43,7 @@ import * as HashSet from "effect/HashSet"
 import * as MutableHashMap from "effect/MutableHashMap"
 import { hasProperty, isObject } from "effect/Predicate"
 import * as Schema from "effect/Schema"
+import * as SchemaTransformation from "effect/SchemaTransformation"
 import * as Resource from "./Resource.ts"
 
 /**
@@ -1025,9 +1026,10 @@ export const hasPredicate = (condition: Ast): boolean =>
  * shared child again for each path to it.
  */
 const remember = <K, A>(memo: Map<K, A>, key: K, work: () => A): A => {
-	const cached = memo.get(key)
-	if (cached !== undefined) {
-		return cached
+	// A result may be `undefined`, as the result of a fold may be, so the test
+	// asks for the key.
+	if (memo.has(key)) {
+		return memo.get(key) as A
 	}
 	const result = work()
 	memo.set(key, result)
@@ -2568,17 +2570,27 @@ const OperandSchema = Schema.Union([
 	Schema.TaggedStruct("Principal", { path: Schema.String }),
 ])
 
-const Recursive = Schema.suspend((): Schema.Codec<Condition, Encoded> => schema)
+const Recursive = Schema.suspend((): Schema.Codec<Condition, Encoded> => shape)
 
 /**
- * The Schema of a condition with no predicate. It checks the shape only. Use
- * `Policy.schema` to check the field names against a domain too.
- *
- * @stability stable
- * @category schemas
- * @since 0.3.0
+ * The most levels of objects and arrays in the JSON form of a condition. The
+ * Schema of a condition calls itself for each level, so a much deeper input
+ * could fill the stack before it fails.
  */
-export const schema: Schema.Codec<Condition, Encoded> = Schema.Union([
+const maxJsonDepth = 1000
+
+/**
+ * Tests if a value has at most `levels` levels of objects and arrays. The walk
+ * stops at that depth, so it does not fill the stack itself.
+ */
+const nestedWithin = (input: unknown, levels: number): boolean =>
+	typeof input !== "object" ||
+	input === null ||
+	(levels > 0 &&
+		Arr.every(Object.values(input), (child) => nestedWithin(child, levels - 1)))
+
+/** The shape of a condition, with no check of its depth. */
+const shape: Schema.Codec<Condition, Encoded> = Schema.Union([
 	Schema.TaggedStruct("True", {}),
 	Schema.TaggedStruct("False", {}),
 	Schema.TaggedStruct("Compare", {
@@ -2596,3 +2608,27 @@ export const schema: Schema.Codec<Condition, Encoded> = Schema.Union([
 	Schema.TaggedStruct("Or", { conditions: Schema.Array(Recursive) }),
 	Schema.TaggedStruct("Not", { condition: Recursive }),
 ]) as never
+
+/**
+ * The Schema of a condition with no predicate. It checks the shape only. Use
+ * `Policy.schema` to check the field names against a domain too.
+ *
+ * @stability stable
+ * @category schemas
+ * @since 0.3.0
+ */
+export const schema: Schema.Codec<Condition, Encoded> =
+	// The input is any value until the checks of `shape` run, so this guard
+	// says yes to every object.
+	Schema.declare(
+		(input): input is Encoded => typeof input === "object" && input !== null,
+	).pipe(
+		Schema.check(
+			Schema.makeFilter((input) =>
+				nestedWithin(input, maxJsonDepth)
+					? true
+					: `A condition may have at most ${String(maxJsonDepth)} levels of JSON`,
+			),
+		),
+		Schema.decodeTo(shape, SchemaTransformation.passthrough()),
+	)

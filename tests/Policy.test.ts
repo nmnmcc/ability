@@ -1762,6 +1762,33 @@ describe("Policy", () => {
 		)
 	})
 
+	it("does not grant parts inside a scalar field", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { settings: Schema.String },
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Bot, Note] })
+		const policy = Policy.define(Notes)(function* (_) {
+			yield* _.allow("read", "*", { fields: ["settings.*"] })
+		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: Note.make({ settings: "x" }),
+			})._tag,
+			"NotApplicable",
+		)
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: aliceBot,
+			})._tag,
+			"Allow",
+		)
+	})
+
 	it("does not take a path part that is not a field of the resource", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],

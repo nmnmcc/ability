@@ -259,6 +259,45 @@ describe("Condition", () => {
 		)
 	})
 
+	it("folds a shared node one time, also when the result is undefined", () => {
+		const calls = { true: 0 }
+		const visit = Condition.fold<void>({
+			true: () => {
+				calls.true += 1
+			},
+			false: () => undefined,
+			compare: () => undefined,
+			in: () => undefined,
+			exists: () => undefined,
+			and: () => undefined,
+			or: () => undefined,
+			not: () => undefined,
+		})
+		const shared = Array.from({ length: 18 }).reduce<Condition.Condition>(
+			(condition) => Condition.and(condition, condition),
+			Condition.always,
+		)
+		Effect.runSync(visit(shared))
+		assert.strictEqual(calls.true, 1)
+	})
+
+	it("does not fill the stack with deep JSON", () => {
+		const deep = Array.from({ length: 5000 }).reduce<unknown>(
+			(condition) => ({ _tag: "Not", condition }),
+			{ _tag: "True" },
+		)
+		const exit = Schema.decodeUnknownExit(Condition.schema)(deep)
+		assert.isTrue(Exit.isFailure(exit))
+		assert.include(String(Exit.isFailure(exit) ? exit.cause : ""), "levels")
+		const shallow = Array.from({ length: 900 }).reduce<unknown>(
+			(condition) => ({ _tag: "Not", condition }),
+			{ _tag: "True" },
+		)
+		assert.isTrue(
+			Exit.isSuccess(Schema.decodeUnknownExit(Condition.schema)(shallow)),
+		)
+	})
+
 	describe("satisfiable", () => {
 		const Shape = Schema.Struct({
 			count: Schema.Int,
