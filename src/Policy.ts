@@ -955,7 +955,7 @@ const never: Ast = Condition.never
  * The most nodes that a residual condition may have. A policy tree may use a
  * condition of a child two times, in its allow condition and in its deny
  * condition, so a small policy may give a very large condition. Past this
- * size, the residual is one predicate that runs `decide`.
+ * size, `residual` throws an error.
  */
 const maxResidualSize = 10_000
 
@@ -1129,6 +1129,23 @@ const residualNode = (node: Node, context: ResidualContext): Pair => {
 /** The name of the predicate of a residual condition that runs `decide`. */
 const policyPredicate = "policy"
 
+/** Tests if a rule of a policy tree has a predicate. */
+const nodeHasPredicate = (node: Node): boolean => {
+	switch (node._tag) {
+		case "Rules":
+			return node.rules.some(
+				(value) =>
+					value.when !== undefined && Condition.hasPredicate(value.when),
+			)
+		case "All":
+		case "Any":
+		case "FirstOf":
+			return node.policies.some(nodeHasPredicate)
+		case "Ceiling":
+			return nodeHasPredicate(node.cap) || nodeHasPredicate(node.policy)
+	}
+}
+
 /** Tests if a rule that the request may use has a predicate. */
 const usesPredicate = (node: Node, context: ResidualContext): boolean => {
 	switch (node._tag) {
@@ -1173,16 +1190,21 @@ const residualsAny = (
 		try {
 			return residualNode(policy.node, context)
 		} catch (error) {
-			if (!(error instanceof TooLarge)) {
-				throw error
+			// The type of the residual of a plain policy says that it has no
+			// predicate, so it can not be the predicate below. The policy is too
+			// large for a residual, and that is a defect.
+			if (error instanceof TooLarge) {
+				throw new globalThis.Error(
+					`The residual condition of this request would have more than ${String(maxResidualSize)} nodes`,
+				)
 			}
+			throw error
 		}
 	}
 	// A predicate may fail, and it may give another answer each time it runs.
 	// A tree of `And` and `Or` nodes can not run the predicates in the same
 	// order and the same number of times as `decide`. So the residual is one
-	// predicate that runs `decide` for each value. The same is true for a
-	// residual that is too large.
+	// predicate that runs `decide` for each value.
 	const decision = (value: object) =>
 		decideNode(
 			policy.node,
@@ -1212,11 +1234,15 @@ const residualsAny = (
  * to `Condition.fold`. It is `True` when the policy allows every value of the
  * kind, and `False` when it allows none.
  *
- * When a rule that the request may use has a predicate, or when the condition
- * would have more than 10000 nodes, the condition is one predicate with the
- * name `"policy"`. It runs the whole policy for each value, so its answers and
- * its failures are the same as those of {@link decide}. It takes the principal
- * with it.
+ * When a rule that the request may use has a predicate, the condition is one
+ * predicate with the name `"policy"`. It runs the whole policy for each value,
+ * so its answers and its failures are the same as those of {@link decide}. It
+ * takes the principal with it.
+ *
+ * A policy tree may use the condition of a child two times, so a small policy
+ * may give a very large condition. When the condition would have more than
+ * 10000 nodes, this function throws an error. In an `Authorizer`, the error is
+ * a defect, so the check fails.
  *
  * @stability stable
  * @category evaluation
@@ -1390,6 +1416,7 @@ const validate = (
 ): ReadonlyArray<Issue> => {
 	const issues: Array<Issue> = []
 	const principalPaths = new Set(Resource.fieldPaths(domain.principal))
+	const principalRecords = Resource.recordPaths(domain.principal)
 	const visit = (node: EncodedNode, path: ReadonlyArray<PropertyKey>) => {
 		switch (node._tag) {
 			case "Rules":
@@ -1439,10 +1466,9 @@ const validate = (
 							descriptors.every(
 								(descriptor) =>
 									descriptor.fieldPaths.includes(field) ||
-									// A part of a field that holds more than one value,
-									// such as a key of a record.
-									descriptor.openPaths.some((open) =>
-										field.startsWith(`${open}.`),
+									// A key of a record.
+									descriptor.recordPaths.some((record) =>
+										field.startsWith(`${record}.`),
 									),
 							)
 						if (!everywhere) {
@@ -1454,7 +1480,10 @@ const validate = (
 					}
 					if (value.when !== undefined) {
 						for (const ref of principalRefs(value.when)) {
-							if (!principalPaths.has(ref)) {
+							if (
+								!principalPaths.has(ref) &&
+								!principalRecords.some((record) => ref.startsWith(`${record}.`))
+							) {
 								issues.push({
 									path: [...at, "when"],
 									issue: `The principal has no field "${ref}"`,
@@ -1524,7 +1553,12 @@ export const schema = <D extends Domain.Any>(
 	encodedNodeSchema(domain.meta).pipe(
 		Schema.check(Schema.makeFilter((node) => validate(domain, node))),
 		Schema.decodeTo(
-			Schema.declare((u): u is Policy<D> => isPolicy(u) && u.domain === domain),
+			// A policy with a predicate is not a plain policy, and it can not
+			// become JSON.
+			Schema.declare(
+				(u): u is Policy<D> =>
+					isPolicy(u) && u.domain === domain && !nodeHasPredicate(u.node),
+			),
 			SchemaTransformation.transform({
 				decode: (node: EncodedNode) => fromNode(domain, decodeNode(node)),
 				encode: (policy: Policy<D>) => encodeNode(policy.node),

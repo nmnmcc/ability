@@ -358,8 +358,18 @@ class PrincipalKey implements Equal.Equal {
 	}
 }
 
-const isIndex = (key: string | symbol): boolean =>
-	typeof key === "string" && /^(?:0|[1-9][0-9]*)$/.test(key)
+/**
+ * Tests if an array has a plain field at each index below its length. With
+ * one more own key for `length`, it then has no other own keys.
+ */
+const hasEveryIndex = (value: Array<unknown>): boolean => {
+	for (let index = 0; index < value.length; index++) {
+		if (!isPlainField(value, String(index))) {
+			return false
+		}
+	}
+	return true
+}
 
 /**
  * Tests if an own key of an object holds plain data that the text shows: it
@@ -451,7 +461,7 @@ const keyText = (value: unknown, seen: Set<object>): string | undefined => {
 	} else if (
 		prototype === Array.prototype &&
 		own.length === (value as Array<unknown>).length + 1 &&
-		own.every((key) => key === "length" || isIndex(key))
+		hasEveryIndex(value as Array<unknown>)
 	) {
 		const items = all(value as Array<unknown>)
 		text = items === undefined ? undefined : `[${items.join(",")}]`

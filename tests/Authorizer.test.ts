@@ -507,9 +507,15 @@ describe("Authorizer", () => {
 			PlainAuth,
 			{ requires: Member }
 		>()("test/PlainAuth", Plain) {}
-		const roleOf = (principal: object): unknown =>
-			(principal as { readonly role: unknown }).role ??
-			(principal as { readonly roles: { readonly role?: unknown } }).roles.role
+		const roleOf = (principal: object): unknown => {
+			const roles = (principal as { readonly roles: Record<string, unknown> })
+				.roles
+			return (
+				(principal as { readonly role: unknown }).role ??
+				roles["role"] ??
+				roles["4294967295"]
+			)
+		}
 		const layer = Authorizer.layer(PlainAuth, {
 			principal: Member as never,
 			policy: (principal) =>
@@ -549,6 +555,19 @@ describe("Authorizer", () => {
 			}),
 		)
 
+		it.effect("in a key of an array past its length", () =>
+			Effect.gen(function* () {
+				const withRole = (role: string) => ({
+					role: undefined,
+					roles: Object.assign(Array<string>(1), { 4294967295: role }),
+				})
+				assert.strictEqual(
+					failureTag(yield* run(withRole("admin"), withRole("guest"))),
+					"Forbidden",
+				)
+			}),
+		)
+
 		it.effect("in an extra key of an array", () =>
 			Effect.gen(function* () {
 				const withRole = (role: string) => {
@@ -562,4 +581,31 @@ describe("Authorizer", () => {
 			}),
 		)
 	})
+
+	it.effect("fails a check on a kind when the residual is too large", () =>
+		Effect.gen(function* () {
+			class Deep extends Authorizer.Service<Deep, { requires: Identity }>()(
+				"test/Deep",
+				App,
+			) {}
+			let policy: Policy.Policy<typeof App> = Policy.define(App)(function* (_) {
+				yield* _.allow("read", Bot, { when: ($) => $.eq("level", 1) })
+				yield* _.deny("read", Bot, { when: ($) => $.eq("name", "Team") })
+			})
+			for (let depth = 0; depth < 24; depth++) {
+				policy = depth % 2 === 0 ? Policy.any([policy]) : Policy.all([policy])
+			}
+			const layer = Authorizer.layer(Deep, {
+				principal: Identity,
+				policy: () => Effect.succeed(policy),
+				decider: () => Effect.succeed(Decision.Allow({})),
+			})
+			const exit = yield* Deep.check({ action: "read", kind: "Bot" }).pipe(
+				Effect.provideService(Identity, alice),
+				Effect.provide(layer),
+				Effect.exit,
+			)
+			assert.isTrue(Exit.isFailure(exit))
+		}),
+	)
 })

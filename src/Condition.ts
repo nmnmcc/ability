@@ -28,8 +28,8 @@
 import type * as Context from "effect/Context"
 import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
-import * as Equal from "effect/Equal"
 import { dual } from "effect/Function"
+import * as MutableHashSet from "effect/MutableHashSet"
 import { hasProperty, isObject } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import type * as Resource from "./Resource.ts"
@@ -854,10 +854,15 @@ export const evaluateSync: {
 	(condition: Condition, input: Input): boolean
 } = dual(2, evaluateSyncAst)
 
+// The nodes are Effect data, so a hash set finds an equal node at once. A
+// test of each pair of nodes would take a very long time for a long list.
+
 const dedupe = (conditions: ReadonlyArray<Ast>): ReadonlyArray<Ast> => {
+	const seen = MutableHashSet.empty<Ast>()
 	const output: Array<Ast> = []
 	for (const condition of conditions) {
-		if (!output.some((other) => Equal.equals(other, condition))) {
+		if (!MutableHashSet.has(seen, condition)) {
+			MutableHashSet.add(seen, condition)
 			output.push(condition)
 		}
 	}
@@ -866,21 +871,20 @@ const dedupe = (conditions: ReadonlyArray<Ast>): ReadonlyArray<Ast> => {
 
 /**
  * Removes the children that the other children make useless. In an `Or`,
- * `a OR (a AND b)` is `a`. In an `And`, `a AND (a OR b)` is `a`.
+ * `a OR (a AND b)` is `a`. In an `And`, `a AND (a OR b)` is `a`. The
+ * children are already without copies.
  */
 const absorb = (
 	inner: "And" | "Or",
 	conditions: ReadonlyArray<Ast>,
-): ReadonlyArray<Ast> =>
-	conditions.filter(
+): ReadonlyArray<Ast> => {
+	const all = MutableHashSet.make(...conditions)
+	return conditions.filter(
 		(condition) =>
 			condition._tag !== inner ||
-			!conditions.some(
-				(other) =>
-					other !== condition &&
-					condition.conditions.some((part) => Equal.equals(part, other)),
-			),
+			!condition.conditions.some((part) => MutableHashSet.has(all, part)),
 	)
+}
 
 /**
  * Removes children that do not change the result. A predicate may fail, and it
@@ -927,7 +931,22 @@ const shortCircuit = (
 		: makeOr(...before, constant)
 }
 
+/**
+ * The nodes that are already simple. A residual condition is made of simple
+ * parts, so the work on each part is done only one time.
+ */
+const simple = new WeakSet<Ast>()
+
 const simplifyAst = (ast: Ast): Ast => {
+	if (simple.has(ast)) {
+		return ast
+	}
+	const result = simplifyNode(ast)
+	simple.add(result)
+	return result
+}
+
+const simplifyNode = (ast: Ast): Ast => {
 	switch (ast._tag) {
 		case "And": {
 			const flat = flatten("And", ast.conditions)

@@ -880,6 +880,7 @@ describe("Policy", () => {
 		assert.isTrue(Rule.matchesInside("**", "settings"))
 		assert.isFalse(Rule.matchesInside("settings", "settings"))
 		assert.isFalse(Rule.matchesInside("name.*", "settings"))
+		assert.isTrue(Rule.matchesInside("settings.", "settings"))
 	})
 
 	it("matches patterns by Unicode code points", () => {
@@ -912,7 +913,7 @@ describe("Policy", () => {
 		assert.isTrue(Equal.equals(Schema.decodeSync(PolicySchema)(json), policy))
 	})
 
-	it("gives a residual of a deep policy in a short time", () => {
+	it("stops in a short time when a residual is too large", () => {
 		let policy: Policy.Policy<App> = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot, { when: ($) => $.eq("level", 1) })
 			yield* _.deny("read", Bot, { when: ($) => $.eq("name", "Team") })
@@ -921,23 +922,94 @@ describe("Policy", () => {
 			policy = depth % 2 === 0 ? Policy.any([policy]) : Policy.all([policy])
 		}
 		const start = Date.now()
+		assert.throws(() =>
+			Policy.residual(policy, {
+				principal: alice,
+				action: "read",
+				kind: "Bot",
+			}),
+		)
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
+	it("simplifies a long list of tests in a short time", () => {
+		const ids = Array.from({ length: 4000 }, (_, index) => `b${String(index)}`)
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot, {
+				when: ($) => $.or(...ids.map((id) => $.eq("id", id))),
+			})
+		})
+		const start = Date.now()
 		const residual = Policy.residual(policy, {
 			principal: alice,
 			action: "read",
 			kind: "Bot",
 		})
-		assert.isBelow(Date.now() - start, 1000)
-		for (const value of [aliceBot, sharedBot]) {
-			const decision = Policy.decideSync(policy, {
-				principal: alice,
-				action: "read",
-				resource: value,
+		assert.isBelow(Date.now() - start, 2000)
+		assert.isTrue(Condition.evaluateSync(residual, { value: aliceBot }))
+	})
+
+	it("takes a principal field inside a record", () => {
+		class User extends Principal.Class<User>("User")({
+			claims: Schema.Record(Schema.String, Schema.String),
+		}) {}
+		const Claims = Domain.make({ principal: User, resources: [Bot] })
+		const policy = Policy.define(Claims)(function* (_) {
+			yield* _.allow("read", Bot, {
+				when: ($) => $.eq("ownerUserId", $.principal("claims.userId")),
 			})
-			assert.strictEqual(
-				Effect.runSync(Condition.evaluate(residual, { value })),
-				decision._tag === "Allow",
-			)
-		}
+		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: User.make({ claims: { userId: "alice" } }),
+				action: "read",
+				resource: aliceBot,
+			})._tag,
+			"Allow",
+		)
+	})
+
+	it("does not take a path inside a suspended string", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { id: Schema.suspend(() => Schema.String) },
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		assert.throws(() =>
+			Schema.decodeSync(Policy.schema(Notes))({
+				_tag: "Rules",
+				algorithm: "denyOverrides",
+				rules: [
+					{
+						_tag: "Allow",
+						actions: ["read"],
+						resources: ["Note"],
+						when: {
+							_tag: "Compare",
+							op: "eq",
+							field: "id.missing",
+							value: { _tag: "Literal", value: null },
+						},
+					},
+				],
+			}),
+		)
+	})
+
+	it("does not let a field name be empty", () => {
+		assert.throws(() =>
+			Resource.make("Note", {
+				actions: ["read"],
+				fields: { "": Schema.Struct({ secret: Schema.String }) },
+			}),
+		)
+	})
+
+	it("does not call a policy with a predicate a plain policy", () => {
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot, { when: ($) => $.predicate("p", () => true) })
+		})
+		assert.isFalse(Schema.is(Policy.schema(App))(policy))
 	})
 
 	it("matches a pattern with many stars in a short time", () => {

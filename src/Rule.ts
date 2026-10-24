@@ -331,6 +331,12 @@ export const isRule = (u: unknown): u is Any => u instanceof RuleData
  */
 type Token = string
 
+/**
+ * The most patterns that the cache keeps. Policies may come and go, so the
+ * cache is made empty when it is full, and it does not grow without end.
+ */
+const maxCachedPatterns = 1000
+
 const tokenCache = new Map<string, ReadonlyArray<Token>>()
 
 const tokensOf = (pattern: string): ReadonlyArray<Token> => {
@@ -350,6 +356,9 @@ const tokensOf = (pattern: string): ReadonlyArray<Token> => {
 			tokens.push(chars[index]!)
 			index = index + 1
 		}
+	}
+	if (tokenCache.size >= maxCachedPatterns) {
+		tokenCache.clear()
 	}
 	tokenCache.set(pattern, tokens)
 	return tokens
@@ -411,21 +420,17 @@ export const matchesField = (pattern: string, field: string): boolean => {
 
 /**
  * Tests if a field pattern may match a field inside `field`, such as
- * `settings.secret` inside `settings`.
+ * `settings.secret` inside `settings`, or `settings.` for the empty key of a
+ * record.
  *
  * @stability stable
  * @category predicates
  * @since 0.4.0
  */
-export const matchesInside = (pattern: string, field: string): boolean => {
-	const tokens = tokensOf(pattern)
-	for (const state of run(tokens, `${field}.`)) {
-		if (state < tokens.length) {
-			return true
-		}
-	}
-	return false
-}
+export const matchesInside = (pattern: string, field: string): boolean =>
+	// The name of a part may be empty, as a key of a record may be. So a match
+	// that ends just after the dot names a part too.
+	run(tokensOf(pattern), `${field}.`).size > 0
 
 /**
  * Tests the parts of a rule that do not need the resource value: the action,

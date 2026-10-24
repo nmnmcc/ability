@@ -67,6 +67,11 @@ export interface Descriptor {
 	 * in `fieldPaths`, but a rule may name them.
 	 */
 	readonly openPaths: ReadonlyArray<string>
+	/**
+	 * The paths in {@link openPaths} of records. A rule may name a key of a
+	 * record, such as `settings.mode` for a record `settings`.
+	 */
+	readonly recordPaths: ReadonlyArray<string>
 	/** The Schema of the values, with the `_tag` field. */
 	readonly schema: Schema.Top
 }
@@ -203,6 +208,38 @@ const structsOf = (
 }
 
 /** Tests if a Schema holds one plain value, with no parts. */
+/**
+ * The kind of value that a field holds: one plain value, a record with keys
+ * that the Schema does not name, or another value with parts, such as an
+ * array or a map.
+ */
+type FieldShape = "scalar" | "record" | "other"
+
+/** Gives the kind of value that a field holds. See {@link FieldShape}. */
+const shapeOf = (
+	ast: SchemaAST.AST,
+	open: ReadonlySet<SchemaAST.AST> = new Set(),
+): FieldShape => {
+	switch (ast._tag) {
+		case "Objects":
+			return ast.indexSignatures.length > 0 ? "record" : "other"
+		case "Union": {
+			const shapes = ast.types.map((type) => shapeOf(type, open))
+			return shapes.every((shape) => shape === "scalar")
+				? "scalar"
+				: shapes.includes("record")
+					? "record"
+					: "other"
+		}
+		case "Suspend":
+			return open.has(ast)
+				? "other"
+				: shapeOf(ast.thunk(), new Set([...open, ast]))
+		default:
+			return isScalar(ast) ? "scalar" : "other"
+	}
+}
+
 const isScalar = (ast: SchemaAST.AST): boolean => {
 	switch (ast._tag) {
 		case "String":
@@ -217,8 +254,6 @@ const isScalar = (ast: SchemaAST.AST): boolean => {
 		case "Null":
 		case "Undefined":
 			return true
-		case "Union":
-			return ast.types.every(isScalar)
 		default:
 			return false
 	}
@@ -242,6 +277,10 @@ const walkFields = (
 			if (property.name.includes(".")) {
 				throw new Error(`A field name may not have a dot: "${property.name}"`)
 			}
+			// An empty name would make an empty part in a path, such as `.secret`.
+			if (property.name === "") {
+				throw new Error("A field name may not be empty")
+			}
 			const path = prefix === "" ? property.name : `${prefix}.${property.name}`
 			const leaf = structsOf(property.type, inner).length === 0
 			visit(path, leaf, property.type)
@@ -253,8 +292,8 @@ const walkFields = (
 /**
  * Gives the paths of all the fields of a Schema, with dots for nested fields.
  * A nested struct gives its own path and the paths of its fields. Arrays are
- * left out. It throws when a field name has a dot, because such a name would
- * give two fields one path.
+ * left out. It throws when a field name has a dot or is empty, because such a
+ * name would give two fields one path, or a path with an empty part.
  *
  * @stability stable
  * @category getters
@@ -264,6 +303,22 @@ export const fieldPaths = (schema: Schema.Top): ReadonlyArray<string> => {
 	const output = new Set<string>()
 	walkFields(schema.ast, (path) => {
 		output.add(path)
+	})
+	return Array.from(output)
+}
+
+/**
+ * Gives the paths of the fields of a Schema that are records. A path may go
+ * on into a key of such a field. See {@link fieldPaths}.
+ *
+ * @stability stable
+ * @category getters
+ * @since 0.4.0
+ */
+export const recordPaths = (schema: Schema.Top): ReadonlyArray<string> => {
+	const output = new Set<string>()
+	walkFields(schema.ast, (path, leaf, type) => {
+		if (leaf && shapeOf(type) === "record") output.add(path)
 	})
 	return Array.from(output)
 }
@@ -284,9 +339,13 @@ const makeDescriptor = (
 	}
 	const paths = new Set<string>()
 	const open = new Set<string>()
+	const records = new Set<string>()
 	walkFields(Schema.Struct(options.fields).ast, (path, leaf, type) => {
-		if (leaf) paths.add(path)
-		if (leaf && !isScalar(type)) open.add(path)
+		if (!leaf) return
+		paths.add(path)
+		const shape = shapeOf(type)
+		if (shape !== "scalar") open.add(path)
+		if (shape === "record") records.add(path)
 	})
 	return new ResourceDescriptor({
 		kind,
@@ -294,6 +353,7 @@ const makeDescriptor = (
 		path: options.path === undefined ? undefined : [...options.path(refs)],
 		fieldPaths: Array.from(paths),
 		openPaths: Array.from(open),
+		recordPaths: Array.from(records),
 		schema,
 	})
 }

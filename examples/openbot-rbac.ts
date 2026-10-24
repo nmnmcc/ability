@@ -68,6 +68,10 @@ const own = Bot.make({ id: "b1", organizationId: "acme", ownerUserId: "alice" })
 // The values go into the query as bound parameters, not into the SQL text. A
 // value from a principal may have a quote in it, and in the SQL text it could
 // change the query.
+//
+// In this library a test is true or false. In SQL a test with NULL is
+// unknown, and NOT unknown is unknown too. So each test is made true or false
+// with COALESCE, and `ne` and `in` say what to do with NULL.
 interface Query {
 	readonly sql: string
 	readonly params: ReadonlyArray<Condition.Scalar>
@@ -92,12 +96,32 @@ const toSql = Condition.fold<Query>({
 	false: () => ({ sql: "FALSE", params: [] }),
 	compare: (op, field, value) =>
 		value === null
-			? { sql: `${field} IS ${op === "eq" ? "" : "NOT "}NULL`, params: [] }
-			: { sql: `${field} ${operators[op]} ?`, params: [value] },
-	in: (field, values) => ({
-		sql: `${field} IN (${values.map(() => "?").join(", ")})`,
-		params: values,
-	}),
+			? // Only `eq` and `ne` are true for a null value.
+				op === "eq" || op === "ne"
+				? { sql: `${field} IS ${op === "eq" ? "" : "NOT "}NULL`, params: [] }
+				: { sql: "FALSE", params: [] }
+			: op === "ne"
+				? { sql: `(${field} IS NULL OR ${field} <> ?)`, params: [value] }
+				: {
+						sql: `COALESCE(${field} ${operators[op]} ?, FALSE)`,
+						params: [value],
+					},
+	in: (field, values) => {
+		const known = values.filter((value) => value !== null)
+		const parts: Array<Query> = []
+		if (known.length > 0) {
+			parts.push({
+				sql: `COALESCE(${field} IN (${known.map(() => "?").join(", ")}), FALSE)`,
+				params: known,
+			})
+		}
+		if (known.length < values.length) {
+			parts.push({ sql: `${field} IS NULL`, params: [] })
+		}
+		return parts.length === 0
+			? { sql: "FALSE", params: [] }
+			: join(parts, " OR ")
+	},
 	exists: (field) => ({ sql: `${field} IS NOT NULL`, params: [] }),
 	and: (parts) => join(parts, " AND "),
 	or: (parts) => join(parts, " OR "),
