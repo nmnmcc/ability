@@ -754,7 +754,11 @@ const makeLayer = (
 				// denied, and when no predicate may fail. Else some value may get a
 				// "no" from the policy, so the answer for the scope is "no". An
 				// unknown answer may hide a denied value, so it is a "no" too.
-				if (covered._tag !== "Unknown") {
+				// An empty scope never passes, so the decider is not asked for it.
+				if (
+					covered._tag !== "Unknown" &&
+					!Policy.scopeIsEmpty(value, request)
+				) {
 					const deny: Condition.Ast = Policy.residuals(value, request).deny
 					const schema = Domain.descriptorOf(
 						value.domain,

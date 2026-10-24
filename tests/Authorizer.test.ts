@@ -330,6 +330,20 @@ describe("Authorizer", () => {
 				}),
 		)
 
+		it.effect("does not ask the decider about an empty scope", () =>
+			Effect.gen(function* () {
+				const { exit } = yield* run(
+					Auth.check({
+						action: "delegate",
+						kind: "Bot",
+						within: ($) => $.and($.eq("name", "a"), $.eq("name", "b")),
+					}),
+					{ decider: () => Effect.succeed(Decision.Allow({})) },
+				)
+				assert.strictEqual(failureTag(exit), "Forbidden")
+			}),
+		)
+
 		it.effect("stops a scope that is not plain data", () =>
 			Effect.gen(function* () {
 				const predicate = yield* run(

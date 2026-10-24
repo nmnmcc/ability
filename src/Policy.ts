@@ -1848,6 +1848,25 @@ const coverageAny = (policy: Any, request: ScopedRequest): AnyCoverage => {
 }
 
 /**
+ * Tests if the scope of a request has no value of the Schema of its kind. A
+ * scope with a mistake, such as two values for one field, is empty. With no
+ * scope, the answer is `false` when the kind has a value. When the search can
+ * not say, the answer is `false`.
+ *
+ * @stability stable
+ * @category evaluation
+ * @since 0.5.0
+ */
+export const scopeIsEmpty = (policy: Any, request: ScopedRequest): boolean => {
+	const scoped = scopedResiduals(policy, request)
+	return (
+		Condition.satisfiable(scoped.scope as Condition.Any, {
+			schema: scoped.schema,
+		})._tag === "Unsatisfiable"
+	)
+}
+
+/**
  * Tells how much of a scope the policy allows: all of it, none of it, or some
  * of it. See {@link Coverage}. With no scope (`within`), the scope is every
  * value of the kind.

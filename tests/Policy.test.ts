@@ -1300,6 +1300,77 @@ describe("Policy", () => {
 		assert.throws(() => Schema.decodeUnknownSync(Policy.schema(App))(json))
 	})
 
+	it("does not call a field of Schema.declare a field of objects", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: {
+				label: Schema.declare((u): u is string => typeof u === "string"),
+			},
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.rules(Notes, [
+			Rule.builder(Notes).allow("read", Note),
+			Rule.make({
+				_tag: "Deny",
+				actions: ["read"],
+				resources: ["Note"],
+				when: Condition.builder<
+					{ readonly label: string },
+					unknown,
+					unknown
+				>().eq("label", "secret"),
+			}),
+		])
+		const covered = Policy.coverage(policy, {
+			principal: alice,
+			action: "read",
+			kind: "Note",
+		})
+		assert.notStrictEqual(covered._tag, "All")
+	})
+
+	it("searches many values of one field without a deep stack", () => {
+		const ids = Array.from({ length: 4000 }, (_, index) => `b${String(index)}`)
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot, { when: ($) => $.in("id", ids) })
+			yield* _.deny("read", Bot, { when: ($) => $.in("id", ids) })
+		})
+		const covered = Policy.coverage(policy, {
+			principal: alice,
+			action: "read",
+			kind: "Bot",
+		})
+		assert.strictEqual(covered._tag, "None")
+	})
+
+	it("collects the constants of shared branches one time", () => {
+		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
+		const shared = Arr.reduce(
+			Arr.range(0, 24),
+			$.eq("id", "a") as Condition.Test<Bot>,
+			(inner) => $.or(inner, inner),
+		)
+		const start = Date.now()
+		assert.strictEqual(
+			Condition.satisfiable(shared, { budget: 0 })._tag,
+			"Unknown",
+		)
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
+	it("gives an example with an own field named __proto__", () => {
+		const $ = Condition.builder<
+			{ readonly __proto__: string | null },
+			unknown,
+			unknown
+		>()
+		const condition = $.exists("__proto__")
+		const answer = Condition.satisfiable(condition)
+		assert.strictEqual(answer._tag, "Satisfiable")
+		const value = answer._tag === "Satisfiable" ? answer.example : {}
+		assert.isTrue(Condition.evaluateSync(condition, { value }))
+	})
+
 	it("simplifies shared predicate branches in a short time", () => {
 		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
 		const shared = Arr.reduce(

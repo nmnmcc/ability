@@ -538,6 +538,17 @@ const domainOfType = (
 			return open.has(ast)
 				? anyDomain
 				: domainOfType(ast.thunk(), new Set([...open, ast]))
+		case "Declaration":
+			// A class, and a declaration of Effect such as `Schema.Date` or
+			// `Schema.ReadonlyMap`, holds a value with parts. Effect gives its own
+			// declarations a `representation` annotation. Another declaration,
+			// such as one from `Schema.declare`, may hold any value, so its
+			// domain is all values: a smaller domain could hide a value that a
+			// deny rule names.
+			return classStruct(ast) !== undefined ||
+				ast.annotations?.["representation"] !== undefined
+				? objectDomain
+				: anyDomain
 		default:
 			return objectDomain
 	}

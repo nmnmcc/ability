@@ -2093,30 +2093,37 @@ const searchAst = (
 	}
 	const field = nextField(current)
 	const cells = search.cells(field)
-	// The cells are tried in order, until one gives values.
-	const tryCell = (index: number, before: SearchState): Found => {
-		if (index === cells.length) {
-			return {
-				assignment: Option.none(),
-				state: { ...before, failed: HashSet.add(before.failed, id) },
+	// The cells are tried in order, until one gives values. A fold over the
+	// cells does no work after a found answer, and it does not grow the stack
+	// with the number of cells.
+	const result = Arr.reduce(
+		cells,
+		{ assignment: Option.none(), state } as Found,
+		(before, cell): Found => {
+			if (Option.isSome(before.assignment)) {
+				return before
 			}
-		}
-		const cell = cells[index]
-		const done = new Map<Ast, Ast>()
-		const fixed = fix(current, field, cell, done)
-		const steps = before.steps + done.size
-		if (steps > search.budget) {
-			throw new OutOfBudget()
-		}
-		const found = searchAst(fixed, search, { ...before, steps }, [
-			...assignment,
-			[field, cell],
-		])
-		return Option.isSome(found.assignment)
-			? found
-			: tryCell(index + 1, found.state)
-	}
-	return tryCell(0, state)
+			const done = new Map<Ast, Ast>()
+			const fixed = fix(current, field, cell, done)
+			const steps = before.state.steps + done.size
+			if (steps > search.budget) {
+				throw new OutOfBudget()
+			}
+			return searchAst(fixed, search, { ...before.state, steps }, [
+				...assignment,
+				[field, cell],
+			])
+		},
+	)
+	return Option.isSome(result.assignment)
+		? result
+		: {
+				assignment: Option.none(),
+				state: {
+					...result.state,
+					failed: HashSet.add(result.state.failed, id),
+				},
+			}
 }
 
 /**
@@ -2133,7 +2140,9 @@ const setPath = (
 	if (name === undefined) {
 		return root
 	}
-	const inner = root[name]
+	// Only an own field counts, as a condition reads it. An inherited one,
+	// such as `__proto__`, is not a field of the example.
+	const inner = Object.hasOwn(root, name) ? root[name] : undefined
 	if (rest.length === 0) {
 		return value === opaque && isObject(inner)
 			? root
@@ -2155,8 +2164,11 @@ const exampleOf = (
 		(root, [field, value]) => setPath(root, field.split("."), value),
 	)
 
-/** The constants that the tests of each field use. */
-type FieldConstants = HashMap.HashMap<string, ReadonlyArray<Scalar>>
+/**
+ * The constants that the tests of each field use. A set keeps each constant
+ * one time, so a shared node does not make the list grow for each path to it.
+ */
+type FieldConstants = HashMap.HashMap<string, HashSet.HashSet<Scalar>>
 
 const addConstants = (
 	left: FieldConstants,
@@ -2166,8 +2178,8 @@ const addConstants = (
 		HashMap.set(
 			all,
 			field,
-			Arr.appendAll(
-				Option.getOrElse(HashMap.get(all, field), Arr.empty),
+			HashSet.union(
+				Option.getOrElse(HashMap.get(all, field), HashSet.empty),
 				values,
 			),
 		),
@@ -2180,11 +2192,14 @@ const constantsOf = (
 	remember(memo, ast, (): FieldConstants => {
 		switch (ast._tag) {
 			case "Compare":
-				return HashMap.make([ast.field, [literalOf(ast.value)]])
+				return HashMap.make([ast.field, HashSet.make(literalOf(ast.value))])
 			case "In":
-				return HashMap.make([ast.field, Arr.map(ast.values, literalOf)])
+				return HashMap.make([
+					ast.field,
+					HashSet.fromIterable(Arr.map(ast.values, literalOf)),
+				])
 			case "Exists":
-				return HashMap.make([ast.field, Arr.empty<Scalar>()])
+				return HashMap.make([ast.field, HashSet.empty<Scalar>()])
 			case "Under":
 				throw new Error(
 					"Condition.satisfiable needs a condition with no Under nodes. Call Condition.partial first.",
@@ -2221,7 +2236,9 @@ const satisfiableAst = (
 					schema === undefined
 						? Resource.anyDomain
 						: Resource.domainOf(schema, field),
-					Option.getOrElse(HashMap.get(constants, field), Arr.empty),
+					Array.from(
+						Option.getOrElse(HashMap.get(constants, field), HashSet.empty),
+					),
 				)
 				MutableHashMap.set(cells, field, found)
 				return found
