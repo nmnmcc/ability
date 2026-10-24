@@ -495,6 +495,40 @@ const hasCheck = (
 			(check._tag === "FilterGroup" && hasCheck(check.checks, id)),
 	)
 
+/**
+ * The ids of the declarations of Effect that hold only values with parts.
+ * Effect puts the id in the `representation` annotation. A declaration that
+ * is not in this list may hold a scalar, as `Schema.Json` may.
+ */
+const objectDeclarations = HashSet.make(
+	"effect/schema/Date",
+	"effect/schema/URL",
+	"effect/schema/Uint8Array",
+	"effect/schema/Duration",
+	"effect/schema/DateTimeUtc",
+	"effect/schema/BigDecimal",
+	"effect/schema/Redacted",
+	"effect/schema/Cause",
+	"effect/schema/Chunk",
+	"effect/schema/HashMap",
+	"effect/schema/HashSet",
+	"effect/schema/ReadonlyMap",
+	"effect/schema/ReadonlySet",
+	"effect/schema/Option",
+	"effect/schema/Result",
+	"effect/schema/File",
+	"effect/schema/FormData",
+	"effect/schema/RegExp",
+)
+
+const declarationId = (ast: SchemaAST.Declaration): string | undefined => {
+	const representation: unknown = ast.annotations?.["representation"]
+	return hasProperty(representation, "id") &&
+		typeof representation.id === "string"
+		? representation.id
+		: undefined
+}
+
 /** The domain of the values of a Schema node. */
 const domainOfType = (
 	ast: SchemaAST.AST,
@@ -539,14 +573,12 @@ const domainOfType = (
 				? anyDomain
 				: domainOfType(ast.thunk(), new Set([...open, ast]))
 		case "Declaration":
-			// A class, and a declaration of Effect such as `Schema.Date` or
-			// `Schema.ReadonlyMap`, holds a value with parts. Effect gives its own
-			// declarations a `representation` annotation. Another declaration,
-			// such as one from `Schema.declare`, may hold any value, so its
-			// domain is all values: a smaller domain could hide a value that a
-			// deny rule names.
+			// A class, and a declaration of Effect in `objectDeclarations`, holds
+			// a value with parts. Another declaration may hold any value, as
+			// `Schema.Json` or one from `Schema.declare` may, so its domain is all
+			// values: a smaller domain could hide a value that a deny rule names.
 			return classStruct(ast) !== undefined ||
-				ast.annotations?.["representation"] !== undefined
+				HashSet.has(objectDeclarations, declarationId(ast))
 				? objectDomain
 				: anyDomain
 		default:

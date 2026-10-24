@@ -1329,6 +1329,33 @@ describe("Policy", () => {
 		assert.notStrictEqual(covered._tag, "All")
 	})
 
+	it("lets a JSON field hold a scalar in the search", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { label: Schema.Json },
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.rules(Notes, [
+			Rule.builder(Notes).allow("read", Note),
+			Rule.make({
+				_tag: "Deny",
+				actions: ["read"],
+				resources: ["Note"],
+				when: Condition.builder<
+					{ readonly label: string },
+					unknown,
+					unknown
+				>().eq("label", "secret"),
+			}),
+		])
+		const covered = Policy.coverage(policy, {
+			principal: alice,
+			action: "read",
+			kind: "Note",
+		})
+		assert.notStrictEqual(covered._tag, "All")
+	})
+
 	it("searches many values of one field without a deep stack", () => {
 		const ids = Array.from({ length: 4000 }, (_, index) => `b${String(index)}`)
 		const policy = Policy.define(App)(function* (_) {
