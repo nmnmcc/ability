@@ -2521,6 +2521,59 @@ describe("Policy", () => {
 		)
 	})
 
+	it("does not cover a kind when a rule reads a getter that a smaller condition leaves out", () => {
+		class Info extends Schema.Class<Info>("ThrowingInfo")({
+			id: Schema.String,
+		}) {
+			get allowed(): boolean {
+				throw new globalThis.Error("no")
+			}
+		}
+		const Note = Resource.make("GetterNote", {
+			actions: ["read"],
+			fields: { info: Info },
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.define(Notes)(function* (_) {
+			yield* _.allow("read", Note, {
+				when: ($) => $.or($.eq("info.allowed", true), Condition.always),
+			})
+		})
+		assert.strictEqual(
+			Policy.coverage(policy, {
+				principal: alice,
+				action: "read",
+				kind: "GetterNote",
+			})._tag,
+			"Unknown",
+		)
+	})
+
+	it("finds a key of a template whose parts split a pair of code units", () => {
+		const Emoji = Resource.make("Emoji", {
+			actions: ["read"],
+			fields: {
+				data: Schema.Record(
+					Schema.TemplateLiteral(["\ud83d", Schema.String]),
+					Schema.String,
+				),
+			},
+		})
+		const Emojis = Domain.make({ principal: Caller, resources: [Emoji] })
+		const decide = (pattern: string) =>
+			Policy.decideSync(
+				Policy.define(Emojis)(function* (_) {
+					yield* _.allow("read", Emoji, { fields: [pattern as never] })
+				}),
+				{
+					principal: alice,
+					action: "read",
+					resource: Emoji.make({ data: {} }),
+				},
+			)._tag
+		assert.strictEqual(decide("data.\u{1F600}"), "Allow")
+	})
+
 	it("does not take a condition with a node that is not known", () => {
 		assert.isFalse(Schema.is(Condition.schema)({ _tag: "Broken" }))
 		assert.isFalse(

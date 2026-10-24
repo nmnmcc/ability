@@ -2016,9 +2016,66 @@ type AnyCoverage = Data.TaggedEnum<{
 
 const coverages = Data.taggedEnum<AnyCoverage>()
 
+/**
+ * Tests if each rule that the request may use reads only plain fields (see
+ * `Resource.isPlainField`). It looks at the conditions before they are made
+ * smaller. A smaller condition may leave out a field, but a read of that
+ * field, such as a getter, may fail when `decide` runs. A shared node is
+ * visited one time.
+ */
+const readsOnlyPlain = (
+	node: Node,
+	target: PredicateContext,
+	schema: Schema.Top,
+	memo: Map<Node, boolean>,
+): boolean =>
+	remember(memo, node, () => {
+		switch (node._tag) {
+			case "Rules":
+				return Arr.every(
+					node.rules,
+					(value) =>
+						value.when === undefined ||
+						!Rule.matchesTarget(value, target) ||
+						Arr.every(Condition.fields(value.when as Ast), (field) =>
+							Resource.isPlainField(schema, field),
+						),
+				)
+			case "All":
+			case "Any":
+			case "FirstOf":
+				return Arr.every(node.policies, (child) =>
+					readsOnlyPlain(child, target, schema, memo),
+				)
+			case "Ceiling":
+				return (
+					readsOnlyPlain(node.cap, target, schema, memo) &&
+					readsOnlyPlain(node.policy, target, schema, memo)
+				)
+		}
+	})
+
 const coverageAny = (policy: Any, request: ScopedRequest): AnyCoverage => {
 	const scoped = scopedResiduals(policy, request)
 	const allowed = scoped.allow
+	const descriptor = Domain.descriptorOf(policy.domain, request.kind)
+	if (
+		descriptor !== undefined &&
+		!readsOnlyPlain(
+			nodeOf(policy),
+			{
+				action: request.action,
+				kind: request.kind,
+				field: request.field,
+				descriptor,
+				predicates: new Map(),
+			},
+			descriptor.schema,
+			new Map(),
+		)
+	) {
+		return coverages.Unknown({ condition: allowed, reason: "schema" })
+	}
 	const options = { schema: scoped.schema }
 	const some =
 		allowed._tag === "False"

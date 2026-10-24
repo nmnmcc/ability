@@ -356,7 +356,9 @@ other than finite and integer checks, on a path of required fields of plain
 structs. For another field, such as a class, a record, a union of structs, a
 date or a field of `Schema.declare`, a value may have data that the Schema does
 not show, so the answer is `Unknown`. A check on a kind then says no.
-`Resource.isPlainField` tells if a field is plain.
+`Resource.isPlainField` tells if a field is plain. This is true for each rule
+that the request may use, also for a test that a smaller condition leaves out: a
+read of a field that is not plain, such as a getter, may fail in a check.
 
 A "yes" also needs a value of the whole kind, so each required field of the kind
 must surely have values, also a field that the condition does not test. A

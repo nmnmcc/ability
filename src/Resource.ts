@@ -852,8 +852,12 @@ const templateTokens = (
 			return undefined
 		}
 		switch (part._tag) {
-			case "Literal":
-				return [charsOf(String(part.literal))]
+			case "Literal": {
+				const text = String(part.literal)
+				// A half of a pair of UTF-16 code units may join a half in the
+				// next part, and the tokens of each part can not show that.
+				return /[\uD800-\uDFFF]/.test(text) ? undefined : [charsOf(text)]
+			}
 			case "String":
 				return [[{ _tag: "Any" }]]
 			case "Number":
