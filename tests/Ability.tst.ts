@@ -217,6 +217,38 @@ describe("Policy", () => {
 		})
 	})
 
+	it("keeps the kind of a residual with the request first", () => {
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot, {
+				when: ($) => $.predicate("named", (bot) => bot.name !== ""),
+			})
+		})
+		const residual = Policy.residual({
+			principal: alice,
+			action: "read",
+			kind: "Bot",
+		})(policy)
+		expect(Condition.evaluate).type.not.toBeCallableWith(residual, {
+			value: aliceTrigger,
+		})
+		const fly = Policy.residual({
+			principal: alice,
+			action: "fly",
+			kind: "Bot",
+		})
+		expect(fly).type.not.toBeCallableWith(policy)
+	})
+
+	it("keeps the domain of the rules of a node", () => {
+		const Other = Domain.make({ principal: Caller, resources: [Bot] })
+		const node = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot)
+		}).node
+		if (node._tag === "Rules") {
+			expect(Policy.rules).type.not.toBeCallableWith(Other, node.rules)
+		}
+	})
+
 	it("keeps the kind of a residual", () => {
 		const policy = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot, {

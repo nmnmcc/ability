@@ -821,7 +821,23 @@ const testUnder = (prefix: ReadonlyArray<Operand>, input: Input): boolean => {
  * @category predicates
  * @since 0.4.0
  */
-export const hasPredicate: (condition: Ast) => boolean = nodes.$match({
+export const hasPredicate = (condition: Ast): boolean => {
+	const cached = predicateNodes.get(condition)
+	if (cached !== undefined) {
+		return cached
+	}
+	const result = hasPredicateOnce(condition)
+	predicateNodes.set(condition, result)
+	return result
+}
+
+// One node may be a child of many nodes. Each walk below keeps its work on a
+// node, so a condition with shared children takes time for its nodes, not
+// for its paths.
+
+const predicateNodes = new WeakMap<Ast, boolean>()
+
+const hasPredicateOnce: (condition: Ast) => boolean = nodes.$match({
 	Predicate: () => true,
 	And: (node) => node.conditions.some(hasPredicate),
 	Or: (node) => node.conditions.some(hasPredicate),
@@ -834,25 +850,43 @@ export const hasPredicate: (condition: Ast) => boolean = nodes.$match({
 	Under: () => false,
 })
 
-const provideAst = (ast: Ast, context: Context.Context<never>): Ast => {
+const provideAst = (
+	ast: Ast,
+	context: Context.Context<never>,
+	done: Map<Ast, Ast> = new Map(),
+): Ast => {
+	if (!hasPredicate(ast)) {
+		return ast
+	}
+	const cached = done.get(ast)
+	if (cached !== undefined) {
+		return cached
+	}
+	let result: Ast
 	switch (ast._tag) {
 		case "Predicate":
-			return makePredicate(ast.name, (value, principal) =>
+			result = makePredicate(ast.name, (value, principal) =>
 				Effect.provideContext(ast.run(value, principal), context),
 			)
+			break
 		case "And":
-			return makeAnd(
-				...ast.conditions.map((child) => provideAst(child, context)),
+			result = makeAnd(
+				...ast.conditions.map((child) => provideAst(child, context, done)),
 			)
+			break
 		case "Or":
-			return makeOr(
-				...ast.conditions.map((child) => provideAst(child, context)),
+			result = makeOr(
+				...ast.conditions.map((child) => provideAst(child, context, done)),
 			)
+			break
 		case "Not":
-			return makeNot(provideAst(ast.condition, context))
+			result = makeNot(provideAst(ast.condition, context, done))
+			break
 		default:
-			return ast
+			result = ast
 	}
+	done.set(ast, result)
+	return result
 }
 
 /**
@@ -873,7 +907,28 @@ export const provideContext: {
 	): Condition<E, never, O, I>
 } = dual(2, provideAst) as never
 
-const evaluateSyncAst = (ast: Ast, input: Input): boolean => {
+const evaluateSyncAst = (ast: Ast, input: Input): boolean =>
+	evaluateSyncNode(ast, input, new Map())
+
+const evaluateSyncNode = (
+	ast: Ast,
+	input: Input,
+	done: Map<Ast, boolean>,
+): boolean => {
+	const cached = done.get(ast)
+	if (cached !== undefined) {
+		return cached
+	}
+	const result = evaluateSyncOnce(ast, input, done)
+	done.set(ast, result)
+	return result
+}
+
+const evaluateSyncOnce = (
+	ast: Ast,
+	input: Input,
+	done: Map<Ast, boolean>,
+): boolean => {
 	switch (ast._tag) {
 		case "True":
 			return true
@@ -896,11 +951,15 @@ const evaluateSyncAst = (ast: Ast, input: Input): boolean => {
 		case "Under":
 			return testUnder(ast.prefix, input)
 		case "And":
-			return ast.conditions.every((child) => evaluateSyncAst(child, input))
+			return ast.conditions.every((child) =>
+				evaluateSyncNode(child, input, done),
+			)
 		case "Or":
-			return ast.conditions.some((child) => evaluateSyncAst(child, input))
+			return ast.conditions.some((child) =>
+				evaluateSyncNode(child, input, done),
+			)
 		case "Not":
-			return !evaluateSyncAst(ast.condition, input)
+			return !evaluateSyncNode(ast.condition, input, done)
 		case "Predicate":
 			// The types stop this. A predicate needs `evaluate`.
 			throw new globalThis.Error(
@@ -1073,14 +1132,16 @@ const shortCircuit = (
  * The nodes that are already simple. A residual condition is made of simple
  * parts, so the work on each part is done only one time.
  */
-const simple = new WeakSet<Ast>()
+const simple = new WeakMap<Ast, Ast>()
 
 const simplifyAst = (ast: Ast): Ast => {
-	if (simple.has(ast)) {
-		return ast
+	const cached = simple.get(ast)
+	if (cached !== undefined) {
+		return cached
 	}
 	const result = simplifyNode(ast)
-	simple.add(result)
+	simple.set(ast, result)
+	simple.set(result, result)
 	return result
 }
 
@@ -1207,6 +1268,22 @@ const bind = (
 	ast: Ast,
 	principal: unknown,
 	path: ReadonlyArray<Resource.PathSegment> | undefined,
+	done: Map<Ast, Ast> = new Map(),
+): Ast => {
+	const cached = done.get(ast)
+	if (cached !== undefined) {
+		return cached
+	}
+	const result = bindOnce(ast, principal, path, done)
+	done.set(ast, result)
+	return result
+}
+
+const bindOnce = (
+	ast: Ast,
+	principal: unknown,
+	path: ReadonlyArray<Resource.PathSegment> | undefined,
+	done: Map<Ast, Ast>,
 ): Ast => {
 	switch (ast._tag) {
 		case "Compare": {
@@ -1227,14 +1304,14 @@ const bind = (
 			return expandUnder(ast.prefix, principal, path)
 		case "And":
 			return makeAnd(
-				...ast.conditions.map((child) => bind(child, principal, path)),
+				...ast.conditions.map((child) => bind(child, principal, path, done)),
 			)
 		case "Or":
 			return makeOr(
-				...ast.conditions.map((child) => bind(child, principal, path)),
+				...ast.conditions.map((child) => bind(child, principal, path, done)),
 			)
 		case "Not":
-			return makeNot(bind(ast.condition, principal, path))
+			return makeNot(bind(ast.condition, principal, path, done))
 		case "Predicate":
 			return makePredicate(ast.name, (value) => ast.run(value, principal))
 		default:
@@ -1424,7 +1501,12 @@ export const fold: {
  */
 export const fields = (condition: Ast): ReadonlyArray<string> => {
 	const output = new Set<string>()
+	const seen = new Set<Ast>()
 	const visit = (node: Ast): void => {
+		if (seen.has(node)) {
+			return
+		}
+		seen.add(node)
 		switch (node._tag) {
 			case "Compare":
 			case "In":

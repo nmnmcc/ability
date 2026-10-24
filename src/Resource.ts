@@ -168,6 +168,24 @@ export interface Options<
 class ResourceDescriptor extends DataClass<Descriptor> {}
 
 /**
+ * Gives the struct of a `Schema.Class`. A class is a declaration with one
+ * struct as its type parameter, and it has an encoding, with one step or with
+ * more, as in `Schema.fromJsonString(User)`. Other declarations, such as
+ * `Schema.Option` or `Schema.ReadonlyMap`, have no encoding.
+ */
+const classStruct = (
+	ast: SchemaAST.Declaration,
+): SchemaAST.Objects | undefined => {
+	const [inner] = ast.typeParameters
+	return ast.encoding !== undefined &&
+		ast.encoding.length > 0 &&
+		ast.typeParameters.length === 1 &&
+		inner?._tag === "Objects"
+		? inner
+		: undefined
+}
+
+/**
  * Gives the structs inside a Schema, with the `Schema.suspend` nodes that are
  * open on the way to each one. It looks through optional keys, unions such as
  * `Schema.NullOr`, `Schema.suspend`, and `Schema.Class`. A suspend node that
@@ -187,15 +205,8 @@ const structsOf = (
 				? []
 				: structsOf(ast.thunk(), new Set([...open, ast]))
 		case "Declaration": {
-			// A `Schema.Class` is a declaration with one struct as its type
-			// parameter, and it is encoded as that struct. Other declarations,
-			// such as `Schema.Option` or `Schema.ReadonlyMap`, are not.
-			const [inner] = ast.typeParameters
-			return ast.encoding?.length === 1 &&
-				ast.typeParameters.length === 1 &&
-				inner?._tag === "Objects"
-				? structsOf(inner, open)
-				: []
+			const inner = classStruct(ast)
+			return inner === undefined ? [] : structsOf(inner, open)
 		}
 		default:
 			return []
@@ -350,13 +361,8 @@ const resolves = (
 				resolves(ast.thunk(), names, index, new Set([...open, ast]))
 			)
 		case "Declaration": {
-			const [inner] = ast.typeParameters
-			return (
-				ast.encoding?.length === 1 &&
-				ast.typeParameters.length === 1 &&
-				inner?._tag === "Objects" &&
-				resolves(inner, names, index, open)
-			)
+			const inner = classStruct(ast)
+			return inner !== undefined && resolves(inner, names, index, open)
 		}
 		default:
 			return false

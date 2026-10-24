@@ -123,8 +123,8 @@ export interface CeilingNode {
 export type Node = RulesNode | AllNode | AnyNode | FirstOfNode | CeilingNode
 
 /**
- * The tree of a policy with the types of its predicates. Each rule and each
- * child has the types too, and `"~Node"` is only in the types. A node made by
+ * The tree of a policy with the types of its predicates and its domain `D`.
+ * Each rule and each child has the types too, and `"~Node"` is only in the types. A node made by
  * hand does not have it. So the node of one policy, or a part of it, can not
  * go into a policy with other types.
  *
@@ -132,20 +132,20 @@ export type Node = RulesNode | AllNode | AnyNode | FirstOfNode | CeilingNode
  * @category models
  * @since 0.4.0
  */
-export type TypedNode<E = never, R = never, O = never> = (
+export type TypedNode<E = never, R = never, O = never, D = any> = (
 	| {
 			readonly _tag: "Rules"
 			readonly algorithm: Algorithm
-			readonly rules: ReadonlyArray<Rule.Rule<E, R, O, any, any>>
+			readonly rules: ReadonlyArray<Rule.Rule<E, R, O, D, any>>
 	  }
 	| {
 			readonly _tag: "All" | "Any" | "FirstOf"
-			readonly policies: ReadonlyArray<TypedNode<E, R, O>>
+			readonly policies: ReadonlyArray<TypedNode<E, R, O, D>>
 	  }
 	| {
 			readonly _tag: "Ceiling"
-			readonly cap: TypedNode<E, R, O>
-			readonly policy: TypedNode<E, R, O>
+			readonly cap: TypedNode<E, R, O, D>
+			readonly policy: TypedNode<E, R, O, D>
 	  }
 ) & {
 	readonly "~Node": Condition.Variance<E, R, O>
@@ -162,7 +162,7 @@ export type TypedNode<E = never, R = never, O = never> = (
 export interface Policy<D extends Domain.Any, E = never, R = never, O = never>
 	extends Pipeable.Pipeable {
 	readonly domain: D
-	readonly node: TypedNode<E, R, O>
+	readonly node: TypedNode<E, R, O, D>
 	readonly "~Policy"?: Condition.Variance<E, R, O>
 	/**
 	 * Only in the types. A policy reads the values and the principal of its
@@ -574,7 +574,30 @@ export const ceiling: {
 	),
 )
 
-const provideNode = (node: Node, context: Context.Context<never>): Node => {
+const provideNode = (
+	node: Node,
+	context: Context.Context<never>,
+	done: Map<Node, Node> = new Map(),
+): Node => {
+	// A node with no predicate needs no services, and it stays the same node.
+	// One node may be a child of many nodes, and it gives one new node.
+	if (!nodeHasPredicate(node)) {
+		return node
+	}
+	const cached = done.get(node)
+	if (cached !== undefined) {
+		return cached
+	}
+	const result = provideOnce(node, context, done)
+	done.set(node, result)
+	return result
+}
+
+const provideOnce = (
+	node: Node,
+	context: Context.Context<never>,
+	done: Map<Node, Node>,
+): Node => {
 	switch (node._tag) {
 		case "Rules":
 			return nodes.Rules({
@@ -592,12 +615,14 @@ const provideNode = (node: Node, context: Context.Context<never>): Node => {
 		case "Any":
 		case "FirstOf":
 			return nodes[node._tag]({
-				policies: node.policies.map((child) => provideNode(child, context)),
+				policies: node.policies.map((child) =>
+					provideNode(child, context, done),
+				),
 			})
 		case "Ceiling":
 			return nodes.Ceiling({
-				cap: provideNode(node.cap, context),
-				policy: provideNode(node.policy, context),
+				cap: provideNode(node.cap, context, done),
+				policy: provideNode(node.policy, context, done),
 			})
 	}
 }
@@ -1015,6 +1040,27 @@ export interface Residuals<E = never, R = never, O = never, I = unknown> {
 }
 
 /**
+ * A request about a kind of resource, with no types.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.4.0
+ */
+export interface AnyKindRequest {
+	readonly principal: object
+	readonly action: string
+	readonly kind: string
+	readonly field?: string | undefined
+}
+
+/**
+ * `unknown` when the request `Req` is a request of the type `T`, and `never`
+ * when it is not. With the request first and the policy later, the request is
+ * checked when the policy, and so the domain, is known.
+ */
+type Fits<Req, T> = Req extends T ? unknown : never
+
+/**
  * What a residual condition reads: a value of the kind `K`. The principal is
  * already in it.
  *
@@ -1369,13 +1415,10 @@ const residualsAny = (
  * @since 0.3.0
  */
 export const residual: {
-	<
-		D extends Domain.Any = never,
-		const Req extends KindRequest<D> = KindRequest<D>,
-	>(
+	<const Req extends AnyKindRequest>(
 		request: Req,
-	): <E, R, O>(
-		policy: Policy<D, E, R, O>,
+	): <D extends Domain.Any, E, R, O>(
+		policy: Policy<D, E, R, O> & Fits<Req, KindRequest<D>>,
 	) => Condition.Condition<E, R, O, ResidualReads<D, Req["kind"]>>
 	<D extends Domain.Any, E, R, O, const Req extends KindRequest<NoInfer<D>>>(
 		policy: Policy<D, E, R, O>,
@@ -1397,13 +1440,10 @@ export const residual: {
  * @since 0.4.0
  */
 export const residuals: {
-	<
-		D extends Domain.Any = never,
-		const Req extends KindRequest<D> = KindRequest<D>,
-	>(
+	<const Req extends AnyKindRequest>(
 		request: Req,
-	): <E, R, O>(
-		policy: Policy<D, E, R, O>,
+	): <D extends Domain.Any, E, R, O>(
+		policy: Policy<D, E, R, O> & Fits<Req, KindRequest<D>>,
 	) => Residuals<E, R, O, ResidualReads<D, Req["kind"]>>
 	<D extends Domain.Any, E, R, O, const Req extends KindRequest<NoInfer<D>>>(
 		policy: Policy<D, E, R, O>,
@@ -1505,7 +1545,13 @@ const principalRefs = (ast: Condition.Encoded | Ast): ReadonlyArray<string> => {
 	const visitOperand = (operand: Condition.Operand) => {
 		if (operand._tag === "Principal") output.push(operand.path)
 	}
+	const seen = new Set<Condition.Encoded | Ast>()
 	const visit = (node: Condition.Encoded | Ast): void => {
+		// One node may be a child of many nodes. It is visited one time.
+		if (seen.has(node)) {
+			return
+		}
+		seen.add(node)
 		switch (node._tag) {
 			case "Compare":
 				visitOperand(node.value)

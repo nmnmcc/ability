@@ -956,6 +956,57 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 1000)
 	})
 
+	it("does the work on a shared part of a condition only one time", () => {
+		let shared = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>().eq(
+			"level",
+			2,
+		)
+		for (let depth = 0; depth < 24; depth++) {
+			shared = Condition.and(shared, shared)
+		}
+		const condition = shared
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot, { when: () => condition })
+		})
+		const start = Date.now()
+		const residual = Policy.residual(policy, {
+			principal: alice,
+			action: "read",
+			kind: "Bot",
+		})
+		assert.isTrue(Condition.evaluateSync(residual, { value: aliceBot }))
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: aliceBot,
+			})._tag,
+			"Allow",
+		)
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
+	it("finds the fields of a class in a JSON string codec", () => {
+		class User extends Schema.Class<User>("User")({ id: Schema.String }) {}
+		const Json = Domain.make({
+			principal: Schema.fromJsonString(User),
+			resources: [Bot],
+		})
+		const policy = Policy.define(Json)(function* (_) {
+			yield* _.allow("read", Bot, {
+				when: ($) => $.eq("ownerUserId", $.principal("id")),
+			})
+		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: User.make({ id: "alice" }),
+				action: "read",
+				resource: aliceBot,
+			})._tag,
+			"Allow",
+		)
+	})
+
 	it("simplifies a long list of tests in a short time", () => {
 		const ids = Array.from({ length: 4000 }, (_, index) => `b${String(index)}`)
 		const policy = Policy.define(App)(function* (_) {

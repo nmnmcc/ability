@@ -772,4 +772,34 @@ describe("Authorizer", () => {
 			assert.strictEqual(failureTag(exit), "Forbidden")
 		}),
 	)
+
+	it.effect("keeps the shared children of a loaded policy", () =>
+		Effect.gen(function* () {
+			class Wide extends Authorizer.Service<Wide, { requires: Identity }>()(
+				"test/Wide",
+				App,
+			) {}
+			let policy: Policy.Policy<typeof App> = Policy.define(App)(function* (_) {
+				yield* _.allow("read", Bot)
+			})
+			for (let depth = 0; depth < 24; depth++) {
+				policy = Policy.all([policy, policy])
+			}
+			const layer = Authorizer.layer(Wide, {
+				principal: Identity,
+				policy: () => Effect.succeed(policy),
+			})
+			const start = Date.now()
+			const exit = yield* Wide.check({
+				action: "read",
+				resource: aliceBot,
+			}).pipe(
+				Effect.provideService(Identity, alice),
+				Effect.provide(layer),
+				Effect.exit,
+			)
+			assert.isTrue(Exit.isSuccess(exit))
+			assert.isBelow(Date.now() - start, 1000)
+		}),
+	)
 })
