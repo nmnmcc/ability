@@ -2413,6 +2413,23 @@ const isOrdered = (domain: Resource.FieldDomain): boolean =>
 	)
 
 /**
+ * Tests if two fields may hold values of one ordered type: two strings or two
+ * numbers. An ordered test of two values of other types is false.
+ */
+const orderedMeet = (
+	left: Resource.FieldDomain,
+	right: Resource.FieldDomain,
+): boolean => {
+	const strings = (domain: Resource.FieldDomain) =>
+		domain.string ||
+		Arr.some(domain.literals, (value) => typeof value === "string")
+	const numbers = (domain: Resource.FieldDomain) =>
+		domain.number !== "none" ||
+		Arr.some(domain.literals, (value) => typeof value === "number")
+	return (strings(left) && strings(right)) || (numbers(left) && numbers(right))
+}
+
+/**
  * Tests if two fields may hold one value: a value of one type, or a single
  * value that the other field may hold.
  */
@@ -2573,8 +2590,15 @@ const validate = (
 				Arr.filter(
 					value.when === undefined ? [] : underRefs(value.when),
 					([index, ref]) =>
+						// A rule for every resource may run on each of them that has a
+						// part of its path at this place.
 						Arr.some(
-							descriptors,
+							all
+								? Arr.filter(
+										known,
+										(descriptor) => descriptor.path?.[index] !== undefined,
+									)
+								: descriptors,
 							(descriptor) =>
 								!fitsPathPart(
 									descriptor,
@@ -2594,16 +2618,20 @@ const validate = (
 				Arr.filter(
 					value.when === undefined ? [] : orderedTests(value.when),
 					([field, operand]) =>
-						(operand._tag === "Literal"
-							? operand.type !== "string" && operand.type !== "number"
-							: !isOrdered(
-									Resource.domainOf(domain.principal, operand.path),
-								)) ||
-						Arr.some(
-							descriptors,
-							(descriptor) =>
-								!isOrdered(Resource.domainOf(descriptor.schema, field)),
-						),
+						(operand._tag === "Literal" &&
+							operand.type !== "string" &&
+							operand.type !== "number") ||
+						Arr.some(descriptors, (descriptor) => {
+							const fieldDomain = Resource.domainOf(descriptor.schema, field)
+							// A principal field must share an ordered type with the
+							// field: a string and a number never compare.
+							return operand._tag === "Literal"
+								? !isOrdered(fieldDomain)
+								: !orderedMeet(
+										fieldDomain,
+										Resource.domainOf(domain.principal, operand.path),
+									)
+						}),
 				),
 				([field]): Issue => ({
 					path: [...at, "when"],

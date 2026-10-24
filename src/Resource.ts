@@ -1107,6 +1107,19 @@ const checkPath = (
 		)
 	})
 
+/**
+ * Copies the options of a resource. The descriptor is made later, when it is
+ * first read, so a change to the objects of the caller before then must not
+ * change it: the Schema of the values and the descriptor must agree.
+ */
+const snapshot = (
+	options: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
+): Options<ReadonlyArray<string>, Schema.Struct.Fields> => ({
+	...options,
+	actions: [...options.actions],
+	fields: { ...options.fields },
+})
+
 const makeDescriptor = (
 	kind: string,
 	options: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
@@ -1207,8 +1220,9 @@ export const Class: <Self = never>(
 	: Class<Self, Kind, Actions, Fields> = ((identifier?: string) =>
 	(
 		kind: string,
-		options: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
+		input: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
 	) => {
+		const options = snapshot(input)
 		checkFields(kind, options)
 		const Base = Schema.TaggedClass<any>(identifier)(kind, options.fields)
 		const descriptor = lazy(() => makeDescriptor(kind, options))
@@ -1264,8 +1278,9 @@ export const make: <
 	options: Options<Actions, Fields>,
 ) => Struct<Kind, Actions, Fields> = ((
 	kind: string,
-	options: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
+	input: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
 ) => {
+	const options = snapshot(input)
 	checkFields(kind, options)
 	const schema = Schema.TaggedStruct(kind, options.fields)
 	const descriptor = lazy(() => makeDescriptor(kind, options))

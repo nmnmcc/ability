@@ -1843,6 +1843,62 @@ describe("Policy", () => {
 		)
 	})
 
+	it("needs one ordered type for an ordered test with a principal field", () => {
+		class Scored extends Principal.Class<Scored>("Scored")({
+			score: Schema.Union([Schema.Finite, Schema.Boolean]),
+		}) {}
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { label: Schema.Union([Schema.String, Schema.Boolean]) },
+		})
+		const Notes = Domain.make({ principal: Scored, resources: [Note] })
+		const exit = Schema.decodeExit(Policy.schema(Notes))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Deny",
+					actions: ["read"],
+					resources: ["Note"],
+					when: {
+						_tag: "Compare",
+						op: "gt",
+						field: "label",
+						value: { _tag: "Principal", path: "score" },
+					},
+				},
+			],
+		})
+		assert.isTrue(Exit.isFailure(exit))
+	})
+
+	it("keeps the fields of a resource as they were when it was made", () => {
+		const fields: Record<string, Schema.Top> = { blocked: Schema.Boolean }
+		const Note = Resource.make("Note", { actions: ["read"], fields })
+		fields["blocked"] = Schema.Literal(false)
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.rules(Notes, [
+			Rule.make({
+				_tag: "Allow",
+				actions: ["read"],
+				resources: ["Note"],
+				when: Condition.builder<
+					{ readonly blocked: boolean },
+					unknown,
+					unknown
+				>().eq("blocked", false) as Condition.Condition,
+			}),
+		])
+		assert.notStrictEqual(
+			Policy.coverage(policy, {
+				principal: alice,
+				action: "read",
+				kind: "Note",
+			})._tag,
+			"All",
+		)
+	})
+
 	it("does not take an ordered test on a value with no order", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],
@@ -1933,6 +1989,25 @@ describe("Policy", () => {
 			})
 		assert.isTrue(Exit.isFailure(decode("group")))
 		assert.isTrue(Exit.isSuccess(decode("group.name")))
+		const wildcard = Schema.decodeExit(Policy.schema(Members))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Deny",
+					actions: ["read"],
+					resources: ["*"],
+					when: {
+						_tag: "Under",
+						prefix: [
+							{ _tag: "Literal", value: "org" },
+							{ _tag: "Principal", path: "group" },
+						],
+					},
+				},
+			],
+		})
+		assert.isTrue(Exit.isFailure(wildcard))
 	})
 
 	it("does not take a test with a principal field that is an object", () => {
