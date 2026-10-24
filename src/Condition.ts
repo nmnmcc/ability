@@ -750,9 +750,13 @@ const compare =
 
 // A list of conditions goes in as an array, not as arguments: a call may take
 // only so many arguments, and a decoded condition may have more children.
-const andOf = (conditions: ReadonlyArray<Ast>): Ast => nodes.And({ conditions })
+// The list is copied, so a later change to the array of a caller does not
+// change the condition.
+const andOf = (conditions: ReadonlyArray<Ast>): Ast =>
+	nodes.And({ conditions: Arr.copy(conditions) })
 
-const orOf = (conditions: ReadonlyArray<Ast>): Ast => nodes.Or({ conditions })
+const orOf = (conditions: ReadonlyArray<Ast>): Ast =>
+	nodes.Or({ conditions: Arr.copy(conditions) })
 
 const makeAnd = (...conditions: ReadonlyArray<Ast>): Ast => andOf(conditions)
 
@@ -2427,6 +2431,11 @@ const satisfiableAst = (
 	if (schema !== undefined && Resource.hasNoValue(schema)) {
 		return satisfiability.Unsatisfiable()
 	}
+	// The search finds values for the fields that the condition tests. A value
+	// needs the other required fields too, and a check that the search can
+	// not see may stop every value of one of them. So a "yes" needs a Schema
+	// that surely has a value.
+	const complete = schema === undefined || Resource.hasValue(schema)
 	// The model of the values of a field is exact only for a plain scalar
 	// field. For another field, a value may have data that the Schema does not
 	// show, so the search can not say.
@@ -2482,7 +2491,9 @@ const satisfiableAst = (
 		return Option.match(found.assignment, {
 			onNone: () => satisfiability.Unsatisfiable(),
 			onSome: (assignment) =>
-				satisfiability.Satisfiable({ example: exampleOf(assignment) }),
+				complete
+					? satisfiability.Satisfiable({ example: exampleOf(assignment) })
+					: satisfiability.Unknown({ reason: "schema" }),
 		})
 	} catch (error) {
 		if (error instanceof OutOfBudget) {

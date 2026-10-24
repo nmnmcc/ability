@@ -1796,6 +1796,69 @@ describe("Policy", () => {
 		)
 	})
 
+	it("does not take a test that can never match by its types", () => {
+		class Person extends Principal.Class<Person>("Person")({
+			score: Schema.NullOr(Schema.Finite),
+		}) {}
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { label: Schema.NullOr(Schema.String), when: Schema.Date },
+		})
+		const Notes = Domain.make({ principal: Person, resources: [Note] })
+		const decode = (when: unknown) =>
+			Schema.decodeUnknownExit(Policy.schema(Notes))({
+				_tag: "Rules",
+				algorithm: "denyOverrides",
+				rules: [{ _tag: "Deny", actions: ["read"], resources: ["Note"], when }],
+			})
+		assert.isTrue(
+			Exit.isFailure(
+				decode({
+					_tag: "Compare",
+					op: "eq",
+					field: "label",
+					value: { _tag: "Principal", path: "score" },
+				}),
+			),
+		)
+		assert.isTrue(
+			Exit.isFailure(
+				decode({
+					_tag: "Compare",
+					op: "eq",
+					field: "when",
+					value: { _tag: "Literal", value: "2020-01-01T00:00:00.000Z" },
+				}),
+			),
+		)
+		assert.isTrue(
+			Exit.isSuccess(
+				decode({
+					_tag: "Compare",
+					op: "eq",
+					field: "label",
+					value: { _tag: "Literal", value: null },
+				}),
+			),
+		)
+	})
+
+	it("does not cover a kind whose values a check may stop", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: {
+				name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(0)),
+			},
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.define(Notes)(function* (_) {
+			yield* _.allow("read", Note)
+		})
+		const request = { principal: alice, action: "read", kind: "Note" } as const
+		assert.notStrictEqual(Policy.coverage(policy, request)._tag, "All")
+		assert.isFalse(Policy.scopeHasValue(policy, request))
+	})
+
 	it("makes the residual of a very wide condition", () => {
 		const policy = Schema.decodeUnknownSync(PolicySchemaOfApp)({
 			_tag: "Rules",

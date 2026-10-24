@@ -281,6 +281,17 @@ describe("Condition", () => {
 		assert.strictEqual(calls.true, 1)
 	})
 
+	it("copies the list of andAll and orAll", () => {
+		const parts: Array<Condition.Condition> = [
+			$.eq("ownerUserId", "alice") as Condition.Condition,
+		]
+		const both = Condition.andAll(parts)
+		const either = Condition.orAll(parts)
+		parts.length = 0
+		assert.isFalse(test(both, sharedBot))
+		assert.isTrue(test(either))
+	})
+
 	it("does not fill the stack with deep JSON", () => {
 		const deep = Array.from({ length: 5000 }).reduce<unknown>(
 			(condition) => ({ _tag: "Not", condition }),

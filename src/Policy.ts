@@ -2282,9 +2282,9 @@ const domainsMeet = (
 	left: Resource.FieldDomain,
 	right: Resource.FieldDomain,
 ): boolean =>
-	left.object ||
-	right.object ||
-	(left.null && right.null) ||
+	// A principal field that is `null` is a missing value, and a test with a
+	// missing value is false. So `null` is not a value that the two share.
+	(left.object && right.object) ||
 	(left.string && right.string) ||
 	(left.boolean && right.boolean) ||
 	(left.number !== "none" && right.number !== "none") ||
@@ -2300,7 +2300,6 @@ const fitsDomain = (
 	value: Condition.Scalar,
 ): boolean =>
 	value === null ||
-	domain.object ||
 	domain.literals.includes(value) ||
 	(typeof value === "string" && domain.string) ||
 	(typeof value === "boolean" && domain.boolean) ||

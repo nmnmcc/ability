@@ -607,6 +607,57 @@ const resolves = (
 }
 
 /**
+ * Tests if a Schema surely has a value: each required field, at each depth,
+ * has a type that has values, with no checks other than integer and finite
+ * checks on numbers. A check such as a minimum length may stop every value,
+ * and the library can not see that, so such a Schema gives `false`. So does a
+ * required field that holds the struct itself again.
+ *
+ * @stability stable
+ * @category predicates
+ * @since 0.5.0
+ */
+export const hasValue = (schema: Schema.Top): boolean =>
+	isSurelyInhabited(schema.ast, new Set())
+
+const isSurelyInhabited = (
+	ast: SchemaAST.AST,
+	open: ReadonlySet<SchemaAST.AST>,
+): boolean => {
+	if (
+		ast._tag === "Number"
+			? !hasOnlyKnownChecks(ast.checks)
+			: (ast.checks ?? []).length > 0
+	) {
+		return false
+	}
+	switch (ast._tag) {
+		case "Never":
+			return false
+		case "Objects":
+			return Arr.every(
+				ast.propertySignatures,
+				(property) =>
+					SchemaAST.isOptional(property.type) ||
+					isSurelyInhabited(property.type, open),
+			)
+		case "Union":
+			return Arr.some(ast.types, (type) => isSurelyInhabited(type, open))
+		case "Suspend":
+			return (
+				!open.has(ast) &&
+				isSurelyInhabited(ast.thunk(), new Set([...open, ast]))
+			)
+		case "Declaration": {
+			const inner = classStruct(ast)
+			return inner === undefined || isSurelyInhabited(inner, open)
+		}
+		default:
+			return true
+	}
+}
+
+/**
  * Tests if a Schema has no value at all: a required field of it, at some
  * depth, has no value, as `Schema.Never` has none. A required field that
  * holds the struct itself again, with no way to stop, has no finite value

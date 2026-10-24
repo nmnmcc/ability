@@ -352,6 +352,12 @@ date or a field of `Schema.declare`, a value may have data that the Schema does
 not show, so the answer is `Unknown`. A check on a kind then says no.
 `Resource.isPlainField` tells if a field is plain.
 
+A "yes" also needs a value of the whole kind, so each required field of the kind
+must surely have values, also a field that the condition does not test. A
+required field with a check other than finite and integer checks, such as a
+minimum length, may have no value, so then the answer is `Unknown` in place of
+`All` or `Some`. `Resource.hasValue` tells if a Schema surely has a value.
+
 "Some" means that some value of the Schema is allowed. It does not mean that
 such a value is in your database. To know that, run the condition as a query.
 
