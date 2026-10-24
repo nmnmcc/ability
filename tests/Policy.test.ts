@@ -459,6 +459,25 @@ describe("Policy", () => {
 			assert.isBelow(Date.now() - startHigh, 1000)
 		})
 
+		it("does not decode an input with keys that a loop does not see", () => {
+			const condition: Record<string, unknown> = { _tag: "Not" }
+			Object.defineProperty(condition, "condition", { value: condition })
+			const exit = Schema.decodeUnknownExit(Condition.schema)(condition)
+			assert.isTrue(Exit.isFailure(exit))
+			assert.notInclude(
+				String(Exit.isFailure(exit) ? exit.cause : ""),
+				"RangeError",
+			)
+			const policy: Record<string, unknown> = { _tag: "All" }
+			Object.defineProperty(policy, "policies", { value: [policy] })
+			const policyExit = Schema.decodeUnknownExit(PolicySchema)(policy)
+			assert.isTrue(Exit.isFailure(policyExit))
+			assert.notInclude(
+				String(Exit.isFailure(policyExit) ? policyExit.cause : ""),
+				"RangeError",
+			)
+		})
+
 		it("does not fill the stack with deep JSON", () => {
 			const one = Schema.encodeSync(PolicySchema)(
 				Policy.define(App)(function* (_) {
@@ -2546,6 +2565,15 @@ describe("Policy", () => {
 				kind: "GetterNote",
 			})._tag,
 			"Unknown",
+		)
+		assert.throws(
+			() =>
+				Policy.residual(policy, {
+					principal: alice,
+					action: "read",
+					kind: "GetterNote",
+				}),
+			/reads a getter/,
 		)
 	})
 

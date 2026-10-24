@@ -40,8 +40,8 @@ import * as Resource from "./Resource.ts"
  */
 export interface Rule<E = never, R = never, O = never, D = any, I = unknown>
 	extends Shape<E, R, O, I>, Pipeable.Pipeable {
-	readonly "~Rule"?: Condition.Variance<E, R, O>
-	readonly "~Domain"?: (domain: D) => D
+	readonly "~Rule": Condition.Variance<E, R, O>
+	readonly "~Domain": (domain: D) => D
 	[Symbol.iterator](): Generator<
 		Rule<E, R, O, D, I>,
 		Rule<E, R, O, D, I>,

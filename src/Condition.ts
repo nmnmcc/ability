@@ -2740,8 +2740,11 @@ const measure = (
 	// After the first child that is too high, the fold measures no more
 	// children. The walk has few frames for each level, so it does not fill
 	// the stack at the most levels.
+	// An input with a key that a loop over the keys does not see, or with a
+	// getter, may give the decoder more than the measure sees. Such an input
+	// is not plain data, so it fails.
 	const result =
-		levels === 0
+		levels === 0 || !isPlainData(input)
 			? undefined
 			: Arr.reduce(
 					Object.values(input),
@@ -2760,6 +2763,21 @@ const measure = (
 	memo.set(input, result ?? { failed: levels })
 	return result
 }
+
+/**
+ * Tests if each own key of an object is a plain data key that a loop over the
+ * keys sees. The `length` of an array is the one key that is not seen.
+ */
+const isPlainData = (input: object): boolean =>
+	Arr.every(Reflect.ownKeys(input), (key) => {
+		const property = Object.getOwnPropertyDescriptor(input, key)
+		return (
+			property !== undefined &&
+			"value" in property &&
+			(property.enumerable === true ||
+				(Array.isArray(input) && key === "length"))
+		)
+	})
 
 /** Tests if a value is low and small enough to decode. */
 const fitsLimits = (input: unknown): string | true => {

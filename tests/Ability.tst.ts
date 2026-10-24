@@ -172,6 +172,24 @@ describe("Policy", () => {
 		})
 	})
 
+	it("does not take a policy or a rule with no type fields", () => {
+		const named = Condition.builder<
+			Rule.DataFor<App, "Bot">,
+			Bot,
+			Caller
+		>().predicate("named", (bot) => bot.name.length > 0)
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot, { when: () => named })
+		})
+		const bare: Omit<typeof policy, "~Policy"> = policy
+		expect(Policy.all).type.not.toBeCallableWith([bare])
+		expect(Policy.all).type.toBeCallableWith([policy])
+		const rule = Rule.builder(App).allow("read", Bot, { when: () => named })
+		const bareRule: Omit<typeof rule, "~Rule"> = rule
+		expect(Policy.rules).type.not.toBeCallableWith(App, [bareRule])
+		expect(Policy.rules).type.toBeCallableWith(App, [rule])
+	})
+
 	it("keeps the domain of a policy", () => {
 		const Other = Domain.make({ principal: Caller, resources: [Bot] })
 		const other = Policy.empty(Other)

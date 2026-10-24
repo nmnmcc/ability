@@ -174,12 +174,12 @@ export interface Policy<D extends Domain.Any, E = never, R = never, O = never>
 	extends Pipeable.Pipeable {
 	readonly domain: D
 	readonly node: TypedNode<E, R, O, D>
-	readonly "~Policy"?: Condition.Variance<E, R, O>
+	readonly "~Policy": Condition.Variance<E, R, O>
 	/**
 	 * Only in the types. A policy reads the values and the principal of its
 	 * domain, so a policy of one domain is not a policy of a wider domain.
 	 */
-	readonly "~Domain"?: (domain: D) => D
+	readonly "~Domain": (domain: D) => D
 }
 
 /**
@@ -1847,6 +1847,21 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 		build,
 	}
 	if (!usesPredicate(nodeOf(policy), context)) {
+		// A read of a getter may fail when `decide` runs, and a smaller
+		// condition may leave the read out. So a plain residual can not agree
+		// with `decide`, and there is none.
+		if (
+			!readsOnly(
+				nodeOf(policy),
+				targetOf(request, descriptor),
+				(field) => Resource.hasPath(descriptor.schema, field),
+				new Map(),
+			)
+		) {
+			throw new globalThis.Error(
+				"A rule of this request reads a getter, so it has no residual condition",
+			)
+		}
 		try {
 			return inScope(residualNode(nodeOf(policy), context))
 		} catch (error) {
@@ -2016,17 +2031,28 @@ type AnyCoverage = Data.TaggedEnum<{
 
 const coverages = Data.taggedEnum<AnyCoverage>()
 
+/** The parts of a request that tell which rules it may use. */
+const targetOf = (
+	request: ScopedRequest,
+	descriptor: Resource.Descriptor,
+): PredicateContext => ({
+	action: request.action,
+	kind: request.kind,
+	field: request.field,
+	descriptor,
+	predicates: new Map(),
+})
+
 /**
- * Tests if each rule that the request may use reads only plain fields (see
- * `Resource.isPlainField`). It looks at the conditions before they are made
- * smaller. A smaller condition may leave out a field, but a read of that
- * field, such as a getter, may fail when `decide` runs. A shared node is
- * visited one time.
+ * Tests if each field that a rule that the request may use reads passes
+ * `test`. It looks at the conditions before they are made smaller. A smaller
+ * condition may leave out a field, but a read of that field, such as a
+ * getter, may fail when `decide` runs. A shared node is visited one time.
  */
-const readsOnlyPlain = (
+const readsOnly = (
 	node: Node,
 	target: PredicateContext,
-	schema: Schema.Top,
+	test: (field: string) => boolean,
 	memo: Map<Node, boolean>,
 ): boolean =>
 	remember(memo, node, () => {
@@ -2037,45 +2063,38 @@ const readsOnlyPlain = (
 					(value) =>
 						value.when === undefined ||
 						!Rule.matchesTarget(value, target) ||
-						Arr.every(Condition.fields(value.when as Ast), (field) =>
-							Resource.isPlainField(schema, field),
-						),
+						Arr.every(Condition.fields(value.when as Ast), test),
 				)
 			case "All":
 			case "Any":
 			case "FirstOf":
 				return Arr.every(node.policies, (child) =>
-					readsOnlyPlain(child, target, schema, memo),
+					readsOnly(child, target, test, memo),
 				)
 			case "Ceiling":
 				return (
-					readsOnlyPlain(node.cap, target, schema, memo) &&
-					readsOnlyPlain(node.policy, target, schema, memo)
+					readsOnly(node.cap, target, test, memo) &&
+					readsOnly(node.policy, target, test, memo)
 				)
 		}
 	})
 
 const coverageAny = (policy: Any, request: ScopedRequest): AnyCoverage => {
-	const scoped = scopedResiduals(policy, request)
-	const allowed = scoped.allow
 	const descriptor = Domain.descriptorOf(policy.domain, request.kind)
 	if (
 		descriptor !== undefined &&
-		!readsOnlyPlain(
+		!readsOnly(
 			nodeOf(policy),
-			{
-				action: request.action,
-				kind: request.kind,
-				field: request.field,
-				descriptor,
-				predicates: new Map(),
-			},
-			descriptor.schema,
+			targetOf(request, descriptor),
+			(field) => Resource.isPlainField(descriptor.schema, field),
 			new Map(),
 		)
 	) {
-		return coverages.Unknown({ condition: allowed, reason: "schema" })
+		return coverages.Unknown({ condition: never, reason: "schema" })
 	}
+	const scoped = scopedResiduals(policy, request)
+	const allowed = scoped.allow
+
 	const options = { schema: scoped.schema }
 	const some =
 		allowed._tag === "False"
@@ -2289,8 +2308,11 @@ const measure = (
 	// After the first child that is too high, the fold measures no more
 	// children. The walk has few frames for each level, so it does not fill
 	// the stack at the most levels.
+	// An input with a key that a loop over the keys does not see, or with a
+	// getter, may give the decoder more than the measure sees. Such an input
+	// is not plain data, so it fails.
 	const result =
-		levels === 0
+		levels === 0 || !isPlainData(input)
 			? undefined
 			: Arr.reduce(
 					Object.values(input),
@@ -2309,6 +2331,21 @@ const measure = (
 	memo.set(input, result ?? { failed: levels })
 	return result
 }
+
+/**
+ * Tests if each own key of an object is a plain data key that a loop over the
+ * keys sees. The `length` of an array is the one key that is not seen.
+ */
+const isPlainData = (input: object): boolean =>
+	Arr.every(Reflect.ownKeys(input), (key) => {
+		const property = Object.getOwnPropertyDescriptor(input, key)
+		return (
+			property !== undefined &&
+			"value" in property &&
+			(property.enumerable === true ||
+				(Array.isArray(input) && key === "length"))
+		)
+	})
 
 /** Tests if a value is low and small enough to decode. */
 const fitsLimits = (input: unknown): string | true => {

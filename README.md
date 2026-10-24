@@ -298,7 +298,9 @@ it gives the same answers and the same failures as `Policy.decide`.
 
 A deep policy tree may give a very large residual. When it would have more than
 10000 nodes, `Policy.residual` throws an error, and a check in an `Authorizer`
-fails.
+fails. It throws an error too when a rule that the request may use reads a
+getter of a class: the read may fail when the policy runs, and a smaller
+condition could leave it out.
 
 ### Scopes
 
