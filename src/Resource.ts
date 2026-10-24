@@ -483,7 +483,13 @@ const hasOnlyKnownChecks = (
 	)
 
 const isPlainScalar = (ast: SchemaAST.AST): boolean => {
-	if (!hasOnlyKnownChecks(ast.checks)) {
+	// `domainOf` reads the known checks only on a number node. A check on
+	// another node, such as on a union of literals, is a check it can not see.
+	if (
+		ast._tag === "Number"
+			? !hasOnlyKnownChecks(ast.checks)
+			: (ast.checks ?? []).length > 0
+	) {
 		return false
 	}
 	switch (ast._tag) {

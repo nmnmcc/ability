@@ -315,7 +315,7 @@ const ownPosts = {
 	action: "update",
 	kind: "Post",
 	within: ($) => $.eq("authorId", $.principal("id")),
-} as const
+} satisfies Policy.KindRequest<typeof Blog>
 
 Policy.coverage(policy, ownPosts)._tag // "All"
 Policy.residual(policy, ownPosts) // authorId = "u1"

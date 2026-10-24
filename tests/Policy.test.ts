@@ -2205,6 +2205,14 @@ describe("Policy", () => {
 		const schema = Resource.descriptor(Note).schema
 		assert.isFalse(Resource.isPlainField(schema, "ownerId"))
 		assert.isTrue(Resource.isPlainField(schema, "level"))
+		// A check on a union is a check that the search can not see.
+		const Count = Resource.make("Count", {
+			actions: ["read"],
+			fields: { count: Schema.Literals([1, 1.5]).check(Schema.isInt()) },
+		})
+		assert.isFalse(
+			Resource.isPlainField(Resource.descriptor(Count).schema, "count"),
+		)
 		const policy = Policy.define(Notes)(function* (_) {
 			yield* _.allow("read", Note)
 		})
