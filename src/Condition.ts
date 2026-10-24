@@ -220,10 +220,9 @@ export interface Not {
 export interface Predicate {
 	readonly _tag: "Predicate"
 	readonly name: string
-	readonly run: (
-		value: any,
-		principal: any,
-	) => Effect.Effect<boolean, unknown, unknown>
+	// A method, so the typed `run` of `PredicateCondition`, with inputs of the
+	// type `never`, is a `run` of this node too.
+	run(value: any, principal: any): Effect.Effect<boolean, unknown, unknown>
 }
 
 /**
@@ -330,7 +329,12 @@ export interface NotCondition<E, R, O, I> extends Marks<E, R, O, I> {
 export interface PredicateCondition<E, R, O, I> extends Marks<E, R, O, I> {
 	readonly _tag: "Predicate"
 	readonly name: string
-	readonly run: (value: any, principal: any) => Effect.Effect<boolean, E, R>
+	/**
+	 * The test. Its inputs have the type `never`, so it can not be called with
+	 * a value that it does not read. Use {@link evaluate}, which checks the
+	 * input against `I`.
+	 */
+	readonly run: (value: never, principal: never) => Effect.Effect<boolean, E, R>
 	readonly "~Predicate": O
 }
 

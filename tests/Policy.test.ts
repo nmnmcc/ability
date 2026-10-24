@@ -1431,6 +1431,14 @@ describe("Policy", () => {
 		)
 	})
 
+	it("does not take a rule from the builder of a domain with the same types", () => {
+		const First = Domain.make({ principal: Caller, resources: [Bot] })
+		const Second = Domain.make({ principal: Caller, resources: [Bot] })
+		const rule = Rule.builder(First).allow("read", Bot)
+		assert.throws(() => Policy.rules(Second, [rule]))
+		assert.doesNotThrow(() => Policy.rules(First, [rule]))
+	})
+
 	it("does not take a rule of another domain", () => {
 		const Small = Resource.make("Bot", {
 			actions: ["read"],

@@ -147,6 +147,33 @@ export type ActionFor<D, K> =
 			: Domain.ActionOf<D, Extract<K, string>>)
 
 /**
+ * The targets in the resource argument of a rule: the one target, or the
+ * targets of a list.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 0.4.0
+ */
+export type TargetOf<Res> = [Res] extends [ReadonlyArray<infer X>] ? X : Res
+
+/**
+ * The actions that a rule may use for its resource argument. A list of
+ * resources may use an action of any of them. One target with a union type
+ * may use only an action of every kind in the union, because its value may be
+ * any one of them.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 0.4.0
+ */
+export type ActionForTargets<D, Res> = [Res] extends [ReadonlyArray<infer X>]
+	? ActionFor<D, KindOf<X>>
+	: | "*"
+		| ("*" extends KindOf<Res>
+				? Domain.AnyAction<D>
+				: Domain.CommonAction<D, Extract<KindOf<Res>, string>>)
+
+/**
  * The data type of the kinds `K`. For `"*"` it has no fields.
  *
  * @stability stable
@@ -226,13 +253,14 @@ type SingleOrArray<A> = A | ReadonlyArray<A>
  */
 export interface Builder<D> {
 	readonly allow: <
-		const T extends Target<D>,
-		const A extends ActionFor<D, KindOf<T>>,
-		const C extends ConditionFor<D, KindOf<T>> = Condition.Condition,
+		const Res extends SingleOrArray<Target<D>>,
+		const A extends ActionForTargets<D, Res>,
+		const C extends ConditionFor<D, KindOf<TargetOf<Res>>> =
+			Condition.Condition,
 	>(
 		action: SingleOrArray<A>,
-		resource: SingleOrArray<T>,
-		options?: Options<D, KindOf<T>, C>,
+		resource: Res,
+		options?: Options<D, KindOf<TargetOf<Res>>, C>,
 	) => Rule<
 		Condition.Error<C>,
 		Condition.Services<C>,
@@ -241,13 +269,14 @@ export interface Builder<D> {
 		Condition.ReadsOf<C>
 	>
 	readonly deny: <
-		const T extends Target<D>,
-		const A extends ActionFor<D, KindOf<T>>,
-		const C extends ConditionFor<D, KindOf<T>> = Condition.Condition,
+		const Res extends SingleOrArray<Target<D>>,
+		const A extends ActionForTargets<D, Res>,
+		const C extends ConditionFor<D, KindOf<TargetOf<Res>>> =
+			Condition.Condition,
 	>(
 		action: SingleOrArray<A>,
-		resource: SingleOrArray<T>,
-		options?: Options<D, KindOf<T>, C>,
+		resource: Res,
+		options?: Options<D, KindOf<TargetOf<Res>>, C>,
 	) => Rule<
 		Condition.Error<C>,
 		Condition.Services<C>,
@@ -304,8 +333,25 @@ const kindName = (target: unknown): string =>
 		? Resource.descriptor(target).kind
 		: (target as string)
 
+/**
+ * The domain of each rule from a builder. Two domains may have the same
+ * types but other paths, so the types can not tell them apart. The rule
+ * data does not keep the domain, so equal rules stay equal.
+ */
+const origins = new WeakMap<Any, Domain.Any>()
+
+/**
+ * Gives the domain of the builder that made a rule. A rule from {@link make}
+ * or from JSON has none.
+ *
+ * @stability stable
+ * @category getters
+ * @since 0.4.0
+ */
+export const domainOf = (rule: Any): Domain.Any | undefined => origins.get(rule)
+
 const makeFromOptions =
-	(tag: "Allow" | "Deny") =>
+	(tag: "Allow" | "Deny", domain: Domain.Any) =>
 	(
 		action: string | ReadonlyArray<string>,
 		resource: unknown,
@@ -316,8 +362,8 @@ const makeFromOptions =
 			readonly id?: string
 			readonly meta?: unknown
 		},
-	): Any =>
-		make({
+	): Any => {
+		const rule = make({
 			_tag: tag,
 			actions: toArray(action),
 			resources: toArray(resource).map(kindName),
@@ -329,11 +375,11 @@ const makeFromOptions =
 			...(options?.id === undefined ? {} : { id: options.id }),
 			...(options?.meta === undefined ? {} : { meta: options.meta }),
 		})
+		origins.set(rule, domain)
+		return rule
+	}
 
-const sharedBuilder = {
-	allow: makeFromOptions("Allow"),
-	deny: makeFromOptions("Deny"),
-}
+const builders = new WeakMap<Domain.Any, Builder<any>>()
 
 /**
  * Makes a rule builder for a domain.
@@ -350,8 +396,18 @@ const sharedBuilder = {
  * @category constructors
  * @since 0.3.0
  */
-export const builder = <D extends Domain.Any>(_domain: D): Builder<D> =>
-	sharedBuilder as never
+export const builder = <D extends Domain.Any>(domain: D): Builder<D> => {
+	const cached = builders.get(domain)
+	if (cached !== undefined) {
+		return cached
+	}
+	const made = {
+		allow: makeFromOptions("Allow", domain),
+		deny: makeFromOptions("Deny", domain),
+	} as Builder<any>
+	builders.set(domain, made)
+	return made
+}
 
 /**
  * Tests if a value is a rule.

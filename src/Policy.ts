@@ -431,8 +431,18 @@ export const rules: <
 		algorithm: options?.algorithm ?? "denyOverrides",
 		rules: Array.from(values),
 	})
-	// A rule does not keep its domain in its type, so a rule of another domain
-	// can come here. Such a rule is a mistake in the code, so it is a defect.
+	// A rule from a builder of another domain is a mistake in the code, so it
+	// is a defect. Two domains may have the same types, so the types do not
+	// find it.
+	for (const value of node.rules) {
+		const origin = Rule.domainOf(value)
+		if (origin !== undefined && origin !== domain) {
+			throw new globalThis.Error(
+				"A rule comes from the builder of another domain",
+			)
+		}
+	}
+	// A rule from `Rule.make` keeps no domain, so its names are checked here.
 	const issues = validate(domain, encodeNode(node))
 	if (issues.length > 0) {
 		throw new globalThis.Error(

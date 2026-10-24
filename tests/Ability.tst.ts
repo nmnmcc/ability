@@ -164,6 +164,24 @@ describe("Policy", () => {
 		expect<Policy.Policy<App>>().type.not.toBeAssignableFrom(other)
 	})
 
+	it("takes only common actions for one target of a union type", () => {
+		const _ = Rule.builder(App)
+		const target = Bot as typeof Bot | typeof Trigger
+		expect(_.allow).type.toBeCallableWith("read", target)
+		expect(_.allow).type.not.toBeCallableWith("write", target)
+		expect(_.allow).type.toBeCallableWith("write", [Bot, Trigger])
+	})
+
+	it("does not let the test of a predicate node be called with any value", () => {
+		const named = Condition.builder<unknown, Bot, Caller>().predicate(
+			"named",
+			(bot) => bot.name.length > 0,
+		)
+		if (named._tag === "Predicate") {
+			expect(named.run).type.not.toBeCallableWith(aliceTrigger, alice)
+		}
+	})
+
 	it("keeps a predicate in rules of its own kind", () => {
 		const _ = Rule.builder(App)
 		const leveled = Condition.builder<
