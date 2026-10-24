@@ -281,6 +281,20 @@ describe("Condition", () => {
 		assert.strictEqual(calls.true, 1)
 	})
 
+	it("does not search a field with a very long path", () => {
+		const field = `${"x.".repeat(7000)}x`
+		const condition = Schema.decodeSync(Condition.schema)({
+			_tag: "Compare",
+			op: "eq",
+			field,
+			value: { _tag: "Literal", value: "yes" },
+		})
+		assert.strictEqual(
+			Condition.satisfiable(condition, { budget: 10 })._tag,
+			"Unknown",
+		)
+	})
+
 	it("copies the list of andAll and orAll", () => {
 		const parts: Array<Condition.Condition> = [
 			$.eq("ownerUserId", "alice") as Condition.Condition,

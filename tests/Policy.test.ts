@@ -2099,6 +2099,19 @@ describe("Policy", () => {
 		assert.isFalse(Policy.scopeHasValue(policy, request))
 	})
 
+	it("does not write out a shared tree that would be too large as JSON", () => {
+		const shared = Arr.reduce(
+			Arr.range(1, 24),
+			Policy.empty(App) as Policy.Policy<typeof App>,
+			(policy) => Policy.all([policy, policy]),
+		)
+		assert.throws(
+			() => Schema.encodeSync(PolicySchemaOfApp)(shared),
+			/more than 100000 nodes/,
+		)
+		assert.throws(() => JSON.stringify(shared), /more than 100000 nodes/)
+	})
+
 	it("makes the residual of a very wide condition", () => {
 		const policy = Schema.decodeUnknownSync(PolicySchemaOfApp)({
 			_tag: "Rules",

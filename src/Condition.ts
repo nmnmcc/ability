@@ -2429,6 +2429,12 @@ const constantsOf = (
  */
 const maxSearchFields = 256
 
+/**
+ * The most parts of a field path that the search of {@link satisfiable}
+ * takes. Past it, the answer is `Unknown` with the reason `"budget"`.
+ */
+const maxSearchParts = 256
+
 const satisfiableAst = (
 	ast: Ast,
 	options: SatisfiableOptions = {},
@@ -2456,9 +2462,16 @@ const satisfiableAst = (
 	) {
 		return satisfiability.Unknown({ reason: "schema" })
 	}
-	// The search calls itself one time for each field that it fixes, so a
-	// condition with very many fields could fill the stack.
-	if (tested.length > maxSearchFields) {
+	// The search calls itself one time for each field that it fixes, and it
+	// makes an example with a step for each part of a path. So a condition
+	// with very many fields, or a very long path, could fill the stack.
+	if (
+		tested.length > maxSearchFields ||
+		Arr.some(
+			tested,
+			(field) => field.split(".", maxSearchParts + 1).length > maxSearchParts,
+		)
+	) {
 		return satisfiability.Unknown({ reason: "budget" })
 	}
 	const constants = constantsOf(ast)
@@ -2536,7 +2549,7 @@ const satisfiableAst = (
  *
  * The problem is as hard as boolean satisfiability, so the search has a
  * budget. Past it, the answer is `Unknown`. A condition with more than 256
- * fields gives `Unknown` too.
+ * fields, or with a field path of more than 256 parts, gives `Unknown` too.
  *
  * @stability stable
  * @category evaluation

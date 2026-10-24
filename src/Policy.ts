@@ -52,6 +52,7 @@ import { hasProperty } from "effect/Predicate"
 import type * as Pipeable from "effect/Pipeable"
 import * as Ref from "effect/Ref"
 import * as Schema from "effect/Schema"
+import * as SchemaIssue from "effect/SchemaIssue"
 import * as SchemaTransformation from "effect/SchemaTransformation"
 import * as Condition from "./Condition.ts"
 import * as Decision from "./Decision.ts"
@@ -399,6 +400,42 @@ export interface Options {
 
 const nodes = Data.taggedEnum<Node>()
 
+/**
+ * The most nodes that the JSON form of a policy may have. A tree may use one
+ * child in many places, and the JSON form writes it out each time, so a small
+ * tree may have a very large JSON form.
+ */
+const maxEncodedNodes = 100_000
+
+/** The number of nodes of the JSON form of a tree. */
+const encodedSize = (node: Node, memo: Map<Node, number> = new Map()): number =>
+	remember(memo, node, () => {
+		switch (node._tag) {
+			case "Rules":
+				return 1 + node.rules.length
+			case "All":
+			case "Any":
+			case "FirstOf":
+				return Arr.reduce(
+					node.policies,
+					1,
+					(size, child) => size + encodedSize(child, memo),
+				)
+			case "Ceiling":
+				return 1 + encodedSize(node.cap, memo) + encodedSize(node.policy, memo)
+		}
+	})
+
+/** Gives the JSON form of a tree, when it is not too large. */
+const encodeTree = (node: Node): EncodedNode => {
+	if (encodedSize(node) > maxEncodedNodes) {
+		throw new globalThis.Error(tooLargeMessage)
+	}
+	return encodeNode(node)
+}
+
+const tooLargeMessage = `The JSON form of this policy would have more than ${String(maxEncodedNodes)} nodes`
+
 const encodeNode = (node: Node): EncodedNode => {
 	switch (node._tag) {
 		case "Rules":
@@ -467,7 +504,7 @@ class PolicyData extends Data.Class<{
 	readonly node: Node
 }> {
 	toJSON(): unknown {
-		return jsonNode(encodeNode(this.node), this.domain.meta)
+		return jsonNode(encodeTree(this.node), this.domain.meta)
 	}
 }
 
@@ -2812,10 +2849,20 @@ export const schema = <D extends Domain.Any>(
 				(u): u is Policy<D> =>
 					isPolicy(u) && u.domain === domain && !nodeHasPredicate(u.node),
 			),
-			SchemaTransformation.transform({
+			SchemaTransformation.transformEffect({
 				decode: (node: EncodedNode) =>
-					fromNode(domain, decodeNode(node, domain)),
-				encode: (policy: Policy<D>) => encodeNode(policy.node),
+					Effect.succeed(fromNode(domain, decodeNode(node, domain))),
+				// A tree whose JSON form is too large fails as a Schema issue.
+				encode: (policy: Policy<D>, options) =>
+					encodedSize(policy.node) > maxEncodedNodes
+						? Effect.fail(
+								new SchemaIssue.InvalidValue(
+									{ message: tooLargeMessage },
+									policy,
+									options,
+								),
+							)
+						: Effect.succeed(encodeNode(policy.node)),
 			}),
 		),
 	)
