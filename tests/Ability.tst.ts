@@ -281,6 +281,47 @@ describe("Policy", () => {
 		})
 	})
 
+	it("keeps the principal of a reference from another builder", () => {
+		class Numbered extends Schema.Class<Numbered>("Numbered")({
+			userId: Schema.Finite,
+			name: Schema.String,
+		}) {}
+		const Other = Domain.make({ principal: Numbered, resources: [Bot] })
+		const foreign = Condition.builder<unknown, unknown, Caller>().principal(
+			"userId",
+		)
+		expect(Rule.builder(Other).deny).type.not.toBeCallableWith("read", Bot, {
+			when: (
+				$: Condition.Builder<Rule.DataFor<typeof Other, "Bot">, Bot, Numbered>,
+			) => $.eq("ownerUserId", foreign),
+		})
+	})
+
+	it("checks each member of a union of inputs", () => {
+		const named = Condition.builder<unknown, Bot, Caller>().predicate(
+			"named",
+			(bot) => bot.name.length > 0,
+		)
+		const input = { value: aliceBot, principal: alice } as
+			| { readonly value: Bot; readonly principal: Caller }
+			| { readonly value: typeof aliceTrigger; readonly principal: Caller }
+		expect(Condition.evaluate(input)).type.not.toBeCallableWith(named)
+		const request = { principal: alice, action: "read", kind: "Bot" } as
+			| {
+					readonly principal: Caller
+					readonly action: "read"
+					readonly kind: "Bot"
+			  }
+			| {
+					readonly principal: Caller
+					readonly action: "fly"
+					readonly kind: "Bot"
+			  }
+		expect(Policy.residual(request)).type.not.toBeCallableWith(
+			Policy.empty(App),
+		)
+	})
+
 	it("keeps the domain of the rules of a node", () => {
 		const Other = Domain.make({ principal: Caller, resources: [Bot] })
 		const node = Policy.define(App)(function* (_) {

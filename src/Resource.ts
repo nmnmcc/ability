@@ -385,12 +385,20 @@ const makeDescriptor = (
 	}
 	const paths = new Set<string>()
 	const open = new Set<string>()
+	// In a union, one path may hold a scalar in one branch and a struct in
+	// another. Such a path holds more than one value, so it is open too.
+	const structs = new Set<string>()
 	walkFields(Schema.Struct(options.fields).ast, (path, leaf, type) => {
-		if (!leaf) return
+		if (!leaf) {
+			structs.add(path)
+			return
+		}
 		paths.add(path)
-		const shape = shapeOf(type)
-		if (shape !== "scalar") open.add(path)
+		if (shapeOf(type) !== "scalar") open.add(path)
 	})
+	for (const path of paths) {
+		if (structs.has(path)) open.add(path)
+	}
 	return new ResourceDescriptor({
 		kind,
 		actions: [...options.actions],

@@ -1078,9 +1078,10 @@ export interface AnyKindRequest {
 /**
  * `unknown` when the request `Req` is a request of the type `T`, and `never`
  * when it is not. With the request first and the policy later, the request is
- * checked when the policy, and so the domain, is known.
+ * checked when the policy, and so the domain, is known. For a union, each
+ * member must be such a request.
  */
-type Fits<Req, T> = Req extends T ? unknown : never
+type Fits<Req, T> = [Req] extends [T] ? unknown : never
 
 /**
  * What a residual condition reads: a value of the kind `K`. The principal is

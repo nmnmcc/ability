@@ -74,15 +74,20 @@ export interface PrincipalRef {
 }
 
 /**
- * A field of the principal with a known value type. `"~Ref"` is only in the
- * types. A reference with no type does not have it, so it can not stand for a
- * field of any type.
+ * A field of the principal with a known value type `A`, from a principal of
+ * the type `P`. The type fields are only in the types. A reference with no
+ * type does not have them, so it can not stand for a field of any type. A
+ * test with the reference reads a principal of the type `P`, so it can not go
+ * into a rule of a domain with another principal.
  *
  * @stability stable
  * @category models
  * @since 0.3.0
  */
-export type Ref<A> = PrincipalRef & { readonly "~Ref": () => A }
+export type Ref<A, P = any> = PrincipalRef & {
+	readonly "~Ref": () => A
+	readonly "~Principal": (principal: P) => void
+}
 
 /**
  * @stability stable
@@ -474,7 +479,7 @@ export type PathValue<
  * @category models
  * @since 0.3.0
  */
-export type OperandOf<A> = Extract<A, Scalar> | Ref<A>
+export type OperandOf<A> = Extract<A, Scalar> | Ref<A, any>
 
 type ScalarPath<T> = {
 	[F in FieldPath<T>]: PathValue<T, F> extends Scalar ? F : never
@@ -504,12 +509,17 @@ export type Test<Value, P = unknown> = Condition<
 >
 
 /**
- * The principal type that a test reads: `P` when one of the values `V` is a
- * field of the principal, and `unknown` when none is.
+ * The principal type that a test reads: the principal of each field of the
+ * principal in the values `V`, and `unknown` when there is none. A reference
+ * from another builder keeps the principal of that builder.
  */
-type PrincipalOf<V, P> = [Extract<V, PrincipalRef>] extends [never]
+type PrincipalOf<V, _P> = [Extract<V, PrincipalRef>] extends [never]
 	? unknown
-	: P
+	: [Extract<V, PrincipalRef>] extends [
+				{ readonly "~Principal": (principal: infer Q) => void },
+		  ]
+		? Q
+		: unknown
 
 /**
  * Makes conditions for a resource with the data type `Data` and the value type
@@ -576,7 +586,7 @@ export interface Builder<Data, Value, P> {
 	readonly exists: <const F extends FieldPath<Data>>(field: F) => Test<Value>
 	/** The path of the resource starts with these parts. */
 	readonly under: <
-		const Ps extends ReadonlyArray<string | null | Ref<string | null>>,
+		const Ps extends ReadonlyArray<string | null | Ref<string | null, any>>,
 	>(
 		...prefix: Ps
 	) => Test<Value, PrincipalOf<Ps[number], P>>
@@ -586,7 +596,7 @@ export interface Builder<Data, Value, P> {
 	 */
 	readonly principal: <const F extends ScalarPath<P>>(
 		field: F,
-	) => Ref<PathValue<P, F>>
+	) => Ref<PathValue<P, F>, P>
 	readonly and: <const Cs extends ReadonlyArray<Any>>(
 		...conditions: Cs
 	) => Condition<
@@ -1062,8 +1072,11 @@ type ReadsInput<I> =
 				: { readonly principal: P })
 		: unknown
 
-/** `unknown` when `In` gives what `I` reads, and `never` when it does not. */
-type ReadsFrom<I, In> = In extends ReadsInput<I> ? unknown : never
+/**
+ * `unknown` when `In` gives what `I` reads, and `never` when it does not. For
+ * a union, each member must give it, so the test is not split over the union.
+ */
+type ReadsFrom<I, In> = [In] extends [ReadsInput<I>] ? unknown : never
 
 /**
  * Tests a condition on a value. A predicate may fail with its error. When the
@@ -1385,7 +1398,7 @@ type PrincipalInput<I> =
 		: unknown
 
 /** `unknown` when `In` gives what `I` reads, and `never` when it does not. */
-type PrincipalFrom<I, In> = In extends PrincipalInput<I> ? unknown : never
+type PrincipalFrom<I, In> = [In] extends [PrincipalInput<I>] ? unknown : never
 
 /** What a condition reads after {@link partial}: the value, and no principal. */
 type Bound<I> = I extends Reads<infer V, infer _P> ? Reads<V, unknown> : I

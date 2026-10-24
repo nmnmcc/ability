@@ -1031,6 +1031,32 @@ describe("Policy", () => {
 		assert.strictEqual(Effect.runSync(decide)._tag, "NotApplicable")
 	})
 
+	it("leaves out a field that holds a struct in one branch of a union", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: {
+				data: Schema.Union([
+					Schema.Struct({ value: Schema.Null }),
+					Schema.Struct({ value: Schema.Struct({ secret: Schema.String }) }),
+				]),
+			},
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.define(Notes)(function* (_) {
+			yield* _.allow("read", Note)
+			yield* _.deny("read", Note, { fields: ["data.value.secret"] })
+		})
+		const fields = Effect.runSync(
+			Policy.permittedFields(policy, {
+				principal: alice,
+				action: "read",
+				resource: Note.make({ data: { value: { secret: "s" } } }),
+			}),
+		)
+		assert.notInclude(fields, "data.value")
+		assert.notInclude(fields, "data.value.secret")
+	})
+
 	it("does not let a rule for no fields cover a request", () => {
 		const policy = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot, { fields: [] })
