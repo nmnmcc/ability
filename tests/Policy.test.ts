@@ -2084,6 +2084,67 @@ describe("Policy", () => {
 		)
 	})
 
+	it("checks a path test only on kinds whose path may start with its strings", () => {
+		const Doc = Resource.make("Doc", {
+			actions: ["read"],
+			fields: { owner: Schema.String },
+			path: (f) => ["user", f.owner],
+		})
+		const Invoice = Resource.make("Invoice", {
+			actions: ["read"],
+			fields: { number: Schema.Int },
+			path: (f) => ["invoice", f.number],
+		})
+		class User extends Principal.Class<User>("InvoiceUser")({
+			id: Schema.String,
+		}) {}
+		const Docs = Domain.make({ principal: User, resources: [Doc, Invoice] })
+		const policy = Policy.define(Docs)(function* (_) {
+			yield* _.allow("read", "*", {
+				when: ($) => $.under("user", $.principal("id")),
+			})
+		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: User.make({ id: "a" }),
+				action: "read",
+				resource: Doc.make({ owner: "a" }),
+			})._tag,
+			"Allow",
+		)
+	})
+
+	it("explains a shared tree in a short time", () =>
+		Effect.gen(function* () {
+			const shared = Arr.reduce(
+				Arr.range(1, 30),
+				Policy.define(App)(function* (_) {
+					yield* _.allow("read", Bot)
+				}) as Policy.Policy<typeof App>,
+				(policy) => Policy.all([policy, policy]),
+			)
+			const start = Date.now()
+			const explained = yield* Policy.explain(shared, {
+				principal: alice,
+				action: "read",
+				resource: aliceBot,
+			})
+			assert.strictEqual(explained.decision._tag, "Allow")
+			assert.isBelow(Date.now() - start, 1000)
+		}).pipe(Effect.runSync))
+
+	it("does not encode a shared condition that would be too large as JSON", () => {
+		const shared = Arr.reduce(
+			Arr.range(1, 30),
+			Condition.always as Condition.Condition,
+			(condition) => Condition.and(condition, condition),
+		)
+		assert.throws(
+			() => Schema.encodeSync(Condition.schema)(shared),
+			/more than 100000 nodes/,
+		)
+	})
+
 	it("does not take a test with a principal field that is an object", () => {
 		class Timed extends Principal.Class<Timed>("Timed")({
 			until: Schema.Date,

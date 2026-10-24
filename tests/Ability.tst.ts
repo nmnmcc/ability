@@ -244,6 +244,49 @@ describe("Policy", () => {
 		})
 	})
 
+	it("encodes a plain condition from a builder and a residual", () => {
+		const $ = Condition.builder<
+			{ readonly id: string },
+			{ readonly id: string },
+			{}
+		>()
+		expect(Schema.encodeSync(Condition.schema)).type.toBeCallableWith(
+			$.eq("id", "i"),
+		)
+		const residual = Policy.residual(Policy.empty(App), {
+			principal: alice,
+			action: "read",
+			kind: "Bot",
+		})
+		expect(Schema.encodeSync(Condition.schema)).type.toBeCallableWith(residual)
+		expect(Schema.encodeSync(Condition.schema)).type.not.toBeCallableWith(
+			$.predicate("p", () => true),
+		)
+	})
+
+	it("does not take the test of a predicate that reads other values", () => {
+		const _ = Rule.builder(App)
+		const named = Condition.builder<
+			Rule.DataFor<App, "Bot">,
+			Bot,
+			Caller
+		>().predicate("named", (bot) => bot.name.length > 0)
+		const enabled = Condition.builder<
+			Rule.DataFor<App, "Trigger">,
+			typeof aliceTrigger,
+			Caller
+		>().predicate("enabled", (trigger) => trigger.enabled)
+		if (named._tag === "Predicate" && enabled._tag === "Predicate") {
+			const swapped = { ...named, run: enabled.run }
+			expect(_.allow).type.not.toBeCallableWith("read", Bot, {
+				when: () => swapped,
+			})
+			expect(_.allow).type.toBeCallableWith("read", Bot, {
+				when: () => named,
+			})
+		}
+	})
+
 	it("keeps what the condition of a rule reads", () => {
 		const _ = Rule.builder(App)
 		const rule = _.allow("read", Bot, {

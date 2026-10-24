@@ -43,6 +43,7 @@ import * as HashSet from "effect/HashSet"
 import * as MutableHashMap from "effect/MutableHashMap"
 import { hasProperty, isObject } from "effect/Predicate"
 import * as Schema from "effect/Schema"
+import * as SchemaIssue from "effect/SchemaIssue"
 import * as SchemaTransformation from "effect/SchemaTransformation"
 import * as Resource from "./Resource.ts"
 
@@ -346,8 +347,24 @@ export interface PredicateCondition<E, R, O, I> extends Marks<E, R, O, I> {
 	 * a value that it does not read. Use {@link evaluate}, which checks the
 	 * input against `I`.
 	 */
-	readonly run: (value: never, principal: never) => Effect.Effect<boolean, E, R>
+	readonly run: PredicateRun<E, R, I>
 	readonly "~Predicate": O
+}
+
+/**
+ * The test of a predicate node. The type field `"~Reads"` is only in the
+ * types. It ties the test to what it reads, so the test of one predicate can
+ * not go into a node that says it reads other values.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.5.0
+ */
+export type PredicateRun<E, R, I> = ((
+	value: never,
+	principal: never,
+) => Effect.Effect<boolean, E, R>) & {
+	readonly "~Reads"?: (reads: I) => void
 }
 
 /**
@@ -2658,7 +2675,23 @@ const OperandSchema = Schema.Union([
 	Schema.TaggedStruct("Principal", { path: Schema.String }),
 ])
 
-const Recursive = Schema.suspend((): Schema.Codec<Condition, Encoded> => shape)
+/**
+ * A condition with no predicate, that may read any values. It is the type of
+ * {@link schema}: a decoded condition reads nothing, so it fits any rule, and
+ * any plain condition, such as one from a builder or a residual, may be
+ * encoded.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.5.0
+ */
+// `any` for what it reads: the field is contravariant, so no other type both
+// takes every condition and fits every rule.
+export type PlainCondition = Condition<never, never, never, any>
+
+const Recursive = Schema.suspend(
+	(): Schema.Codec<PlainCondition, Encoded> => shape,
+)
 
 /**
  * The most levels of objects and arrays in the JSON form of a condition. The
@@ -2678,7 +2711,7 @@ const nestedWithin = (input: unknown, levels: number): boolean =>
 		Arr.every(Object.values(input), (child) => nestedWithin(child, levels - 1)))
 
 /** The shape of a condition, with no check of its depth. */
-const shape: Schema.Codec<Condition, Encoded> = Schema.Union([
+const shape: Schema.Codec<PlainCondition, Encoded> = Schema.Union([
 	Schema.TaggedStruct("True", {}),
 	Schema.TaggedStruct("False", {}),
 	Schema.TaggedStruct("Compare", {
@@ -2705,7 +2738,7 @@ const shape: Schema.Codec<Condition, Encoded> = Schema.Union([
  * @category schemas
  * @since 0.3.0
  */
-export const schema: Schema.Codec<Condition, Encoded> =
+export const schema: Schema.Codec<PlainCondition, Encoded> =
 	// The input is any value until the checks of `shape` run, so this guard
 	// says yes to every object.
 	Schema.declare(
@@ -2719,4 +2752,52 @@ export const schema: Schema.Codec<Condition, Encoded> =
 			),
 		),
 		Schema.decodeTo(shape, SchemaTransformation.passthrough()),
+		// A condition may use one child in many places, and its JSON form
+		// writes it out each time. An encode runs this step first, so a small
+		// condition with a very large JSON form fails before it is written out.
+		Schema.decodeTo(
+			Schema.declare(
+				(input): input is PlainCondition =>
+					hasProperty(input, "_tag") && typeof input._tag === "string",
+			),
+			SchemaTransformation.transformEffect({
+				decode: (condition: PlainCondition) => Effect.succeed(condition),
+				encode: (condition: PlainCondition, options) =>
+					jsonSize(condition as Ast, new Map()) > maxJsonNodes
+						? Effect.fail(
+								new SchemaIssue.InvalidValue(
+									{
+										message: `The JSON form of this condition would have more than ${String(maxJsonNodes)} nodes`,
+									},
+									condition,
+									options,
+								),
+							)
+						: Effect.succeed(condition),
+			}),
+		),
 	)
+
+/** The most nodes of the JSON form of a condition. */
+const maxJsonNodes = 100_000
+
+/**
+ * The number of nodes of the JSON form of a condition. A shared child counts
+ * one time for each place.
+ */
+const jsonSize = (ast: Ast, memo: Map<Ast, number>): number =>
+	remember(memo, ast, () => {
+		switch (ast._tag) {
+			case "And":
+			case "Or":
+				return Arr.reduce(
+					ast.conditions,
+					1,
+					(size, child) => size + jsonSize(child, memo),
+				)
+			case "Not":
+				return 1 + jsonSize(ast.condition, memo)
+			default:
+				return 1
+		}
+	})

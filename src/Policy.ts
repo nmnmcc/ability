@@ -988,10 +988,11 @@ const decideNode = (
 	context: DecideContext,
 	path: ReadonlyArray<number>,
 ): Effect.Effect<Decision.Decision, unknown, unknown> => {
-	// A predicate that the request may use must run each time, and a trace
-	// must have each step. A predicate of a rule for another action, kind or
-	// field never runs, so the decision may be kept.
-	if (context.trace !== undefined || usesPredicate(node, context)) {
+	// A predicate that the request may use must run each time. A predicate of
+	// a rule for another action, kind or field never runs, so the decision may
+	// be kept. A trace keeps the steps of a node only the first time, so a
+	// shared tree does not give a step for each path to a node.
+	if (usesPredicate(node, context)) {
 		return decideOnce(node, context, path)
 	}
 	const cached = context.decisions.get(node)
@@ -1230,6 +1231,11 @@ export const decideSync: {
 
 /**
  * Gives the decision of a policy and the rules that were tested to make it.
+ *
+ * One node may be a child of many nodes. A node with no predicate that the
+ * request may use gives the same decision each time, so its rules are tested,
+ * and are in the steps, only the first time. So a small tree with many shared
+ * nodes gives a short list of steps.
  *
  * @stability stable
  * @category evaluation
@@ -2426,14 +2432,22 @@ const underRefsIn = (
 ): HashSet.HashSet<string> =>
 	remember(memo, node, () => {
 		switch (node._tag) {
-			case "Under":
+			case "Under": {
+				// The fixed strings of the prefix, so the check can leave out a
+				// resource whose path can not match them.
+				const strings = Arr.map(node.prefix, (operand) =>
+					operand._tag === "Literal" && typeof operand.value === "string"
+						? operand.value
+						: null,
+				)
 				return HashSet.fromIterable(
 					Arr.flatMap(node.prefix, (operand, index) =>
 						operand._tag === "Principal"
-							? [JSON.stringify([index, operand.path])]
+							? [JSON.stringify([index, operand.path, strings.slice(0, index)])]
 							: [],
 					),
 				)
+			}
 			case "And":
 			case "Or":
 				return Arr.reduce(
@@ -2448,13 +2462,35 @@ const underRefsIn = (
 		}
 	})
 
-const underRefs = (
-	node: ConditionNode,
-): ReadonlyArray<readonly [index: number, ref: string]> =>
+/**
+ * A principal field in a path test: its place in the prefix, its path, and
+ * the fixed strings of the prefix before it, or `null` for another part.
+ */
+type UnderRef = readonly [
+	index: number,
+	ref: string,
+	strings: ReadonlyArray<string | null>,
+]
+
+const underRefs = (node: ConditionNode): ReadonlyArray<UnderRef> =>
 	Arr.map(
 		Array.from(underRefsIn(node, new Map())),
-		(text) => JSON.parse(text) as readonly [index: number, ref: string],
+		(text) => JSON.parse(text) as UnderRef,
 	)
+
+/**
+ * Tests if the path of a resource may start with the fixed strings of a
+ * prefix. A string of the path that is not the string of the prefix at its
+ * place never matches.
+ */
+const mayStartWith = (
+	descriptor: Resource.Descriptor,
+	strings: ReadonlyArray<string | null>,
+): boolean =>
+	Arr.every(strings, (string, index) => {
+		const segment = descriptor.path?.[index]
+		return string === null || typeof segment !== "string" || segment === string
+	})
 
 /**
  * Tests if a principal field may hold the part of a path at `index`: a string
@@ -2741,22 +2777,27 @@ const validate = (
 			...Arr.map(
 				Arr.filter(
 					value.when === undefined ? [] : underRefs(value.when),
-					([index, ref]) =>
+					([index, ref, strings]) =>
 						// A rule for every resource may run on each of them that has a
 						// part of its path at this place.
 						Arr.some(
-							// The rule runs only on a kind with one of its actions.
-							all
-								? Arr.filter(
-										known,
-										(descriptor) =>
-											descriptor.path?.[index] !== undefined &&
-											(value.actions.includes("*") ||
-												Arr.some(value.actions, (action) =>
-													descriptor.actions.includes(action),
-												)),
-									)
-								: applicable,
+							// The rule runs only on a kind with one of its actions, and
+							// the test can match only a path that starts with the fixed
+							// strings of the prefix.
+							Arr.filter(
+								all
+									? Arr.filter(
+											known,
+											(descriptor) =>
+												descriptor.path?.[index] !== undefined &&
+												(value.actions.includes("*") ||
+													Arr.some(value.actions, (action) =>
+														descriptor.actions.includes(action),
+													)),
+										)
+									: applicable,
+								(descriptor) => mayStartWith(descriptor, strings),
+							),
 							(descriptor) =>
 								!fitsPathPart(
 									descriptor,
