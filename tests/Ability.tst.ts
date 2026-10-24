@@ -151,6 +151,12 @@ describe("Policy", () => {
 		})
 	})
 
+	it("keeps the domain of a policy", () => {
+		const Other = Domain.make({ principal: Caller, resources: [Bot] })
+		const other = Policy.empty(Other)
+		expect<Policy.Policy<App>>().type.not.toBeAssignableFrom(other)
+	})
+
 	it("takes only principal fields with a scalar type", () => {
 		const $ = Condition.builder<
 			{ readonly owner: string },
@@ -308,6 +314,16 @@ describe("Authorizer", () => {
 			action: "write",
 			resource: aliceBot,
 		})
+	})
+
+	it("takes a value or a kind, not both", () => {
+		// A variable, so the check of extra keys of a literal does not run.
+		const target = {
+			action: "write",
+			kind: "Trigger",
+			resource: aliceBot,
+		} as const
+		expect(Auth.check).type.not.toBeCallableWith(target)
 	})
 
 	it("keeps a loaded policy opaque", () => {

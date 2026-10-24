@@ -454,6 +454,8 @@ const keyText = (value: unknown, seen: Set<object>): string | undefined => {
 	// may have no own keys, and the elements of an array are its own keys. An
 	// extra own key is data that the text does not show.
 	const own = Reflect.ownKeys(value)
+	// The entries of a map or a set keep their order, because a loader may read
+	// the first one.
 	if (prototype === Date.prototype && own.length === 0) {
 		text = `d${String((value as Date).getTime())}`
 	} else if (prototype === URL.prototype && own.length === 0) {
@@ -469,11 +471,10 @@ const keyText = (value: unknown, seen: Set<object>): string | undefined => {
 		const entries = all(
 			Array.from(value as Map<unknown, unknown>, ([key, item]) => [key, item]),
 		)
-		text =
-			entries === undefined ? undefined : `Map{${entries.sort().join(",")}}`
+		text = entries === undefined ? undefined : `Map{${entries.join(",")}}`
 	} else if (prototype === Set.prototype && own.length === 0) {
 		const items = all(value as Set<unknown>)
-		text = items === undefined ? undefined : `Set{${items.sort().join(",")}}`
+		text = items === undefined ? undefined : `Set{${items.join(",")}}`
 	} else if (
 		(prototype === null ||
 			prototype === Object.prototype ||
@@ -538,9 +539,19 @@ const makeLayer = (
 
 			// The predicates of the policy get the services of the layer, so the
 			// policy and its residual conditions need no services.
+			// A policy of another domain may have the same types, but its resources
+			// may have other paths. So it fails closed, as a policy that can not be
+			// loaded.
 			const load = (principal: object) =>
 				options.policy(principal).pipe(
 					Effect.provideContext(services),
+					Effect.filterOrFail(
+						(value) => value.domain === domain,
+						() =>
+							new globalThis.Error(
+								"The loaded policy is not a policy of this domain",
+							),
+					),
 					Effect.mapError((cause) => PolicyUnavailable.make({ cause })),
 					Effect.map((value) =>
 						Policy.provideContext(value, services as never),

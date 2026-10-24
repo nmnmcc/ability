@@ -67,11 +67,6 @@ export interface Descriptor {
 	 * in `fieldPaths`, but a rule may name them.
 	 */
 	readonly openPaths: ReadonlyArray<string>
-	/**
-	 * The paths in {@link openPaths} of records. A rule may name a key of a
-	 * record, such as `settings.mode` for a record `settings`.
-	 */
-	readonly recordPaths: ReadonlyArray<string>
 	/** The Schema of the values, with the `_tag` field. */
 	readonly schema: Schema.Top
 }
@@ -308,19 +303,61 @@ export const fieldPaths = (schema: Schema.Top): ReadonlyArray<string> => {
 }
 
 /**
- * Gives the paths of the fields of a Schema that are records. A path may go
- * on into a key of such a field. See {@link fieldPaths}.
+ * Tests if a path names a field of a Schema that holds a value with no named
+ * fields: a scalar, or a value such as a record or an array. It goes into
+ * records by their keys, and into recursive Schemas as far as the path goes.
+ * So it finds paths that {@link fieldPaths} does not list.
  *
  * @stability stable
- * @category getters
+ * @category predicates
  * @since 0.4.0
  */
-export const recordPaths = (schema: Schema.Top): ReadonlyArray<string> => {
-	const output = new Set<string>()
-	walkFields(schema.ast, (path, leaf, type) => {
-		if (leaf && shapeOf(type) === "record") output.add(path)
-	})
-	return Array.from(output)
+export const hasPath = (schema: Schema.Top, path: string): boolean =>
+	resolves(schema.ast, path.split("."), 0, new Set())
+
+const resolves = (
+	ast: SchemaAST.AST,
+	names: ReadonlyArray<string>,
+	index: number,
+	open: ReadonlySet<SchemaAST.AST>,
+): boolean => {
+	if (index === names.length) {
+		return index > 0 && structsOf(ast, new Set()).length === 0
+	}
+	const name = names[index]!
+	switch (ast._tag) {
+		case "Objects": {
+			const property = ast.propertySignatures.find(
+				(signature) => signature.name === name,
+			)
+			if (property !== undefined) {
+				return resolves(property.type, names, index + 1, new Set())
+			}
+			return ast.indexSignatures.some((signature) =>
+				resolves(signature.type, names, index + 1, new Set()),
+			)
+		}
+		case "Union":
+			return ast.types.some((type) => resolves(type, names, index, open))
+		case "Suspend":
+			// A suspend node that gives itself again, with no step on the path,
+			// has no end.
+			return (
+				!open.has(ast) &&
+				resolves(ast.thunk(), names, index, new Set([...open, ast]))
+			)
+		case "Declaration": {
+			const [inner] = ast.typeParameters
+			return (
+				ast.encoding?.length === 1 &&
+				ast.typeParameters.length === 1 &&
+				inner?._tag === "Objects" &&
+				resolves(inner, names, index, open)
+			)
+		}
+		default:
+			return false
+	}
 }
 
 const makeDescriptor = (
@@ -339,13 +376,11 @@ const makeDescriptor = (
 	}
 	const paths = new Set<string>()
 	const open = new Set<string>()
-	const records = new Set<string>()
 	walkFields(Schema.Struct(options.fields).ast, (path, leaf, type) => {
 		if (!leaf) return
 		paths.add(path)
 		const shape = shapeOf(type)
 		if (shape !== "scalar") open.add(path)
-		if (shape === "record") records.add(path)
 	})
 	return new ResourceDescriptor({
 		kind,
@@ -353,7 +388,6 @@ const makeDescriptor = (
 		path: options.path === undefined ? undefined : [...options.path(refs)],
 		fieldPaths: Array.from(paths),
 		openPaths: Array.from(open),
-		recordPaths: Array.from(records),
 		schema,
 	})
 }

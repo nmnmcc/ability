@@ -608,4 +608,82 @@ describe("Authorizer", () => {
 			assert.isTrue(Exit.isFailure(exit))
 		}),
 	)
+
+	it.effect("does not give one cached policy to two orders of a map", () =>
+		Effect.gen(function* () {
+			class Ranked extends Principal.Class<Ranked>("Ranked")({
+				roles: Schema.ReadonlyMap(Schema.String, Schema.String),
+			}) {}
+			const Ranks = Domain.make({ principal: Ranked, resources: [Bot] })
+			class CurrentRanked extends Context.Service<CurrentRanked, Ranked>()(
+				"@nmnmcc/ability/tests/Authorizer.test/CurrentRanked",
+			) {}
+			class RankAuth extends Authorizer.Service<
+				RankAuth,
+				{ requires: CurrentRanked }
+			>()("test/RankAuth", Ranks) {}
+			const layer = Authorizer.layer(RankAuth, {
+				principal: CurrentRanked,
+				policy: (user) =>
+					Effect.succeed(
+						Policy.define(Ranks)(function* (_) {
+							if (Array.from(user.roles.values())[0] === "admin") {
+								yield* _.allow("read", Bot)
+							}
+						}),
+					),
+			})
+			const exit = yield* Effect.gen(function* () {
+				yield* Effect.provideService(
+					RankAuth.check({ action: "read", resource: aliceBot }),
+					CurrentRanked,
+					Ranked.make({
+						roles: new Map([
+							["a", "admin"],
+							["b", "guest"],
+						]),
+					}),
+				)
+				yield* Effect.provideService(
+					RankAuth.check({ action: "read", resource: aliceBot }),
+					CurrentRanked,
+					Ranked.make({
+						roles: new Map([
+							["b", "guest"],
+							["a", "admin"],
+						]),
+					}),
+				)
+			}).pipe(Effect.provide(layer), Effect.exit)
+			assert.strictEqual(failureTag(exit), "Forbidden")
+		}),
+	)
+
+	it.effect("fails closed when the loaded policy has another domain", () =>
+		Effect.gen(function* () {
+			const Other = Domain.make({ principal: Caller, resources: [Bot] })
+			class Mixed extends Authorizer.Service<Mixed, { requires: Identity }>()(
+				"test/Mixed",
+				App,
+			) {}
+			const layer = Authorizer.layer(Mixed, {
+				principal: Identity,
+				policy: () =>
+					Effect.succeed(
+						Policy.define(Other)(function* (_) {
+							yield* _.allow("read", Bot)
+						}) as never,
+					),
+			})
+			const exit = yield* Mixed.check({
+				action: "read",
+				resource: aliceBot,
+			}).pipe(
+				Effect.provideService(Identity, alice),
+				Effect.provide(layer),
+				Effect.exit,
+			)
+			assert.strictEqual(failureTag(exit), "PolicyUnavailable")
+		}),
+	)
 })

@@ -135,6 +135,11 @@ export interface Policy<D extends Domain.Any, E = never, R = never, O = never>
 	readonly domain: D
 	readonly node: Node
 	readonly "~Policy"?: Condition.Variance<E, R, O>
+	/**
+	 * Only in the types. A policy reads the values and the principal of its
+	 * domain, so a policy of one domain is not a policy of a wider domain.
+	 */
+	readonly "~Domain"?: (domain: D) => D
 }
 
 /**
@@ -207,6 +212,8 @@ export type Target<D> = {
 		readonly action: Domain.ActionOf<D, K>
 		readonly resource: Domain.ValueOf<D, K>
 		readonly field?: Condition.FieldPath<Domain.DataOf<D, K>>
+		/** A target has a resource value or a kind, never both. */
+		readonly kind?: never
 	}
 }[Domain.Kind<D>]
 
@@ -221,6 +228,7 @@ export type FieldlessTarget<D> = {
 	[K in Domain.Kind<D>]: {
 		readonly action: Domain.ActionOf<D, K>
 		readonly resource: Domain.ValueOf<D, K>
+		readonly kind?: never
 	}
 }[Domain.Kind<D>]
 
@@ -236,6 +244,8 @@ export type KindTarget<D> = {
 		readonly action: Domain.ActionOf<D, K>
 		readonly kind: K
 		readonly field?: Condition.FieldPath<Domain.DataOf<D, K>>
+		/** A target has a resource value or a kind, never both. */
+		readonly resource?: never
 	}
 }[Domain.Kind<D>]
 
@@ -1416,7 +1426,6 @@ const validate = (
 ): ReadonlyArray<Issue> => {
 	const issues: Array<Issue> = []
 	const principalPaths = new Set(Resource.fieldPaths(domain.principal))
-	const principalRecords = Resource.recordPaths(domain.principal)
 	const visit = (node: EncodedNode, path: ReadonlyArray<PropertyKey>) => {
 		switch (node._tag) {
 			case "Rules":
@@ -1466,10 +1475,9 @@ const validate = (
 							descriptors.every(
 								(descriptor) =>
 									descriptor.fieldPaths.includes(field) ||
-									// A key of a record.
-									descriptor.recordPaths.some((record) =>
-										field.startsWith(`${record}.`),
-									),
+									// A key of a record, or a field deep in a recursive
+									// Schema.
+									Resource.hasPath(descriptor.schema, field),
 							)
 						if (!everywhere) {
 							issues.push({
@@ -1482,7 +1490,7 @@ const validate = (
 						for (const ref of principalRefs(value.when)) {
 							if (
 								!principalPaths.has(ref) &&
-								!principalRecords.some((record) => ref.startsWith(`${record}.`))
+								!Resource.hasPath(domain.principal, ref)
 							) {
 								issues.push({
 									path: [...at, "when"],

@@ -687,11 +687,14 @@ describe("Policy", () => {
 			action: "read",
 			kind: "Bot",
 		} as const
+		const valueRequest = {
+			principal: alice,
+			action: "read",
+			resource: aliceBot,
+		} as const
 		const check = (policy: Policy.Policy<App, string, never, any>) =>
 			Effect.gen(function* () {
-				const decision = yield* Effect.exit(
-					Policy.decide(policy, { ...request, resource: aliceBot }),
-				)
+				const decision = yield* Effect.exit(Policy.decide(policy, valueRequest))
 				assert.isTrue(Exit.isFailure(decision))
 				const residual = Policy.residual(policy, request)
 				assert.notStrictEqual(residual._tag, "True")
@@ -741,10 +744,7 @@ describe("Policy", () => {
 						_.allow("read", Bot),
 					]),
 				])
-				const decision = yield* Policy.decide(policy, {
-					...request,
-					resource: aliceBot,
-				})
+				const decision = yield* Policy.decide(policy, valueRequest)
 				assert.strictEqual(decision._tag, "Deny")
 				calls = 0
 				const residual = Policy.residual(policy, request)
@@ -993,6 +993,61 @@ describe("Policy", () => {
 					},
 				],
 			}),
+		)
+	})
+
+	it("checks a path past a key of a record against the record values", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { settings: Schema.Record(Schema.String, Schema.String) },
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		assert.isTrue(
+			Resource.hasPath(Resource.descriptor(Note).schema, "settings.mode"),
+		)
+		assert.isFalse(
+			Resource.hasPath(Resource.descriptor(Note).schema, "settings.mode.x"),
+		)
+		assert.throws(() =>
+			Policy.rules(Notes, [
+				Rule.make({
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Note"],
+					fields: ["settings.mode.x"],
+				}),
+			]),
+		)
+	})
+
+	it("takes a deep path in a recursive Schema", () => {
+		interface Tree {
+			readonly name: string
+			readonly child?: Tree
+		}
+		const Tree: Schema.Codec<Tree> = Schema.Struct({
+			name: Schema.String,
+			child: Schema.optionalKey(Schema.suspend(() => Tree)),
+		})
+		const Forest = Resource.make("Forest", {
+			actions: ["read"],
+			fields: { tree: Tree },
+		})
+		const Woods = Domain.make({ principal: Caller, resources: [Forest] })
+		const policy = Policy.define(Woods)(function* (_) {
+			yield* _.allow("read", Forest, {
+				when: ($) => $.eq("tree.child.child.name", "a"),
+			})
+		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: Forest.make({
+					tree: { name: "x", child: { name: "y", child: { name: "a" } } },
+				}),
+			})._tag,
+			"Allow",
 		)
 	})
 
