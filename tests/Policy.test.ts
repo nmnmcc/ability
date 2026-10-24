@@ -1536,6 +1536,73 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 5000)
 	})
 
+	it("lets a name that a union branch does not have hold any value", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: {
+				info: Schema.Union([
+					Schema.Struct({ owner: Schema.Literal("public") }),
+					Schema.Struct({ other: Schema.String }),
+				]),
+			},
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.rules(Notes, [
+			Rule.builder(Notes).allow("read", Note),
+			Rule.make({
+				_tag: "Deny",
+				actions: ["read"],
+				resources: ["Note"],
+				when: Condition.builder<
+					{ readonly info: { readonly owner: string } },
+					unknown,
+					unknown
+				>().eq("info.owner", "secret"),
+			}),
+		])
+		assert.notStrictEqual(
+			Policy.coverage(policy, {
+				principal: alice,
+				action: "read",
+				kind: "Note",
+			})._tag,
+			"All",
+		)
+	})
+
+	it("reads a name of Object.prototype that a class gives another value", () => {
+		class Info {
+			get toString() {
+				return "x"
+			}
+		}
+		const $ = Condition.builder<
+			{ readonly info: { readonly toString: string } },
+			unknown,
+			unknown
+		>()
+		assert.isTrue(
+			Condition.evaluateSync($.exists("info.toString"), {
+				value: { info: new Info() },
+			}),
+		)
+		assert.isFalse(
+			Condition.evaluateSync($.exists("info.toString"), {
+				value: { info: {} },
+			}),
+		)
+		assert.isFalse(
+			Condition.evaluateSync(
+				Condition.builder<
+					{ readonly info: { readonly __proto__: string | null } },
+					unknown,
+					unknown
+				>().exists("info.__proto__"),
+				{ value: { info: {} } },
+			),
+		)
+	})
+
 	it("searches many values of one field without a deep stack", () => {
 		const ids = Array.from({ length: 4000 }, (_, index) => `b${String(index)}`)
 		const policy = Policy.define(App)(function* (_) {

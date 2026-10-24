@@ -846,10 +846,24 @@ export interface Input {
  * Tests if an object has a field. A field may be the object's own, or come
  * from its class, as a getter does: `Schema.is` reads such a field too. A
  * name that every object has from `Object.prototype`, such as `constructor`
- * or `__proto__`, is not a field unless the object has it as its own.
+ * or `toString`, is a field only when the object gives it another value, as
+ * its own or from its class.
  */
-const hasField = (value: object, key: string): boolean =>
-	Object.hasOwn(value, key) || (key in value && !(key in Object.prototype))
+const hasField = (value: object, key: string): boolean => {
+	if (Object.hasOwn(value, key)) {
+		return true
+	}
+	// `__proto__` reads the prototype of every object, so only an own one is a
+	// field.
+	if (key === "__proto__" || !(key in value)) {
+		return false
+	}
+	return (
+		!(key in Object.prototype) ||
+		(value as Record<string, unknown>)[key] !==
+			(Object.prototype as Record<string, unknown>)[key]
+	)
+}
 
 const getField = (value: unknown, path: string): unknown =>
 	Option.match(
