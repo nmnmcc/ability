@@ -640,8 +640,7 @@ const resolves = (
  * of parts, also none. Another part fits a name when `fits` says so, as a
  * part with `*` fits many names. For a record, the walk asks if the key
  * Schema takes a key that fits the part. For a template literal key Schema,
- * with parts that are literals, strings and whole numbers, the answer is
- * exact. For another key Schema, the walk tries sample keys, so it may miss a
+ * with parts that are literals and strings, the answer is exact. For another key Schema, the walk tries sample keys, so it may miss a
  * key, and then the answer is `false`.
  *
  * @stability stable
@@ -727,27 +726,25 @@ const matchesFrom = (
 		)
 	})
 
+/** The longest key pattern that the exact search of keys takes. */
+const maxExactKeyLength = 256
+
 /** A part of a key pattern: one character, or `*` for any characters. */
 type GlobToken =
 	{ readonly _tag: "Char"; readonly char: string } | { readonly _tag: "Star" }
 
-/**
- * A part of a template literal: one character, any characters, or a digit
- * and then any digits.
- */
+/** A part of a template literal: one character, or any characters. */
 type TemplateToken =
-	| { readonly _tag: "Char"; readonly char: string }
-	| { readonly _tag: "Any" }
-	| { readonly _tag: "Digit" }
-	| { readonly _tag: "Digits" }
+	{ readonly _tag: "Char"; readonly char: string } | { readonly _tag: "Any" }
 
 const charsOf = (text: string): ReadonlyArray<TemplateToken> =>
 	Arr.map(Array.from(text), (char) => ({ _tag: "Char", char }) as const)
 
 /**
  * Gives the token lists of a template literal, one for each choice of its
- * unions of literals, or `undefined` for a part that this walk does not know,
- * or a part with checks.
+ * unions of literals, or `undefined` when the lists can not be exact: a part
+ * that this walk does not know, such as a number, a part with checks, or
+ * more than 64 lists.
  */
 const templateTokens = (
 	ast: SchemaAST.TemplateLiteral,
@@ -764,9 +761,9 @@ const templateTokens = (
 			case "String":
 				return [[{ _tag: "Any" }]]
 			case "Number":
-				// Only whole numbers with no sign. A number such as `-1.5` is
-				// not found, and then the answer is the samples.
-				return [[{ _tag: "Digit" }, { _tag: "Digits" }]]
+				// The tokens can not hold all numbers, such as `-1.5`, so the
+				// search is not exact.
+				return undefined
 			case "Union": {
 				const choices = Arr.map(part.types, partTokens)
 				return Arr.every(choices, (choice) => choice !== undefined)
@@ -786,16 +783,15 @@ const templateTokens = (
 		[[]] as ReadonlyArray<ReadonlyArray<TemplateToken>> | undefined,
 		(lists, part) => {
 			const choices = partTokens(part)
-			return lists === undefined || choices === undefined
-				? undefined
-				: // Each list so far, with each choice of this part. The number
-					// of lists is kept small.
-					Arr.take(
-						Arr.flatMap(lists, (list) =>
-							Arr.map(choices, (choice) => [...list, ...choice]),
-						),
-						64,
-					)
+			if (lists === undefined || choices === undefined) {
+				return undefined
+			}
+			// Each list so far, with each choice of this part. Past 64 lists the
+			// search would not be exact, so it gives no answer.
+			const all = Arr.flatMap(lists, (list) =>
+				Arr.map(choices, (choice) => [...list, ...choice]),
+			)
+			return all.length > 64 ? undefined : all
 		},
 	)
 }
@@ -816,9 +812,7 @@ const tokensMeet = (
 		g: number,
 	): ReadonlyArray<readonly [number, number]> => [
 		[t, g],
-		...(template[t]?._tag === "Any" || template[t]?._tag === "Digits"
-			? closeOf(t + 1, g)
-			: []),
+		...(template[t]?._tag === "Any" ? closeOf(t + 1, g) : []),
 		...(glob[g]?._tag === "Star" ? closeOf(t, g + 1) : []),
 	]
 	const alphabet = Arr.dedupe([
@@ -833,20 +827,13 @@ const tokensMeet = (
 	])
 	const stepTemplate = (t: number, char: string): ReadonlyArray<number> => {
 		const token = template[t]
-		if (token === undefined) {
-			return []
-		}
-		const digit = char >= "0" && char <= "9"
-		switch (token._tag) {
-			case "Char":
-				return token.char === char ? [t + 1] : []
-			case "Any":
-				return [t]
-			case "Digit":
-				return digit ? [t + 1] : []
-			case "Digits":
-				return digit ? [t] : []
-		}
+		return token === undefined
+			? []
+			: token._tag === "Any"
+				? [t]
+				: token.char === char
+					? [t + 1]
+					: []
 	}
 	const stepGlob = (g: number, char: string): ReadonlyArray<number> => {
 		const token = glob[g]
@@ -897,13 +884,19 @@ const tokensMeet = (
 
 /**
  * Tests if a key pattern fits a key of a template literal key Schema, or
- * `undefined` when the walk does not know the Schema.
+ * `undefined` when the search is not exact for the Schema. The search calls
+ * itself one time for each character of a key, so a very long part gives
+ * `undefined` too.
  */
 const globMeetsKeys = (
 	part: string,
 	ast: SchemaAST.AST,
 ): boolean | undefined => {
-	if (ast._tag !== "TemplateLiteral" || (ast.checks ?? []).length > 0) {
+	if (
+		ast._tag !== "TemplateLiteral" ||
+		(ast.checks ?? []).length > 0 ||
+		part.length > maxExactKeyLength
+	) {
 		return undefined
 	}
 	const lists = templateTokens(ast)

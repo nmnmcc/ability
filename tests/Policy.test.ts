@@ -2193,6 +2193,37 @@ describe("Policy", () => {
 			)._tag
 		assert.strictEqual(label("labels.*-z"), "Allow")
 		assert.strictEqual(label("labels.x*"), "NotApplicable")
+		// A number part, and a very long key, go to the check with samples.
+		const Numbered = Resource.make("Numbered", {
+			actions: ["read"],
+			fields: {
+				data: Schema.Record(
+					Schema.TemplateLiteral(["n", Schema.Finite]),
+					Schema.String,
+				),
+				names: Schema.Record(
+					Schema.TemplateLiteral(["x", Schema.String]),
+					Schema.String,
+				),
+			},
+		})
+		const NumberedDomain = Domain.make({
+			principal: Caller,
+			resources: [Numbered],
+		})
+		const numbered = (pattern: string) =>
+			Policy.decideSync(
+				Policy.define(NumberedDomain)(function* (_) {
+					yield* _.allow("read", Numbered, { fields: [pattern as never] })
+				}),
+				{
+					principal: alice,
+					action: "read",
+					resource: Numbered.make({ data: {}, names: {} }),
+				},
+			)._tag
+		assert.strictEqual(numbered("data.n-1"), "Allow")
+		assert.strictEqual(numbered(`names.x${"a".repeat(10_000)}`), "Allow")
 	})
 
 	it("checks a path test only on kinds whose path may have its whole prefix", () => {
