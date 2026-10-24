@@ -28,6 +28,7 @@
 import type * as Context from "effect/Context"
 import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
+import type * as Option from "effect/Option"
 import { dual } from "effect/Function"
 import { hasProperty, isObject } from "effect/Predicate"
 import * as Schema from "effect/Schema"
@@ -419,11 +420,23 @@ export type OpaqueOf<C> = C extends {
 	: never
 
 type Leaf = string | number | boolean | bigint | symbol | null | undefined
+/**
+ * Values of a class that keeps its data inside. A path does not go into them,
+ * as in the field paths of a resource, so a field with such a value is one
+ * field. A condition can test only if it exists.
+ */
+type Whole =
+	| ReadonlyMap<unknown, unknown>
+	| ReadonlySet<unknown>
+	| Date
+	| URL
+	| Uint8Array
+	| Option.Option<unknown>
 type PreviousDepth = [never, 0, 1, 2, 3]
 type FieldPathInternal<T, Depth extends number> = [Depth] extends [never]
 	? never
 	: {
-			[K in keyof T & string]-?: NonNullable<T[K]> extends Leaf
+			[K in keyof T & string]-?: NonNullable<T[K]> extends Leaf | Whole
 				? K
 				: NonNullable<T[K]> extends ReadonlyArray<unknown> | Function
 					? never
@@ -434,7 +447,8 @@ type FieldPathInternal<T, Depth extends number> = [Depth] extends [never]
 
 /**
  * The paths of the fields of `T` that hold one value, with dots for nested
- * fields. Arrays are left out. The type goes down four levels, so type
+ * fields. Arrays are left out. A map, a set, a date, a URL, a byte array and
+ * an `Option` are one field, and a path does not go into them. The type goes down four levels, so type
  * checking stays fast. For a union of types, only the common fields are
  * paths.
  *
@@ -1132,9 +1146,16 @@ const newId = (): number => {
 	return id
 }
 
+const literalText = (value: Scalar): string =>
+	// JSON gives `null` for `Infinity`, `-Infinity` and `NaN`, so a number is
+	// given as its own text.
+	typeof value === "number"
+		? `n${Object.is(value, -0) ? "-0" : String(value)}`
+		: `${typeof value}:${JSON.stringify(value)}`
+
 const operandText = (operand: Operand): string =>
 	operand._tag === "Literal"
-		? `L${typeof operand.value}:${JSON.stringify(operand.value)}`
+		? `L${literalText(operand.value)}`
 		: `R${JSON.stringify(operand.path)}`
 
 const structureText = (ast: Ast): string | undefined => {

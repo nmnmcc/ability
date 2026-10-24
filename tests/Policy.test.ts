@@ -1120,6 +1120,33 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 2000)
 	})
 
+	it("keeps tests with numbers that JSON can not hold apart", () => {
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot)
+			yield* _.deny("read", Bot, {
+				when: ($) =>
+					$.or(
+						$.lt("level", Number.NEGATIVE_INFINITY),
+						$.lt("level", Infinity),
+					),
+			})
+		})
+		const request = { principal: alice, action: "read", kind: "Bot" } as const
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: aliceBot,
+			})._tag,
+			"Deny",
+		)
+		assert.isFalse(
+			Condition.evaluateSync(Policy.residual(policy, request), {
+				value: aliceBot,
+			}),
+		)
+	})
+
 	it("is not applicable for an action that the kind does not have", () => {
 		const policy = Policy.define(App)(function* (_) {
 			yield* _.allow("*", "*")

@@ -308,6 +308,16 @@ describe("Policy", () => {
 		expect($.eq).type.not.toBeCallableWith("ownerUserId", id)
 	})
 
+	it("does not go into a map in a field path", () => {
+		const $ = Condition.builder<
+			{ readonly roles: ReadonlyMap<string, string> },
+			unknown,
+			Caller
+		>()
+		expect($.exists).type.toBeCallableWith("roles")
+		expect($.gt).type.not.toBeCallableWith("roles.size", 0)
+	})
+
 	it("checks each member of a union of inputs", () => {
 		const named = Condition.builder<unknown, Bot, Caller>().predicate(
 			"named",
