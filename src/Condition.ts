@@ -2724,31 +2724,40 @@ interface Measure {
 const measure = (
 	input: unknown,
 	levels: number,
-	memo: Map<object, Measure>,
+	memo: Map<object, Measure | { readonly failed: number }>,
 ): Measure | undefined => {
 	if (typeof input !== "object" || input === null) {
 		return { size: 0, height: 0 }
 	}
 	const cached = memo.get(input)
-	if (cached !== undefined) {
-		return cached.height <= levels ? cached : undefined
+	// A value that was too high for some levels is too high for fewer.
+	if (
+		cached !== undefined &&
+		("failed" in cached ? levels <= cached.failed : true)
+	) {
+		return "failed" in cached || cached.height > levels ? undefined : cached
 	}
-	if (levels === 0) {
-		return undefined
-	}
-	const children = Arr.map(Object.values(input), (child) =>
-		measure(child, levels - 1, memo),
-	)
-	if (!Arr.every(children, (child) => child !== undefined)) {
-		return undefined
-	}
-	const result = {
-		size: Arr.reduce(children, 1, (size, child) => size + child!.size),
-		height: Arr.reduce(children, 1, (height, child) =>
-			Math.max(height, 1 + child!.height),
-		),
-	}
-	memo.set(input, result)
+	// After the first child that is too high, the fold measures no more
+	// children. The walk has few frames for each level, so it does not fill
+	// the stack at the most levels.
+	const result =
+		levels === 0
+			? undefined
+			: Arr.reduce(
+					Object.values(input),
+					{ size: 1, height: 1 } as Measure | undefined,
+					(total, child) => {
+						const measured =
+							total === undefined ? undefined : measure(child, levels - 1, memo)
+						return total === undefined || measured === undefined
+							? undefined
+							: {
+									size: total.size + measured.size,
+									height: Math.max(total.height, 1 + measured.height),
+								}
+					},
+				)
+	memo.set(input, result ?? { failed: levels })
 	return result
 }
 

@@ -445,6 +445,18 @@ describe("Policy", () => {
 				Exit.isFailure(Schema.decodeUnknownExit(Condition.schema)(condition)),
 			)
 			assert.isBelow(Date.now() - start, 1000)
+			const high = Arr.reduce(Arr.range(1, 1001), {} as unknown, (inner) => ({
+				a: inner,
+				b: inner,
+			}))
+			const startHigh = Date.now()
+			assert.isTrue(
+				Exit.isFailure(Schema.decodeUnknownExit(PolicySchema)(high)),
+			)
+			assert.isTrue(
+				Exit.isFailure(Schema.decodeUnknownExit(Condition.schema)(high)),
+			)
+			assert.isBelow(Date.now() - startHigh, 1000)
 		})
 
 		it("does not fill the stack with deep JSON", () => {
@@ -2314,6 +2326,34 @@ describe("Policy", () => {
 			},
 		)
 		assert.isBelow(Date.now() - start, 1000)
+		// A ** does not step into a record whose key Schema takes no key.
+		const NoKeys = Resource.make("NoKeys", {
+			actions: ["read"],
+			fields: {
+				entries: Schema.Record(
+					Schema.String.check(Schema.isPattern(/^a/), Schema.isPattern(/^b/)),
+					Schema.Struct({ secret: Schema.String }),
+				),
+				entry: Schema.Record(
+					Schema.TemplateLiteral(["x".repeat(6000), Schema.String]),
+					Schema.String,
+				),
+			},
+		})
+		const NoKeysDomain = Domain.make({ principal: Caller, resources: [NoKeys] })
+		const noKeys = (pattern: string) =>
+			Policy.decideSync(
+				Policy.define(NoKeysDomain)(function* (_) {
+					yield* _.allow("read", NoKeys, { fields: [pattern as never] })
+				}),
+				{
+					principal: alice,
+					action: "read",
+					resource: NoKeys.make({ entries: {}, entry: {} }),
+				},
+			)._tag
+		assert.strictEqual(noKeys("entries.**.secret"), "NotApplicable")
+		assert.strictEqual(noKeys("entry.*"), "Allow")
 		assert.strictEqual(numbered("data.n-1"), "Allow")
 		assert.strictEqual(numbered(`names.x${"a".repeat(10_000)}`), "Allow")
 	})

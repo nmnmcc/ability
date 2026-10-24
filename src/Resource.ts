@@ -759,7 +759,8 @@ const matchesFrom = (
 			) ||
 			Arr.some(ast.indexSignatures, (signature) =>
 				part === "**"
-					? next(signature.type, index, true)
+					? // A step into a record needs a key that its key Schema takes.
+						hasSomeKey(signature.parameter) && next(signature.type, index, true)
 					: // A template literal key Schema gives an exact answer. Another
 						// key Schema is tried with sample keys.
 						(globMeetsKeys(part, signature.parameter) ??
@@ -771,6 +772,16 @@ const matchesFrom = (
 			)
 		)
 	})
+
+/**
+ * Tests if a key Schema takes some key: the exact search for a template
+ * literal, or a sample key.
+ */
+const hasSomeKey = (parameter: SchemaAST.AST): boolean =>
+	globMeetsKeys("*", parameter) ??
+	Arr.some(Arr.dedupe(["", "a", ...sampleKeys(parameter)]), (key) =>
+		keyFits(parameter, key),
+	)
 
 /** The longest key pattern that the exact search of keys takes. */
 const maxExactKeyLength = 256
@@ -842,7 +853,12 @@ const templateTokens = (
 			const all = Arr.flatMap(lists, (list) =>
 				Arr.map(choices, (choice) => [...list, ...choice]),
 			)
-			return all.length > 64 ? undefined : all
+			// The search calls itself for each character, so a long list of
+			// tokens gives no answer too.
+			return all.length > 64 ||
+				Arr.some(all, (list) => list.length > maxExactKeyLength)
+				? undefined
+				: all
 		},
 	)
 }
