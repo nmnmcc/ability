@@ -571,36 +571,22 @@ export const matchesInside = (pattern: string, field: string): boolean =>
 
 /**
  * Tests if a field pattern may match a field of a kind: a field in its list,
- * or a path that the Schema has, such as a key of a record or a getter. For a
- * path, the test makes concrete paths from the pattern: each `*` becomes an
- * empty part or `a`, and each `**` becomes no part or one part. The Schema
- * must take one of them. A key Schema may take neither of them, and then the
- * answer is "no", which is the safe answer.
+ * a path that the Schema has, such as a key of a record, or a getter. See
+ * `Resource.hasMatchingPath`.
  */
 const fitsSomeField = (
 	pattern: string,
 	descriptor: Resource.Descriptor,
 ): boolean =>
 	Arr.some(descriptor.fieldPaths, (field) => matchesField(pattern, field)) ||
-	Arr.some(
-		concretePaths(pattern),
-		(path) =>
-			matchesField(pattern, path) &&
-			(Resource.hasPath(descriptor.schema, path) ||
-				Resource.hasGetter(descriptor.schema, path)),
-	)
-
-/** Concrete paths that a field pattern may match. See {@link fitsSomeField}. */
-const concretePaths = (pattern: string): ReadonlyArray<string> =>
-	Arr.dedupe(
-		Arr.flatMap(["", "a"], (fill) =>
-			Arr.map([false, true], (keep) =>
-				Arr.flatMap(pattern.split("."), (part) =>
-					part === "**" ? (keep ? [fill] : []) : [part.replaceAll("*", fill)],
-				).join("."),
-			),
+	Resource.hasMatchingPath(
+		descriptor.schema,
+		Arr.map(normalize(pattern).split("."), (part) =>
+			isGlobstar(part) ? "**" : part,
 		),
-	)
+		matchesField,
+	) ||
+	(!pattern.includes("*") && Resource.hasGetter(descriptor.schema, pattern))
 
 /**
  * Tests the parts of a rule that do not need the resource value: the action,

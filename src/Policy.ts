@@ -2761,6 +2761,16 @@ const validate = (
 					issue: `The field "${field}" can not hold a value of the principal field "${ref}"`,
 				}),
 			),
+			// A condition with a node that is not known would be skipped when it
+			// runs, so it is not taken.
+			...(value.when !== undefined && !Condition.isAst(value.when)
+				? [
+						{
+							path: [...at, "when"],
+							issue: "The condition is not a whole condition tree",
+						} satisfies Issue,
+					]
+				: []),
 			// A fixed value such as `undefined` is not a value of a test. Its
 			// JSON text would be `null`, and the test would mean another thing.
 			...(value.when !== undefined && hasBadLiteralIn(value.when, new Map())

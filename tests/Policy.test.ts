@@ -2145,6 +2145,95 @@ describe("Policy", () => {
 		)
 	})
 
+	it("does not take a condition with a node that is not known", () => {
+		assert.isFalse(Schema.is(Condition.schema)({ _tag: "Broken" }))
+		assert.isFalse(
+			Schema.is(Condition.schema)(
+				Condition.builder<object, object, object>().predicate("p", () => true),
+			),
+		)
+		assert.throws(
+			() =>
+				Policy.rules(App, [
+					Rule.make({
+						_tag: "Deny",
+						actions: ["read"],
+						resources: ["Bot"],
+						when: { _tag: "Broken" } as never,
+					}),
+				]),
+			/not a whole condition tree/,
+		)
+	})
+
+	it("checks a path in a recursive union in a short time", () => {
+		interface Link {
+			readonly kind: "a" | "b"
+			readonly next: Link | null
+		}
+		const Link: Schema.Codec<Link> = Schema.Union([
+			Schema.Struct({
+				kind: Schema.Literal("a"),
+				next: Schema.NullOr(Schema.suspend((): Schema.Codec<Link> => Link)),
+			}),
+			Schema.Struct({
+				kind: Schema.Literal("b"),
+				next: Schema.NullOr(Schema.suspend((): Schema.Codec<Link> => Link)),
+			}),
+		])
+		const Chain = Resource.make("Chain", {
+			actions: ["read"],
+			fields: { root: Link },
+		})
+		const Chains = Domain.make({ principal: Caller, resources: [Chain] })
+		const start = Date.now()
+		const exit = Schema.decodeExit(Policy.schema(Chains))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Chain"],
+					when: {
+						_tag: "Exists",
+						field: `root.${"next.".repeat(26)}missing`,
+					},
+				},
+			],
+		})
+		assert.isTrue(Exit.isFailure(exit))
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
+	it("grants the whole value for ** into a record of structs", () => {
+		const Store = Resource.make("Store", {
+			actions: ["read"],
+			fields: {
+				items: Schema.Record(
+					Schema.String,
+					Schema.Struct({ info: Schema.Struct({ secret: Schema.String }) }),
+				),
+			},
+		})
+		const Stores = Domain.make({ principal: Caller, resources: [Store] })
+		const decide = (pattern: string) =>
+			Policy.decideSync(
+				Policy.define(Stores)(function* (_) {
+					// The pattern comes from a test case, as from JSON.
+					yield* _.allow("read", Store, { fields: [pattern as never] })
+				}),
+				{
+					principal: alice,
+					action: "read",
+					resource: Store.make({ items: {} }),
+				},
+			)._tag
+		assert.strictEqual(decide("items.**.secret"), "Allow")
+		assert.strictEqual(decide("items.**.missing"), "NotApplicable")
+		assert.strictEqual(decide("items.*.info"), "NotApplicable")
+	})
+
 	it("does not take a test with a principal field that is an object", () => {
 		class Timed extends Principal.Class<Timed>("Timed")({
 			until: Schema.Date,

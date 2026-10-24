@@ -561,50 +561,166 @@ const plainAt = (ast: SchemaAST.AST, names: ReadonlyArray<string>): boolean => {
  * @since 0.4.0
  */
 export const hasPath = (schema: Schema.Top, path: string): boolean =>
-	!isTooLong(path) && resolves(schema.ast, path.split("."), 0, new Set())
+	!isTooLong(path) && resolves(schema.ast, path.split("."), 0, new Map())
+
+/**
+ * The answers of a walk along a path, by Schema node and by place in the path.
+ * Two branches of a union may come to one node at one place, as in a recursive
+ * union, and the memo does that work one time. It is a native `Map`, because
+ * it must find a Schema node by the node itself.
+ */
+type PathMemo<A> = Map<SchemaAST.AST, Map<number, A>>
+
+/**
+ * Gives the answer for a node at a place from the memo, or works it out and
+ * keeps it. While the work runs, the memo holds `pending`, so a walk that
+ * comes back to the node at the same place, with no step on the path, gets
+ * `pending` and stops.
+ */
+const rememberAt = <A>(
+	memo: PathMemo<A>,
+	ast: SchemaAST.AST,
+	index: number,
+	pending: A,
+	work: () => A,
+): A => {
+	const places = memo.get(ast) ?? new Map<number, A>()
+	memo.set(ast, places)
+	if (places.has(index)) {
+		return places.get(index) as A
+	}
+	places.set(index, pending)
+	const result = work()
+	places.set(index, result)
+	return result
+}
 
 const resolves = (
 	ast: SchemaAST.AST,
 	names: ReadonlyArray<string>,
 	index: number,
-	open: ReadonlySet<SchemaAST.AST>,
-): boolean => {
-	if (index === names.length) {
-		return index > 0 && holdsValue(ast, new Set())
-	}
-	const name = names[index]!
-	switch (ast._tag) {
-		case "Objects": {
-			const property = ast.propertySignatures.find(
-				(signature) => signature.name === name,
-			)
-			if (property !== undefined) {
-				return resolves(property.type, names, index + 1, new Set())
+	memo: PathMemo<boolean>,
+): boolean =>
+	rememberAt(memo, ast, index, false, () => {
+		if (index === names.length) {
+			return index > 0 && holdsValue(ast, new Set())
+		}
+		const name = names[index]!
+		switch (ast._tag) {
+			case "Objects": {
+				const property = ast.propertySignatures.find(
+					(signature) => signature.name === name,
+				)
+				if (property !== undefined) {
+					return resolves(property.type, names, index + 1, memo)
+				}
+				// A key of a record must fit the Schema of the keys.
+				return ast.indexSignatures.some(
+					(signature) =>
+						Schema.is(Schema.make(signature.parameter))(name) &&
+						resolves(signature.type, names, index + 1, memo),
+				)
 			}
-			// A key of a record must fit the Schema of the keys.
-			return ast.indexSignatures.some(
-				(signature) =>
-					Schema.is(Schema.make(signature.parameter))(name) &&
-					resolves(signature.type, names, index + 1, new Set()),
-			)
+			case "Union":
+				return ast.types.some((type) => resolves(type, names, index, memo))
+			case "Suspend":
+				return resolves(ast.thunk(), names, index, memo)
+			case "Declaration": {
+				const inner = classStruct(ast)
+				return inner !== undefined && resolves(inner, names, index, memo)
+			}
+			default:
+				return false
 		}
-		case "Union":
-			return ast.types.some((type) => resolves(type, names, index, open))
-		case "Suspend":
-			// A suspend node that gives itself again, with no step on the path,
-			// has no end.
-			return (
-				!open.has(ast) &&
-				resolves(ast.thunk(), names, index, new Set([...open, ast]))
-			)
-		case "Declaration": {
-			const inner = classStruct(ast)
-			return inner !== undefined && resolves(inner, names, index, open)
+	})
+
+/**
+ * Tests if a Schema has a field whose path fits a pattern. `parts` are the
+ * parts of the pattern, split at the dots. A part `**` stands for any number
+ * of parts, also none. Another part fits a name when `fits` says so, as a
+ * part with `*` fits many names. A record has any key that its key Schema
+ * takes, so the walk tries a key made from the part, with each `*` as an
+ * empty text or as `a`.
+ *
+ * @stability stable
+ * @category predicates
+ * @since 0.5.0
+ */
+export const hasMatchingPath = (
+	schema: Schema.Top,
+	parts: ReadonlyArray<string>,
+	fits: (part: string, name: string) => boolean,
+): boolean =>
+	parts.length <= maxPathParts &&
+	matchesFrom(schema.ast, parts, 0, false, fits, new Map())
+
+const matchesFrom = (
+	ast: SchemaAST.AST,
+	parts: ReadonlyArray<string>,
+	index: number,
+	stepped: boolean,
+	fits: (part: string, name: string) => boolean,
+	memo: PathMemo<boolean>,
+): boolean =>
+	// The memo keeps two answers for each place: before the first step, and
+	// after it.
+	rememberAt(memo, ast, index * 2 + (stepped ? 1 : 0), false, () => {
+		const next = (type: SchemaAST.AST, at: number, step: boolean): boolean =>
+			matchesFrom(type, parts, at, step, fits, memo)
+		switch (ast._tag) {
+			case "Union":
+				return Arr.some(ast.types, (type) => next(type, index, stepped))
+			case "Suspend":
+				return next(ast.thunk(), index, stepped)
+			case "Declaration": {
+				const inner = classStruct(ast)
+				if (inner !== undefined) {
+					return next(inner, index, stepped)
+				}
+				break
+			}
+			default:
+				break
 		}
-		default:
+		// The path ends at a field that holds a value, as a field that a rule
+		// may name does.
+		if (index === parts.length) {
+			return stepped && holdsValue(ast, new Set())
+		}
+		const part = parts[index]!
+		if (part === "**" && next(ast, index + 1, stepped)) {
+			return true
+		}
+		if (ast._tag !== "Objects") {
 			return false
-	}
-}
+		}
+		const keys = Arr.dedupe([
+			part.replaceAll("*", ""),
+			part.replaceAll("*", "a"),
+		])
+		return (
+			Arr.some(
+				ast.propertySignatures,
+				(property) =>
+					typeof property.name === "string" &&
+					(part === "**"
+						? next(property.type, index, true)
+						: fits(part, property.name) &&
+							next(property.type, index + 1, true)),
+			) ||
+			Arr.some(ast.indexSignatures, (signature) =>
+				part === "**"
+					? next(signature.type, index, true)
+					: Arr.some(
+							keys,
+							(key) =>
+								Schema.is(Schema.make(signature.parameter))(key) &&
+								fits(part, key) &&
+								next(signature.type, index + 1, true),
+						),
+			)
+		)
+	})
 
 /**
  * Tests if a Schema surely has a value: each required field, at each depth,
@@ -975,60 +1091,61 @@ const domainAt = (
 	ast: SchemaAST.AST,
 	names: ReadonlyArray<string>,
 	index: number,
-	open: ReadonlySet<SchemaAST.AST>,
-): FieldDomain => {
-	if (index === names.length) {
-		return domainOfType(ast, open)
-	}
-	const name = names[index]!
-	switch (ast._tag) {
-		case "Objects": {
-			const property = ast.propertySignatures.find(
-				(signature) => signature.name === name,
-			)
-			if (property !== undefined) {
-				const inner = domainAt(property.type, names, index + 1, new Set())
-				// A field that may be missing may be `null`. So may a field with a
-				// name of `Object.prototype`: a condition reads it only when a
-				// value gives it another value.
-				return SchemaAST.isOptional(property.type) || name in Object.prototype
-					? joinDomains([nullDomain, inner])
-					: inner
+	memo: PathMemo<FieldDomain>,
+): FieldDomain =>
+	// A walk that comes back to a node at the same place may hold any value.
+	rememberAt(memo, ast, index, anyDomain, () => {
+		if (index === names.length) {
+			return domainOfType(ast, new Set())
+		}
+		const name = names[index]!
+		switch (ast._tag) {
+			case "Objects": {
+				const property = ast.propertySignatures.find(
+					(signature) => signature.name === name,
+				)
+				if (property !== undefined) {
+					const inner = domainAt(property.type, names, index + 1, memo)
+					// A field that may be missing may be `null`. So may a field with
+					// a name of `Object.prototype`: a condition reads it only when a
+					// value gives it another value.
+					return SchemaAST.isOptional(property.type) || name in Object.prototype
+						? joinDomains([nullDomain, inner])
+						: inner
+				}
+				// A name that the struct does not have may still be a field of a
+				// value: a condition reads a field that a value has from its
+				// class, such as a getter, and the Schema does not stop such a
+				// field. A key of a record is not safe either: the Schema of a
+				// record checks only the keys that a loop over the keys sees, and
+				// a condition reads the others too. So such a field may hold any
+				// value.
+				return anyDomain
 			}
-			// A name that the struct does not have may still be a field of a
-			// value: a condition reads a field that a value has from its class,
-			// such as a getter, and the Schema does not stop such a field. A key
-			// of a record is not safe either: the Schema of a record checks only
-			// the keys that a loop over the keys sees, and a condition reads the
-			// others too. So such a field may hold any value.
-			return anyDomain
+			case "Union":
+				return joinDomains(
+					ast.types.map((type) => domainAt(type, names, index, memo)),
+				)
+			case "Suspend":
+				return domainAt(ast.thunk(), names, index, memo)
+			case "Declaration": {
+				const inner = classStruct(ast)
+				return inner === undefined
+					? anyDomain
+					: domainAt(inner, names, index, memo)
+			}
+			case "Arrays":
+			case "ObjectKeyword":
+			case "Unknown":
+			case "Any":
+				// A path may go into these values, and the Schema does not say
+				// what is there.
+				return anyDomain
+			default:
+				// A path does not go into a scalar, so the field is `null`.
+				return nullDomain
 		}
-		case "Union":
-			return joinDomains(
-				ast.types.map((type) => domainAt(type, names, index, open)),
-			)
-		case "Suspend":
-			return open.has(ast)
-				? anyDomain
-				: domainAt(ast.thunk(), names, index, new Set([...open, ast]))
-		case "Declaration": {
-			const inner = classStruct(ast)
-			return inner === undefined
-				? anyDomain
-				: domainAt(inner, names, index, open)
-		}
-		case "Arrays":
-		case "ObjectKeyword":
-		case "Unknown":
-		case "Any":
-			// A path may go into these values, and the Schema does not say what
-			// is there.
-			return anyDomain
-		default:
-			// A path does not go into a scalar, so the field is `null`.
-			return nullDomain
-	}
-}
+	})
 
 /**
  * Gives the domain of a field of a Schema, by its path with dots. A path that
@@ -1043,7 +1160,7 @@ export const domainOf = (schema: Schema.Top, path: string): FieldDomain =>
 	// that is too long to walk may hold any value.
 	isTooLong(path)
 		? anyDomain
-		: domainAt(schema.ast, path.split("."), 0, new Set())
+		: domainAt(schema.ast, path.split("."), 0, new Map())
 
 /**
  * Checks the names of the top fields of a resource at once, when it is made.

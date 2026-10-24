@@ -2756,9 +2756,8 @@ export const schema: Schema.Codec<PlainCondition, Encoded> =
 		// writes it out each time. An encode runs this step first, so a small
 		// condition with a very large JSON form fails before it is written out.
 		Schema.decodeTo(
-			Schema.declare(
-				(input): input is PlainCondition =>
-					hasProperty(input, "_tag") && typeof input._tag === "string",
+			Schema.declare((input): input is PlainCondition =>
+				isPlainNode(input, new Map(), 0),
 			),
 			SchemaTransformation.transformEffect({
 				decode: (condition: PlainCondition) => Effect.succeed(condition),
@@ -2777,6 +2776,107 @@ export const schema: Schema.Codec<PlainCondition, Encoded> =
 			}),
 		),
 	)
+
+const compareOperators = HashSet.make("eq", "ne", "lt", "lte", "gt", "gte")
+
+/**
+ * Tests if a value is an operand. With `json`, its number must be finite, as
+ * the JSON form holds only such numbers.
+ */
+const isOperandValue = (operand: unknown, json: boolean): boolean =>
+	hasProperty(operand, "_tag") &&
+	(operand._tag === "Principal"
+		? hasProperty(operand, "path") && typeof operand.path === "string"
+		: operand._tag === "Literal" &&
+			hasProperty(operand, "value") &&
+			(operand.value === null ||
+				typeof operand.value === "string" ||
+				typeof operand.value === "boolean" ||
+				(typeof operand.value === "number" &&
+					(!json || Number.isFinite(operand.value)))))
+
+const isOperandList = (values: unknown, json: boolean): boolean =>
+	Array.isArray(values) &&
+	Arr.every(values, (operand) => isOperandValue(operand, json))
+
+/**
+ * Tests if a value is a whole condition with no predicate, as the JSON form
+ * holds it. A shared node is tested one time. A node deeper than
+ * `maxJsonDepth` is not taken, so the walk does not fill the stack.
+ */
+const isPlainNode = (
+	input: unknown,
+	memo: Map<unknown, boolean>,
+	depth: number,
+	// `true` for a tree in memory: it may have predicates and any number.
+	predicates = false,
+): boolean =>
+	depth <= maxJsonDepth &&
+	hasProperty(input, "_tag") &&
+	remember(memo, input, () => {
+		const child = (node: unknown) =>
+			isPlainNode(node, memo, depth + 1, predicates)
+		switch (input._tag) {
+			case "Predicate":
+				return (
+					predicates &&
+					hasProperty(input, "name") &&
+					typeof input.name === "string" &&
+					hasProperty(input, "run") &&
+					typeof input.run === "function"
+				)
+			case "True":
+			case "False":
+				return true
+			case "Compare":
+				return (
+					hasProperty(input, "op") &&
+					typeof input.op === "string" &&
+					HashSet.has(compareOperators, input.op) &&
+					hasProperty(input, "field") &&
+					typeof input.field === "string" &&
+					hasProperty(input, "value") &&
+					isOperandValue(input.value, !predicates)
+				)
+			case "In":
+				return (
+					hasProperty(input, "field") &&
+					typeof input.field === "string" &&
+					hasProperty(input, "values") &&
+					isOperandList(input.values, !predicates)
+				)
+			case "Exists":
+				return hasProperty(input, "field") && typeof input.field === "string"
+			case "Under":
+				return (
+					hasProperty(input, "prefix") &&
+					isOperandList(input.prefix, !predicates)
+				)
+			case "And":
+			case "Or":
+				return (
+					hasProperty(input, "conditions") &&
+					Array.isArray(input.conditions) &&
+					Arr.every(input.conditions, child)
+				)
+			case "Not":
+				return hasProperty(input, "condition") && child(input.condition)
+			default:
+				return false
+		}
+	})
+
+/**
+ * Tests if a value is a whole condition tree: each node has a known tag and
+ * the fields of that tag. A predicate node needs a name and a test. A tree
+ * deeper than 1000 levels is not taken.
+ *
+ * @stability stable
+ * @category guards
+ * @since 0.5.0
+ */
+export const isAst = (u: unknown): u is Ast =>
+	isPlainNode(u, new Map(), 0, true)
 
 /** The most nodes of the JSON form of a condition. */
 const maxJsonNodes = 100_000
