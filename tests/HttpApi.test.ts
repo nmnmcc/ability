@@ -96,6 +96,45 @@ const Api = HttpApi.make("api").add(
 			HttpApiEndpoint.get("mixed", "/mixed", {
 				success: Schema.String,
 			}).annotate(Authorization.Required, [readAny("Bot")]),
+			HttpApiEndpoint.post("create", "/orgs/:org/users/:user/bots", {
+				params: { org: Schema.String, user: Schema.String },
+				success: Schema.String,
+			}).annotate(Authorization.Required, [
+				Authorization.requires(Auth, "update", "Bot", {
+					within: (params) => ($) =>
+						$.under(
+							"org",
+							params["org"] ?? null,
+							"user",
+							params["user"] ?? null,
+						),
+				}),
+			]),
+			HttpApiEndpoint.get("list", "/orgs/:org/bots", {
+				params: { org: Schema.String },
+				success: Schema.String,
+			}).annotate(Authorization.Required, [
+				Authorization.lists(Auth, "read", "Bot", {
+					within: (params) => ($) => $.under("org", params["org"] ?? null),
+				}),
+			]),
+			HttpApiEndpoint.get("strictList", "/orgs/:org/strict-bots", {
+				params: { org: Schema.String },
+				success: Schema.String,
+			}).annotate(Authorization.Required, [
+				Authorization.lists(Auth, "read", "Bot", {
+					within: (params) => ($) => $.under("org", params["org"] ?? null),
+					nonEmpty: true,
+				}),
+			]),
+			HttpApiEndpoint.post("careless", "/careless", {
+				success: Schema.String,
+			}).annotate(Authorization.Required, [
+				Authorization.requires(Auth, "update", "Bot", {
+					// There is no `org` parameter, so the value is `undefined`.
+					within: (params) => ($) => $.under("org", params["org"] as string),
+				}),
+			]),
 		)
 		.annotate(Authorization.GroupRequired, {
 			read: [Authorization.requires(Auth, "read", "Bot")],
@@ -120,7 +159,13 @@ const BotsLive = HttpApiBuilder.group(Api, "bots", (handlers) =>
 			.handle("count", () => Effect.succeed(bots.size))
 			.handle("health", () => Effect.succeed("ok"))
 			.handle("secret", () => Effect.succeed("secret"))
-			.handle("mixed", () => Effect.succeed("mixed")),
+			.handle("mixed", () => Effect.succeed("mixed"))
+			.handle("create", ({ params }) =>
+				Effect.succeed(`created in ${params.org}`),
+			)
+			.handle("list", () => Effect.succeed("listed"))
+			.handle("strictList", () => Effect.succeed("listed"))
+			.handle("careless", () => Effect.succeed("created")),
 	),
 )
 
@@ -267,6 +312,44 @@ describe("HttpApi", () => {
 			)
 			assert.notInclude(JSON.stringify(error), "secret")
 		}).pipe(Effect.scoped, Effect.provide(BrokenServerLive)),
+	)
+
+	it.effect("checks a scope from the path parameters", () =>
+		Effect.gen(function* () {
+			const client = yield* HttpApiTest.groups(Api, ["bots", "admin"])
+			assert.strictEqual(
+				yield* client.bots.create({ params: { org: "acme", user: "alice" } }),
+				"created in acme",
+			)
+			const other = yield* Effect.exit(
+				client.bots.create({ params: { org: "acme", user: "bob" } }),
+			)
+			assert.deepStrictEqual(
+				Exit.findErrorOption(other),
+				Option.some(
+					Authorizer.Forbidden.make({ action: "update", kind: "Bot" }),
+				),
+			)
+			const careless = yield* Effect.exit(client.bots.careless())
+			assert.isTrue(Exit.isFailure(careless))
+		}).pipe(Effect.scoped, Effect.provide(ServerLive)),
+	)
+
+	it.effect("lets a list through when it is empty, unless it must not be", () =>
+		Effect.gen(function* () {
+			const client = yield* HttpApiTest.groups(Api, ["bots", "admin"])
+			assert.strictEqual(
+				yield* client.bots.list({ params: { org: "acme" } }),
+				"listed",
+			)
+			const strict = yield* Effect.exit(
+				client.bots.strictList({ params: { org: "acme" } }),
+			)
+			assert.deepStrictEqual(
+				Exit.findErrorOption(strict),
+				Option.some(Authorizer.Forbidden.make({ action: "read", kind: "Bot" })),
+			)
+		}).pipe(Effect.scoped, Effect.provide(ServerLive)),
 	)
 
 	it.effect("does not check a loaded value of another kind", () =>

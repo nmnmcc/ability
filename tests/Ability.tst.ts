@@ -258,6 +258,28 @@ describe("Policy", () => {
 		expect(fly).type.not.toBeCallableWith(policy)
 	})
 
+	it("takes a scope only with the policy first", () => {
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot)
+		})
+		expect(
+			Policy.coverage(policy, {
+				principal: alice,
+				action: "read",
+				kind: "Bot",
+				within: ($) => $.eq("ownerUserId", $.principal("userId")),
+			}),
+		).type.toBe<
+			Policy.Coverage<never, never, never, Policy.ResidualReads<App, "Bot">>
+		>()
+		expect(Policy.residual).type.not.toBeCallableWith({
+			principal: alice,
+			action: "read",
+			kind: "Bot",
+			within: (_: any) => Condition.always,
+		})
+	})
+
 	it("keeps the resource of a plain test", () => {
 		const _ = Rule.builder(App)
 		const enabled = Condition.builder<
@@ -659,6 +681,108 @@ describe("Authorizer", () => {
 				Identity | Auth
 			>
 		>()
+	})
+
+	it("types the scope of a target", () => {
+		type CheckOf = Effect.Effect<
+			void,
+			| Authorizer.Forbidden
+			| Authorizer.Pending
+			| Authorizer.PolicyUnavailable
+			| "no session",
+			Identity | Auth
+		>
+		expect(
+			Auth.check({
+				action: "update",
+				kind: "Bot",
+				within: ($) => $.under("org", $.principal("organizationId")),
+			}),
+		).type.toBe<CheckOf>()
+		expect(
+			Auth.check({
+				action: "update",
+				kind: "Bot",
+				within: ($) => $.and($.eq("level", 2), $.exists("ownerUserId")),
+			}),
+		).type.toBe<CheckOf>()
+		const otherField = Auth.check({
+			action: "update",
+			kind: "Bot",
+			// @ts-expect-error Argument of type '"enabled"'
+			within: ($) => $.eq("enabled", true),
+		})
+		const otherType = Auth.check({
+			action: "update",
+			kind: "Bot",
+			// @ts-expect-error 'OperandOf<number, any>'
+			within: ($) => $.eq("level", "high"),
+		})
+		expect(otherField).type.toBe<CheckOf>()
+		expect(otherType).type.toBe<CheckOf>()
+		const enabled = Condition.builder<
+			Rule.DataFor<App, "Trigger">,
+			Rule.ValueFor<App, "Trigger">,
+			Caller
+		>().eq("enabled", true)
+		expect(Auth.check).type.not.toBeCallableWith({
+			action: "update",
+			kind: "Bot",
+			within: () => enabled,
+		})
+		expect(Auth.check).type.not.toBeCallableWith({
+			action: "update",
+			kind: "Bot",
+			within: ($: Condition.Builder<Rule.DataFor<App, "Bot">, Bot, Caller>) =>
+				$.predicate("shared", (bot) => bot.shared),
+		})
+		const robot = Condition.builder<
+			object,
+			object,
+			{ readonly robotId: string }
+		>().principal("robotId")
+		expect(Auth.check).type.not.toBeCallableWith({
+			action: "update",
+			kind: "Bot",
+			within: ($: Condition.Builder<Rule.DataFor<App, "Bot">, Bot, Caller>) =>
+				$.eq("name", robot),
+		})
+	})
+
+	it("gives the coverage of a scope", () => {
+		expect(
+			Auth.coverage({
+				action: "read",
+				kind: "Bot",
+				within: ($) => $.under("org", "acme"),
+			}),
+		).type.toBe<
+			Effect.Effect<
+				Policy.Coverage<
+					"no session",
+					never,
+					Condition.Opaque,
+					Policy.ResidualReads<App, "Bot">
+				>,
+				Authorizer.PolicyUnavailable | "no session",
+				Identity | Auth
+			>
+		>()
+	})
+
+	it("takes a scope in HttpApi with the fields of the kind", () => {
+		expect(HttpApi.requires).type.toBeCallableWith(Auth, "update", "Bot", {
+			within:
+				(params: HttpApi.Params) =>
+				($: Condition.Builder<Rule.DataFor<App, "Bot">, Bot, Caller>) =>
+					$.under("org", params["org"] ?? null),
+		})
+		expect(HttpApi.lists).type.not.toBeCallableWith(Auth, "read", "Bot", {
+			within:
+				() =>
+				($: Condition.Builder<Rule.DataFor<App, "Trigger">, object, Caller>) =>
+					$.eq("enabled", true),
+		})
 	})
 
 	it("checks the options of the layer", () => {

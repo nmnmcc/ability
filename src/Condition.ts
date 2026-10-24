@@ -36,7 +36,7 @@ import * as HashSet from "effect/HashSet"
 import * as MutableHashMap from "effect/MutableHashMap"
 import { hasProperty, isObject } from "effect/Predicate"
 import * as Schema from "effect/Schema"
-import type * as Resource from "./Resource.ts"
+import * as Resource from "./Resource.ts"
 
 /**
  * A value that a condition can compare.
@@ -1705,6 +1705,535 @@ const fieldsIn = (
 				return []
 		}
 	})
+
+// Satisfiability
+
+/**
+ * Values of fields, as a nested object. A field that is not in it may have any
+ * value. A value with parts that the search does not look into, such as a
+ * date, is an empty object.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.5.0
+ */
+export interface Example {
+	readonly [field: string]: unknown
+}
+
+/**
+ * The answer of {@link satisfiable}:
+ * - `Satisfiable`: some value makes the condition true. `example` is one.
+ * - `Unsatisfiable`: no value makes the condition true.
+ * - `Unknown`: the search can not say. The condition has a predicate, or the
+ *   search went past its budget.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.5.0
+ */
+export type Satisfiability = Data.TaggedEnum<{
+	Satisfiable: { readonly example: Example }
+	Unsatisfiable: {}
+	Unknown: { readonly reason: "predicate" | "budget" }
+}>
+
+const satisfiability = Data.taggedEnum<Satisfiability>()
+
+/**
+ * The options of {@link satisfiable}.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.5.0
+ */
+export interface SatisfiableOptions {
+	/**
+	 * The Schema of the values. It gives the domain of each field. Without
+	 * it, a field may have any value.
+	 */
+	readonly schema?: Schema.Top | undefined
+	/** The most nodes that the search may visit. The default is 1000000. */
+	readonly budget?: number | undefined
+}
+
+/** Stands for a value with parts, such as a struct or a date. */
+const opaque: object = Object.freeze({})
+
+/** Marks a field that a step of the search did not fix. */
+const free: unique symbol = Symbol("free")
+
+const sameValue = (left: unknown, right: unknown): boolean =>
+	left === right || (Number.isNaN(left) && Number.isNaN(right))
+
+/** The least number that is greater than `value`. */
+const nextUp = (value: number): number => {
+	if (Number.isNaN(value) || value === Infinity) {
+		return value
+	}
+	if (value === 0) {
+		return Number.MIN_VALUE
+	}
+	const view = new DataView(new ArrayBuffer(8))
+	view.setFloat64(0, value)
+	const bits = view.getBigUint64(0)
+	view.setBigUint64(0, value > 0 ? bits + 1n : bits - 1n)
+	return view.getFloat64(0)
+}
+
+/**
+ * Gives one number from each part of the number line that the constants
+ * make: each constant, and one number between each two neighbours when there
+ * is one. The ends of the domain are in the list too.
+ */
+const numberCells = (
+	kind: "integer" | "finite" | "any",
+	constants: ReadonlyArray<number>,
+): ReadonlyArray<number> => {
+	const integer = kind === "integer"
+	const low = integer
+		? Number.MIN_SAFE_INTEGER
+		: kind === "finite"
+			? -Number.MAX_VALUE
+			: -Infinity
+	const high = integer
+		? Number.MAX_SAFE_INTEGER
+		: kind === "finite"
+			? Number.MAX_VALUE
+			: Infinity
+	const known: ReadonlyArray<number> = Arr.filter(
+		constants,
+		(value: number) => !Number.isNaN(value),
+	)
+	const points = Arr.filter(
+		Arr.flatMap(known, (value: number) =>
+			integer && Number.isFinite(value)
+				? [Math.floor(value), Math.ceil(value)]
+				: [value],
+		),
+		(value: number) => value >= low && value <= high,
+	)
+	// `0` and `-0` are one point: every test gives the same answer for both,
+	// and `===` calls them equal.
+	const ordered: Array<number> = [low, high, ...points].sort((a, b) => a - b)
+	const sorted = Arr.dedupeAdjacentWith(
+		ordered,
+		(a: number, b: number) => a === b,
+	)
+	const cells = Arr.flatMap(sorted, (value, index) => {
+		const after = sorted[index + 1]
+		const between = integer ? value + 1 : nextUp(value)
+		return after !== undefined && between < after ? [value, between] : [value]
+	})
+	return kind === "any" ? Arr.append(cells, Number.NaN) : cells
+}
+
+/**
+ * Gives one string from each part that the constants make. Strings are in the
+ * order of their UTF-16 code units, as `<` sees them. The least string after
+ * `a` is `a + "\0"`, so there is a string between `a` and `b` exactly when
+ * `b` is not `a + "\0"`.
+ */
+const stringCells = (
+	constants: ReadonlyArray<string>,
+): ReadonlyArray<string> => {
+	const ordered: Array<string> = [...constants].sort()
+	const sorted = Arr.dedupeAdjacentWith(
+		ordered,
+		(a: string, b: string) => a === b,
+	)
+	if (sorted.length === 0) {
+		return [""]
+	}
+	return [
+		...(sorted[0] === "" ? [] : [""]),
+		...Arr.flatMap(sorted, (value, index) => {
+			const next = `${value}\0`
+			return next === sorted[index + 1] ? [value] : [value, next]
+		}),
+	]
+}
+
+/**
+ * Gives one value from each cell of a field. Each test of a field compares it
+ * with constants, so the constants cut the domain into a few cells, and every
+ * test gives the same answer for all the values of one cell.
+ */
+const cellsOf = (
+	domain: Resource.FieldDomain,
+	constants: ReadonlyArray<Scalar>,
+): ReadonlyArray<unknown> =>
+	Arr.dedupeWith(
+		[
+			...(domain.null ? [null] : []),
+			...(domain.object ? [opaque] : []),
+			...(domain.boolean ? [true, false] : []),
+			...(domain.string
+				? stringCells(
+						Arr.filter(constants, (value) => typeof value === "string"),
+					)
+				: []),
+			...(domain.number === "none"
+				? []
+				: numberCells(
+						domain.number,
+						Arr.filter(constants, (value) => typeof value === "number"),
+					)),
+			...domain.literals,
+		] as ReadonlyArray<unknown>,
+		sameValue,
+	)
+
+class OutOfBudget {}
+
+/** What one search keeps for all its steps. It lives only as long as the search. */
+interface Search {
+	/** The memo of the simplification and of the numbers of structures. */
+	readonly memo: Memo
+	readonly cells: (field: string) => ReadonlyArray<unknown>
+	readonly budget: number
+}
+
+/** What a search has done up to now. Each step gives a new one. */
+interface SearchState {
+	readonly steps: number
+	/** The numbers of the conditions that the search found to be unsatisfiable. */
+	readonly failed: HashSet.HashSet<number>
+}
+
+interface Found {
+	readonly assignment: Option.Option<ReadonlyArray<readonly [string, unknown]>>
+	readonly state: SearchState
+}
+
+const literalOf = (operand: Operand): Scalar => {
+	if (operand._tag !== "Literal") {
+		throw new Error(
+			"Condition.satisfiable needs a condition with no principal fields. Call Condition.partial first.",
+		)
+	}
+	return operand.value
+}
+
+/**
+ * The value of the field `name` after `field` gets `value`. A field below
+ * `field` is `null` when `value` is not a value with parts.
+ */
+const fixedValue = (
+	name: string,
+	field: string,
+	value: unknown,
+): unknown | typeof free =>
+	name === field
+		? value
+		: name.startsWith(`${field}.`)
+			? value === opaque
+				? free
+				: null
+			: free
+
+const testFixed = (ast: Compare | In | Exists, value: unknown): boolean => {
+	switch (ast._tag) {
+		case "Compare":
+			return testCompare(ast.op, value, literalOf(ast.value))
+		case "In":
+			return Arr.some(ast.values, (operand) => literalOf(operand) === value)
+		case "Exists":
+			return value !== null
+	}
+}
+
+/**
+ * Puts one value into a field, and into the fields below it. The memo has a
+ * node for each node that the step visits, so its size is the work of the
+ * step.
+ */
+const fix = (
+	ast: Ast,
+	field: string,
+	value: unknown,
+	done: Map<Ast, Ast>,
+): Ast =>
+	remember(done, ast, () => {
+		const fixChild = (child: Ast) => fix(child, field, value, done)
+		switch (ast._tag) {
+			case "Compare":
+			case "In":
+			case "Exists": {
+				const known = fixedValue(ast.field, field, value)
+				return known === free ? ast : testFixed(ast, known) ? always : never
+			}
+			case "And":
+				return makeAnd(...Arr.map(ast.conditions, fixChild))
+			case "Or":
+				return makeOr(...Arr.map(ast.conditions, fixChild))
+			case "Not":
+				return makeNot(fixChild(ast.condition))
+			default:
+				return ast
+		}
+	})
+
+/** The number of tests of each field, in the order that the fields come. */
+type FieldCounts = ReadonlyArray<readonly [string, number]>
+
+const addCounts = (left: FieldCounts, right: FieldCounts): FieldCounts =>
+	Arr.reduce(right, left, (all, [field, count]) =>
+		Option.match(
+			Arr.findFirstIndex(all, ([name]) => name === field),
+			{
+				onNone: () => Arr.append(all, [field, count] as const),
+				onSome: (index) =>
+					Arr.map(all, (entry, at) =>
+						at === index ? ([entry[0], entry[1] + count] as const) : entry,
+					),
+			},
+		),
+	)
+
+const fieldCounts = (ast: Ast, memo: Map<Ast, FieldCounts>): FieldCounts =>
+	remember(memo, ast, (): FieldCounts => {
+		switch (ast._tag) {
+			case "Compare":
+			case "In":
+			case "Exists":
+				return [[ast.field, 1]]
+			case "And":
+			case "Or":
+				return Arr.reduce(ast.conditions, [] as FieldCounts, (all, child) =>
+					addCounts(all, fieldCounts(child, memo)),
+				)
+			case "Not":
+				return fieldCounts(ast.condition, memo)
+			default:
+				return []
+		}
+	})
+
+/**
+ * Picks the next field to split on. A field comes before the fields below it,
+ * so a value of a field can fix them. Then a field in more tests comes first.
+ */
+const nextField = (ast: Ast): string => {
+	const depth = (field: string) => field.split(".").length
+	const [first, ...rest] = fieldCounts(ast, new Map())
+	return Arr.reduce(rest, first!, (best, next) =>
+		depth(next[0]) < depth(best[0]) ||
+		(depth(next[0]) === depth(best[0]) && next[1] > best[1])
+			? next
+			: best,
+	)[0]
+}
+
+/**
+ * Finds values of the fields that make the condition true. It splits on one
+ * field at a time, and tries one value from each cell of the field.
+ */
+const searchAst = (
+	ast: Ast,
+	search: Search,
+	state: SearchState,
+	assignment: ReadonlyArray<readonly [string, unknown]>,
+): Found => {
+	const current = simplifyIn(ast, search.memo)
+	if (current._tag === "True") {
+		return { assignment: Option.some(assignment), state }
+	}
+	if (current._tag === "False") {
+		return { assignment: Option.none(), state }
+	}
+	// A condition with the same structure has the same free fields, so its
+	// answer is the same.
+	const id = structureId(current, search.memo)
+	if (HashSet.has(state.failed, id)) {
+		return { assignment: Option.none(), state }
+	}
+	const field = nextField(current)
+	const cells = search.cells(field)
+	// The cells are tried in order, until one gives values.
+	const tryCell = (index: number, before: SearchState): Found => {
+		if (index === cells.length) {
+			return {
+				assignment: Option.none(),
+				state: { ...before, failed: HashSet.add(before.failed, id) },
+			}
+		}
+		const cell = cells[index]
+		const done = new Map<Ast, Ast>()
+		const fixed = fix(current, field, cell, done)
+		const steps = before.steps + done.size
+		if (steps > search.budget) {
+			throw new OutOfBudget()
+		}
+		const found = searchAst(fixed, search, { ...before, steps }, [
+			...assignment,
+			[field, cell],
+		])
+		return Option.isSome(found.assignment)
+			? found
+			: tryCell(index + 1, found.state)
+	}
+	return tryCell(0, state)
+}
+
+/**
+ * Puts a value at a path in an object, and gives a new object. A value with
+ * parts (`opaque`) becomes an empty object, and it keeps an object that is
+ * there.
+ */
+const setPath = (
+	root: Readonly<Record<string, unknown>>,
+	names: ReadonlyArray<string>,
+	value: unknown,
+): Readonly<Record<string, unknown>> => {
+	const [name, ...rest] = names
+	if (name === undefined) {
+		return root
+	}
+	const inner = root[name]
+	if (rest.length === 0) {
+		return value === opaque && isObject(inner)
+			? root
+			: { ...root, [name]: value === opaque ? {} : value }
+	}
+	const base =
+		isObject(inner) && inner !== opaque
+			? (inner as Readonly<Record<string, unknown>>)
+			: {}
+	return { ...root, [name]: setPath(base, rest, value) }
+}
+
+const exampleOf = (
+	assignment: ReadonlyArray<readonly [string, unknown]>,
+): Example =>
+	Arr.reduce(
+		assignment,
+		{} as Readonly<Record<string, unknown>>,
+		(root, [field, value]) => setPath(root, field.split("."), value),
+	)
+
+/** The constants that the tests of each field use. */
+type FieldConstants = HashMap.HashMap<string, ReadonlyArray<Scalar>>
+
+const addConstants = (
+	left: FieldConstants,
+	right: FieldConstants,
+): FieldConstants =>
+	HashMap.reduce(right, left, (all, values, field) =>
+		HashMap.set(
+			all,
+			field,
+			Arr.appendAll(
+				Option.getOrElse(HashMap.get(all, field), Arr.empty),
+				values,
+			),
+		),
+	)
+
+const constantsOf = (
+	ast: Ast,
+	memo: Map<Ast, FieldConstants> = new Map(),
+): FieldConstants =>
+	remember(memo, ast, (): FieldConstants => {
+		switch (ast._tag) {
+			case "Compare":
+				return HashMap.make([ast.field, [literalOf(ast.value)]])
+			case "In":
+				return HashMap.make([ast.field, Arr.map(ast.values, literalOf)])
+			case "Exists":
+				return HashMap.make([ast.field, Arr.empty<Scalar>()])
+			case "Under":
+				throw new Error(
+					"Condition.satisfiable needs a condition with no Under nodes. Call Condition.partial first.",
+				)
+			case "And":
+			case "Or":
+				return Arr.reduce(ast.conditions, HashMap.empty(), (all, child) =>
+					addConstants(all, constantsOf(child, memo)),
+				)
+			case "Not":
+				return constantsOf(ast.condition, memo)
+			default:
+				return HashMap.empty()
+		}
+	})
+
+const satisfiableAst = (
+	ast: Ast,
+	options: SatisfiableOptions = {},
+): Satisfiability => {
+	if (hasPredicate(ast)) {
+		return satisfiability.Unknown({ reason: "predicate" })
+	}
+	const constants = constantsOf(ast)
+	const schema = options.schema
+	// The cells of each field. A field name is a string, so an Effect map
+	// finds it.
+	const cells = MutableHashMap.empty<string, ReadonlyArray<unknown>>()
+	const search: Search = {
+		memo: makeMemo(),
+		cells: (field) =>
+			Option.getOrElse(MutableHashMap.get(cells, field), () => {
+				const found = cellsOf(
+					schema === undefined
+						? Resource.anyDomain
+						: Resource.domainOf(schema, field),
+					Option.getOrElse(HashMap.get(constants, field), Arr.empty),
+				)
+				MutableHashMap.set(cells, field, found)
+				return found
+			}),
+		budget: options.budget ?? 1_000_000,
+	}
+	try {
+		const found = searchAst(
+			ast,
+			search,
+			{ steps: 0, failed: HashSet.empty() },
+			[],
+		)
+		return Option.match(found.assignment, {
+			onNone: () => satisfiability.Unsatisfiable(),
+			onSome: (assignment) =>
+				satisfiability.Satisfiable({ example: exampleOf(assignment) }),
+		})
+	} catch (error) {
+		if (error instanceof OutOfBudget) {
+			return satisfiability.Unknown({ reason: "budget" })
+		}
+		throw error
+	}
+}
+
+/**
+ * Tests if some value makes a condition true, and gives such a value.
+ *
+ * Call {@link partial} first: the condition must have no principal fields and
+ * no `Under` nodes. A condition with a predicate gives `Unknown`.
+ *
+ * The answer is exact. Each test of a condition compares one field with
+ * constants, so the constants cut the values of each field into a few cells.
+ * The search tries one value from each cell, one field at a time. The values
+ * of a field come from the Schema in `options.schema`: its literals, `null`
+ * for a nullable or optional field, and finite or integer numbers. Other
+ * Schema checks are left out, so the search may try a value that such a check
+ * stops. Then `Satisfiable` may be the answer where the check makes it
+ * `Unsatisfiable`, never the other way.
+ *
+ * The problem is as hard as boolean satisfiability, so the search has a
+ * budget. Past it, the answer is `Unknown`.
+ *
+ * @stability stable
+ * @category evaluation
+ * @since 0.5.0
+ */
+export const satisfiable: {
+	(options?: SatisfiableOptions): (condition: Any) => Satisfiability
+	(condition: Any, options?: SatisfiableOptions): Satisfiability
+} = dual(
+	(args) => isObject(args[0]) && hasProperty(args[0], "_tag"),
+	satisfiableAst,
+) as never
 
 /**
  * The JSON form of a condition with no predicate.

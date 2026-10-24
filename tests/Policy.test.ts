@@ -639,6 +639,174 @@ describe("Policy", () => {
 				)
 			},
 		)
+
+		const scopes = {
+			all: undefined,
+			acme: ($) => $.under("org", "acme"),
+			ownOrganization: ($) => $.under("org", $.principal("organizationId")),
+			own: ($) =>
+				$.under(
+					"org",
+					$.principal("organizationId"),
+					"user",
+					$.principal("userId"),
+				),
+			team: ($) => $.eq("name", "Team"),
+			high: ($) => $.gte("level", 2),
+			sharedOrLow: ($) => $.or($.eq("ownerUserId", null), $.lt("level", 2)),
+		} satisfies Record<string, Policy.Scope<App, "Bot"> | undefined>
+		const ScopeName = Schema.Literals([
+			"all",
+			"acme",
+			"ownOrganization",
+			"own",
+			"team",
+			"high",
+			"sharedOrLow",
+		])
+
+		// Every value that `BotInput` can make.
+		const everyBot = BotInput.fields.organizationId.literals.flatMap(
+			(organizationId) =>
+				[...BotInput.fields.ownerUserId.members[0].literals, null].flatMap(
+					(ownerUserId) =>
+						BotInput.fields.name.literals.flatMap((name) =>
+							BotInput.fields.level.literals.map((level) =>
+								Bot.make({
+									id: "b9",
+									organizationId,
+									ownerUserId,
+									name,
+									level,
+									settings: { model: "small", secret: "s" },
+								}),
+							),
+						),
+				),
+		)
+
+		/** A plain value of the kind, made from an example of a search. */
+		const fromExample = (example: Condition.Example) => ({
+			...aliceBot,
+			_tag: "Bot",
+			...example,
+		})
+
+		const scopedRequest = (
+			request: typeof Request.Type,
+			scope: typeof ScopeName.Type,
+		) => {
+			const field = request.field === "none" ? undefined : request.field
+			const within = scopes[scope]
+			return {
+				principal: principals[request.principal],
+				action: request.action,
+				kind: "Bot" as const,
+				...(field === undefined ? {} : { field }),
+				...(within === undefined ? {} : { within }),
+			}
+		}
+
+		const inScope = (
+			scope: typeof ScopeName.Type,
+			principal: Caller,
+			value: object,
+		) => {
+			const within = scopes[scope]
+			return (
+				within === undefined ||
+				Condition.evaluateSync(within(Condition.builder()), {
+					value,
+					principal,
+					path: Bot.descriptor.path,
+				})
+			)
+		}
+
+		const allows = (
+			policy: Policy.Policy<App>,
+			request: ReturnType<typeof scopedRequest>,
+			value: object,
+		) =>
+			Policy.decideSync(policy, {
+				principal: request.principal,
+				action: request.action,
+				resource: value as Bot,
+				...(request.field === undefined ? {} : { field: request.field }),
+			})._tag === "Allow"
+
+		it.prop(
+			"gives a residual in a scope that agrees with decide",
+			{
+				specs: Schema.Array(Spec),
+				bot: BotInput,
+				request: Request,
+				scope: ScopeName,
+			},
+			({ specs, bot, request, scope }) => {
+				const policy = build(specs, request)
+				const value = Bot.make({
+					...bot,
+					id: "b9",
+					settings: { model: "small", secret: "s" },
+				})
+				const scoped = scopedRequest(request, scope)
+				const residual = Policy.residual(policy, scoped)
+				return (
+					Condition.evaluateSync(residual, { value }) ===
+					(inScope(scope, scoped.principal, value) &&
+						allows(policy, scoped, value))
+				)
+			},
+		)
+
+		it.prop(
+			"gives a coverage that agrees with decide, with examples",
+			{ specs: Schema.Array(Spec), request: Request, scope: ScopeName },
+			({ specs, request, scope }) => {
+				const policy = build(specs, request)
+				const scoped = scopedRequest(request, scope)
+				const covered = Policy.coverage(policy, scoped)
+				const inside = everyBot.filter((value) =>
+					inScope(scope, scoped.principal, value),
+				)
+				// The condition is the exact filter, for every case.
+				const exact = everyBot.every(
+					(value) =>
+						Condition.evaluateSync(covered.condition, { value }) ===
+						(inScope(scope, scoped.principal, value) &&
+							allows(policy, scoped, value)),
+				)
+				switch (covered._tag) {
+					case "All":
+						return (
+							exact &&
+							inside.length > 0 &&
+							inside.every((value) => allows(policy, scoped, value))
+						)
+					case "None":
+						return (
+							exact && inside.every((value) => !allows(policy, scoped, value))
+						)
+					case "Some": {
+						// The examples prove the answer: one value in the scope is
+						// allowed, and one is not.
+						const allowed = fromExample(covered.allowed)
+						const refused = fromExample(covered.refused)
+						return (
+							exact &&
+							inScope(scope, scoped.principal, allowed) &&
+							allows(policy, scoped, allowed) &&
+							inScope(scope, scoped.principal, refused) &&
+							!allows(policy, scoped, refused)
+						)
+					}
+					case "Unknown":
+						// These policies have no predicates, and they are small.
+						return false
+				}
+			},
+		)
 	})
 
 	it("checks the trigger rules too", () => {

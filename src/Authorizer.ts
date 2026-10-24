@@ -117,7 +117,8 @@ type ErrorOf<C> = C extends { readonly error: infer E } ? E : never
 /**
  * What a check is about: an act on a resource value, or an act on a kind of
  * resource. A check on a kind passes only when the policy allows the act on
- * every value of the kind.
+ * every value of the kind. With a scope (`within`), it passes when the policy
+ * allows the act on every value in the scope, and the scope is not empty.
  *
  * @stability stable
  * @category models
@@ -200,13 +201,32 @@ export interface Authorizer<D extends Domain.Any, E, R> {
 		options: GuardOptions<D, E2, T["resource"]["_tag"]>,
 	) => Effect.Effect<void, E2 | Forbidden | Pending | PolicyUnavailable | E, R>
 	/**
-	 * Gives the condition on resource values that the principal may act on.
-	 * Change it into a query with `Condition.fold`.
+	 * Gives the condition on resource values that the principal may act on,
+	 * inside the scope of the target when it has one. Change it into a query
+	 * with `Condition.fold`. It is `False` when the principal may act on no
+	 * value, so the list is empty: it is not an error.
 	 */
 	readonly filter: <const T extends Policy.KindTarget<D>>(
 		target: T,
 	) => Effect.Effect<
 		Condition.Condition<
+			E,
+			never,
+			Condition.Opaque,
+			Policy.ResidualReads<D, T["kind"]>
+		>,
+		PolicyUnavailable | E,
+		R
+	>
+	/**
+	 * Tells if the principal may act on all, none or some of the values in
+	 * the scope of the target. See `Policy.coverage`. Use it to show a button
+	 * only when the answer is not `None`.
+	 */
+	readonly coverage: <const T extends Policy.KindTarget<D>>(
+		target: T,
+	) => Effect.Effect<
+		Policy.Coverage<
 			E,
 			never,
 			Condition.Opaque,
@@ -272,6 +292,18 @@ export interface ServiceClass<
 		PolicyUnavailable | E,
 		R | Self
 	>
+	readonly coverage: <const T extends Policy.KindTarget<D>>(
+		target: T,
+	) => Effect.Effect<
+		Policy.Coverage<
+			E,
+			never,
+			Condition.Opaque,
+			Policy.ResidualReads<D, T["kind"]>
+		>,
+		PolicyUnavailable | E,
+		R | Self
+	>
 	readonly permittedFields: (
 		target: Policy.FieldlessTarget<D>,
 	) => Effect.Effect<ReadonlyArray<string>, PolicyUnavailable | E, R | Self>
@@ -314,6 +346,8 @@ export const Service: <Self, C extends Config = {}>() => <
 				this.use((service: any) => service.guard(target, options))
 			static readonly filter = (target: AnyTarget) =>
 				this.use((service: any) => service.filter(target))
+			static readonly coverage = (target: AnyTarget) =>
+				this.use((service: any) => service.coverage(target))
 			static readonly permittedFields = (target: AnyTarget) =>
 				this.use((service: any) => service.permittedFields(target))
 		}
@@ -324,6 +358,7 @@ type AnyTarget = {
 	readonly resource?: object
 	readonly kind?: string
 	readonly field?: string
+	readonly within?: unknown
 }
 
 /**
@@ -710,18 +745,28 @@ const makeLayer = (
 				principal: object,
 				target: AnyTarget,
 			): Decision.Decision => {
-				const pair = Policy.residuals(value, {
-					...target,
-					principal,
-				} as never)
-				if (pair.allow._tag === "True") {
+				const request = { ...target, principal } as never
+				const covered = Policy.coverage(value, request)
+				if (covered._tag === "All") {
 					return Decision.Allow({})
 				}
-				// The decider may answer for the whole kind only when no value is
+				// The decider may answer for the scope only when no value in it is
 				// denied, and when no predicate may fail. Else some value may get a
-				// "no" from the policy, so the answer for the kind is "no".
-				if (pair.deny._tag === "False" && !Condition.hasPredicate(pair.allow)) {
-					return Decision.NotApplicable
+				// "no" from the policy, so the answer for the scope is "no". An
+				// unknown answer may hide a denied value, so it is a "no" too.
+				if (covered._tag !== "Unknown") {
+					const deny: Condition.Ast = Policy.residuals(value, request).deny
+					const schema = Domain.descriptorOf(
+						value.domain,
+						target.kind ?? "",
+					)?.schema
+					if (
+						deny._tag === "False" ||
+						Condition.satisfiable(deny as Condition.Condition, { schema })
+							._tag === "Unsatisfiable"
+					) {
+						return Decision.NotApplicable
+					}
 				}
 				return Decision.Deny({})
 			}
@@ -778,8 +823,16 @@ const makeLayer = (
 			const filter = (
 				target: AnyTarget,
 			): Effect.Effect<Condition.Ast, unknown, unknown> =>
+				Effect.map(
+					coverage(target),
+					(covered): Condition.Ast => covered.condition as Condition.Ast,
+				)
+
+			const coverage = (
+				target: AnyTarget,
+			): Effect.Effect<Policy.Coverage<any, any, any, any>, unknown, unknown> =>
 				Effect.map(current, ({ principal, policy: value }) =>
-					Policy.residual(value, { ...target, principal } as never),
+					Policy.coverage(value, { ...target, principal } as never),
 				)
 
 			const permittedFields = Effect.fnUntraced(function* (target: AnyTarget) {
@@ -808,6 +861,7 @@ const makeLayer = (
 				check,
 				guard,
 				filter,
+				coverage,
 				permittedFields,
 				invalidate,
 			} as never

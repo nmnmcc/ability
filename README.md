@@ -272,6 +272,7 @@ authorizer with a decider asks the decider first.
 | `Policy.decideSync`      | The same, at once. Only for policies with no predicates.       |
 | `Policy.explain`         | The decision and the rules that were tested, for an audit log. |
 | `Policy.residual`        | The condition on resource values that the policy allows.       |
+| `Policy.coverage`        | If the policy allows all, none or some of a part of a kind.    |
 | `Policy.permittedFields` | The fields of a value that the policy lets a request use.      |
 
 `Policy.residual` puts the principal into every rule and gives a condition on
@@ -286,6 +287,59 @@ it gives the same answers and the same failures as `Policy.decide`.
 A deep policy tree may give a very large residual. When it would have more than
 10000 nodes, `Policy.residual` throws an error, and a check in an `Authorizer`
 fails.
+
+### Scopes
+
+A scope is a part of a kind, such as the posts of one writer. Give it as
+`within`, with the same builder as the condition of a rule. A scope is plain
+data: it may not have a predicate.
+
+There are three questions about a scope. Each one is a question about two sets:
+the values in the scope, and the values that the policy allows.
+
+| Question                               | Sets                | Function                        |
+| -------------------------------------- | ------------------- | ------------------------------- |
+| May the principal act on every value?  | scope ⊆ allowed     | `Policy.coverage` is `All`      |
+| Which values may the principal act on? | scope ∩ allowed     | `Policy.residual`               |
+| May the principal act on some value?   | scope ∩ allowed ≠ ∅ | `Policy.coverage` is not `None` |
+
+```ts
+const ownPosts = {
+	principal: writer,
+	action: "update",
+	kind: "Post",
+	within: ($) => $.eq("authorId", $.principal("id")),
+} as const
+
+Policy.coverage(policy, ownPosts)._tag // "All"
+Policy.residual(policy, ownPosts) // authorId = "u1"
+```
+
+Use "every value" for an act on a value that does not exist yet. A new post has
+no id, but its author is known, so a check on the scope of its author tells if
+the writer may make it.
+
+`Policy.coverage` gives one of four answers. Each one has `condition`, the exact
+list query for the scope:
+
+- `All`: the policy allows every value in the scope.
+- `None`: the policy allows no value in the scope. An empty scope is `None` too,
+  so a scope with a mistake never gives a "yes".
+- `Some`: the policy allows some values and not others. It gives an example of
+  each, `allowed` and `refused`.
+- `Unknown`: the policy has a predicate, or the search went past its budget.
+
+The answer is exact. Each test in a condition compares one field with fixed
+values, so these values cut the values of the field into a few parts, and every
+value in one part gives the same answer. `Condition.satisfiable` tries one value
+from each part, one field at a time. It takes the values of each field from the
+Schema of the resource: its literals, `null` for a nullable or optional field,
+and finite or integer numbers. It does not use other Schema checks, such as a
+minimum length. So it may say "not all" where such a check stops the other
+values, but it never says "all" wrongly.
+
+"Some" means that some value of the Schema is allowed. It does not mean that
+such a value is in your database. To know that, run the condition as a query.
 
 ## Queries
 
@@ -370,6 +424,14 @@ const handler = Effect.gen(function* () {
 		},
 	)
 	const where = yield* Auth.filter({ action: "read", kind: "Post" })
+	// A new post of the writer: every post of this author may be made.
+	yield* Auth.check({
+		action: "update",
+		kind: "Post",
+		within: ($) => $.eq("authorId", $.principal("id")),
+	})
+	const covered = yield* Auth.coverage({ action: "delete", kind: "Post" })
+	const showDeleteButton = covered._tag !== "None"
 })
 ```
 
@@ -378,12 +440,18 @@ const handler = Effect.gen(function* () {
 | `check`           | Succeeds with `void`, or fails with `Forbidden`.                              |
 | `guard`           | Fails with your error when the principal may not read the value, then checks. |
 | `filter`          | Gives the residual condition, for a list query.                               |
+| `coverage`        | Tells if the principal may act on all, none or some values in a scope.        |
 | `decide`          | Gives the decision. It does not fail on a "no".                               |
 | `permittedFields` | Gives the fields that the principal may use.                                  |
 | `invalidate`      | Removes a cached policy, after a change to the rules of a principal.          |
 
 A check on a kind (`{ action, kind }`) passes only when the policy allows the
-act on every value of the kind.
+act on every value of the kind. With `within`, it passes only when the policy
+allows the act on every value in the scope, and the scope is not empty. The
+decider is asked only when no value in the scope is denied.
+
+`filter` gives `False` when the principal may act on no value. Then the list is
+empty, and that is not an error.
 
 The errors of a check:
 
@@ -446,6 +514,32 @@ const posts = HttpApiGroup.make("posts")
 
 const AuthorizationLive = AbilityHttpApi.layer(Authorization, Auth)
 ```
+
+An act on a part of a kind takes a scope from the path parameters. A list takes
+`lists`: the middleware does not check every value, because the handler gets its
+query with `Auth.filter`, with the same scope. An empty list is not an error,
+unless you give `nonEmpty: true`:
+
+```ts
+const create = HttpApiEndpoint.post("create", "/users/:user/posts", {
+	params: { user: Schema.String },
+}).annotate(AbilityHttpApi.Required, [
+	AbilityHttpApi.requires(Auth, "update", "Post", {
+		within: (params) => ($) => $.eq("authorId", params["user"] ?? ""),
+	}),
+])
+
+const list = HttpApiEndpoint.get("list", "/users/:user/posts", {
+	params: { user: Schema.String },
+}).annotate(AbilityHttpApi.Required, [
+	AbilityHttpApi.lists(Auth, "read", "Post", {
+		within: (params) => ($) => $.eq("authorId", params["user"] ?? ""),
+	}),
+])
+```
+
+A path parameter may be `undefined`. A scope with `undefined` in it is a defect,
+so give another value for it.
 
 The annotations and the layer do nothing alone. Give the middleware to every
 group with `.middleware(Authorization)`, or to the whole API. An endpoint in a

@@ -179,6 +179,180 @@ describe("Authorizer", () => {
 		}),
 	)
 
+	describe("scopes", () => {
+		it.effect("checks every value in a scope", () =>
+			Effect.gen(function* () {
+				const acme = yield* run(
+					Auth.check({
+						action: "read",
+						kind: "Bot",
+						within: ($) => $.under("org", "acme"),
+					}),
+				)
+				assert.isTrue(Exit.isSuccess(acme.exit))
+				const own = yield* run(
+					Auth.check({
+						action: "read",
+						kind: "Bot",
+						within: ($) => $.under("org", $.principal("organizationId")),
+					}),
+				)
+				assert.isTrue(Exit.isSuccess(own.exit))
+				const other = yield* run(
+					Auth.check({
+						action: "read",
+						kind: "Bot",
+						within: ($) => $.under("org", "other"),
+					}),
+				)
+				assert.strictEqual(failureTag(other.exit), "Forbidden")
+			}),
+		)
+
+		it.effect("checks a new value that has no id yet", () =>
+			Effect.gen(function* () {
+				const target = {
+					action: "update",
+					kind: "Bot",
+					within: ($) => $.under("org", "acme", "user", "alice"),
+				} satisfies Authorizer.Target<typeof App>
+				const owner = yield* run(Auth.check(target))
+				assert.isTrue(Exit.isSuccess(owner.exit))
+				const other = yield* run(Auth.check(target), { caller: bob })
+				assert.strictEqual(failureTag(other.exit), "Forbidden")
+			}),
+		)
+
+		it.effect("never passes a check on an empty scope", () =>
+			Effect.gen(function* () {
+				const { exit } = yield* run(
+					Auth.check({
+						action: "read",
+						kind: "Bot",
+						within: ($) => $.and($.eq("name", "a"), $.eq("name", "b")),
+					}),
+					{ caller: Caller.make({ ...alice, role: "admin" }) },
+				)
+				assert.strictEqual(failureTag(exit), "Forbidden")
+			}),
+		)
+
+		it.effect("gives a filter in a scope, and an empty one with no value", () =>
+			Effect.gen(function* () {
+				const other = Bot.make({ ...aliceBot, organizationId: "other" })
+				const { exit } = yield* run(
+					Effect.gen(function* () {
+						const acme = yield* Auth.filter({
+							action: "read",
+							kind: "Bot",
+							within: ($) => $.under("org", "acme"),
+						})
+						const none = yield* Auth.filter({
+							action: "update",
+							kind: "Bot",
+							within: ($) => $.under("org", "acme", "user", "bob"),
+						})
+						return [
+							yield* Condition.evaluate(acme, { value: aliceBot }),
+							yield* Condition.evaluate(acme, { value: other }),
+							none._tag,
+						]
+					}),
+				)
+				assert.deepStrictEqual(Exit.isSuccess(exit) ? exit.value : [], [
+					true,
+					false,
+					"False",
+				])
+			}),
+		)
+
+		it.effect("tells how much of a scope the principal may act on", () =>
+			Effect.gen(function* () {
+				const { exit } = yield* run(
+					Effect.all([
+						Auth.coverage({ action: "read", kind: "Bot" }),
+						Auth.coverage({
+							action: "update",
+							kind: "Bot",
+							within: ($) => $.under("org", "acme", "user", "alice"),
+						}),
+						Auth.coverage({
+							action: "read",
+							kind: "Bot",
+							within: ($) => $.under("org", "other"),
+						}),
+					]),
+				)
+				assert.deepStrictEqual(
+					Exit.isSuccess(exit) ? exit.value.map((value) => value._tag) : [],
+					["Some", "All", "None"],
+				)
+			}),
+		)
+
+		it.effect(
+			"asks the decider only when no value in the scope is denied",
+			() =>
+				Effect.gen(function* () {
+					const decider = () => Effect.succeed(Decision.Allow({}))
+					const delegate = yield* run(
+						Auth.check({
+							action: "delegate",
+							kind: "Bot",
+							within: ($) => $.under("org", "acme"),
+						}),
+						{ decider },
+					)
+					assert.isTrue(Exit.isSuccess(delegate.exit))
+					// Alice may delete her Bots, but not the ones in use.
+					const remove = yield* run(
+						Auth.check({
+							action: "delete",
+							kind: "Bot",
+							within: ($) => $.under("org", "acme", "user", "alice"),
+						}),
+						{ decider },
+					)
+					assert.strictEqual(failureTag(remove.exit), "Forbidden")
+					const unused = yield* run(
+						Auth.check({
+							action: "delete",
+							kind: "Bot",
+							within: ($) =>
+								$.and(
+									$.under("org", "acme", "user", "alice"),
+									$.lt("level", 2),
+								),
+						}),
+					)
+					assert.isTrue(Exit.isSuccess(unused.exit))
+				}),
+		)
+
+		it.effect("stops a scope that is not plain data", () =>
+			Effect.gen(function* () {
+				const predicate = yield* run(
+					Auth.check({
+						action: "read",
+						kind: "Bot",
+						within: (($: Condition.Builder<object, Bot, Caller>) =>
+							$.predicate("shared", (bot) => bot.shared)) as never,
+					}),
+				)
+				assert.strictEqual(failureTag(predicate.exit), "Defect")
+				const missing = yield* run(
+					Auth.check({
+						action: "read",
+						kind: "Bot",
+						within: ($) => $.under("org", undefined as unknown as string),
+					}),
+				)
+				assert.strictEqual(failureTag(missing.exit), "Defect")
+			}),
+		)
+	})
+
 	it.effect("loads the policy of a principal once", () =>
 		Effect.gen(function* () {
 			const { loads } = yield* run(

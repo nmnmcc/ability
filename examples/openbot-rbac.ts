@@ -11,6 +11,14 @@
  * A resource path takes the place of a resource key such as
  * `openbot.org.<org>.user.<user>.bot.<id>`. `$.under(...)` is the same as a
  * policy for a key and every key below it.
+ *
+ * A scope (`within`) is a part of a kind, such as the Bots of one
+ * organization. It answers three questions:
+ * - May the user act on every value in the scope? This is the check for a new
+ *   Bot, which has no id yet.
+ * - Which values in the scope may the user act on? This is the list query.
+ * - May the user act on some value in the scope? This is the test to show a
+ *   button.
  */
 import { Effect, Schema } from "effect"
 import { Condition, Domain, Policy, Principal, Resource } from "../src/index.ts"
@@ -156,6 +164,30 @@ const program = Effect.gen(function* () {
 				kind: "Bot",
 			}),
 		),
+		// The list of one organization: the scope and the policy together.
+		readableInAcme: yield* toSql(
+			Policy.residual(forSession, {
+				principal: alice,
+				action: "read",
+				kind: "Bot",
+				within: ($) => $.under("org", "acme"),
+			}),
+		),
+		// Every new Bot of Alice may be made: "All".
+		createOwn: Policy.coverage(forSession, {
+			principal: alice,
+			action: "update",
+			kind: "Bot",
+			within: ($) => $.under("org", "acme", "user", "alice"),
+		})._tag,
+		// Alice may delete some Bots of the organization, so the page shows a
+		// delete button: "Some".
+		deleteInAcme: Policy.coverage(forSession, {
+			principal: alice,
+			action: "delete",
+			kind: "Bot",
+			within: ($) => $.under("org", "acme"),
+		})._tag,
 	}
 })
 
