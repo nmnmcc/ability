@@ -362,4 +362,44 @@ describe("Authorizer", () => {
 			assert.strictEqual(failureTag(exit), "Forbidden")
 		}),
 	)
+
+	it.effect("keeps the types of principal values in the cache key", () =>
+		Effect.gen(function* () {
+			class User extends Principal.Class<User>("User")({
+				id: Schema.Union([Schema.BigInt, Schema.String]),
+			}) {}
+			const Shop = Domain.make({ principal: User, resources: [Bot] })
+			class ShopUser extends Context.Service<ShopUser, User>()(
+				"@nmnmcc/ability/tests/Authorizer.test/ShopUser",
+			) {}
+			class ShopAuth extends Authorizer.Service<
+				ShopAuth,
+				{ requires: ShopUser }
+			>()("test/ShopAuth2", Shop) {}
+			const layer = Authorizer.layer(ShopAuth, {
+				principal: ShopUser,
+				policy: (user) =>
+					Effect.succeed(
+						Policy.define(Shop)(function* (_) {
+							if (typeof user.id === "bigint") {
+								yield* _.allow("read", Bot)
+							}
+						}),
+					),
+			})
+			const exit = yield* Effect.gen(function* () {
+				yield* Effect.provideService(
+					ShopAuth.check({ action: "read", resource: aliceBot }),
+					ShopUser,
+					User.make({ id: 1n }),
+				)
+				yield* Effect.provideService(
+					ShopAuth.check({ action: "read", resource: aliceBot }),
+					ShopUser,
+					User.make({ id: "1" }),
+				)
+			}).pipe(Effect.provide(layer), Effect.exit)
+			assert.strictEqual(failureTag(exit), "Forbidden")
+		}),
+	)
 })

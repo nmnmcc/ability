@@ -2,8 +2,9 @@ import { Context, Effect, Schema } from "effect"
 import { describe, expect, it } from "tstyche"
 import {
 	Authorizer,
-	type Condition,
+	Condition,
 	type Decision,
+	Domain,
 	Policy,
 	Rule,
 } from "../src/index.ts"
@@ -13,7 +14,7 @@ import {
 	aliceTrigger,
 	App,
 	Bot,
-	type Caller,
+	Caller,
 	Trigger,
 } from "./fixtures.ts"
 
@@ -124,6 +125,42 @@ describe("Policy", () => {
 						left > 0 ? Effect.succeed(true) : Effect.fail("empty" as const),
 					),
 				),
+		})
+	})
+
+	it("does not take a node made by hand", () => {
+		expect(Rule.builder(App).allow).type.not.toBeCallableWith("read", Bot, {
+			when: ($: Condition.Builder<Rule.DataFor<App, "Bot">, Bot, Caller>) => ({
+				_tag: "Not" as const,
+				condition: $.predicate("quota", () => Effect.fail("empty" as const)),
+			}),
+		})
+	})
+
+	it("takes only principal fields with a scalar type", () => {
+		const $ = Condition.builder<
+			{ readonly owner: string },
+			unknown,
+			{ readonly id: bigint; readonly name: string }
+		>()
+		expect($.principal).type.toBeCallableWith("name")
+		expect($.principal).type.not.toBeCallableWith("id")
+	})
+
+	it("takes only a meta Schema with no services", () => {
+		class Store extends Context.Service<Store, number>()(
+			"@nmnmcc/ability/tests/Ability.tst/Store",
+		) {}
+		const meta = Schema.String as unknown as Schema.Codec<
+			string,
+			string,
+			Store,
+			never
+		>
+		expect(Domain.make).type.not.toBeCallableWith({
+			principal: Caller,
+			resources: [Bot],
+			meta,
 		})
 	})
 

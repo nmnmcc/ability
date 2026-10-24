@@ -378,14 +378,21 @@ export const rules: <D extends Domain.Any, Rules extends Rule.Any>(
 	Rule.Error<Rules>,
 	Rule.Services<Rules>,
 	Rule.OpaqueOf<Rules>
-> = (domain, values, options) =>
-	fromNode(
-		domain,
-		nodes.Rules({
-			algorithm: options?.algorithm ?? "denyOverrides",
-			rules: Array.from(values),
-		}),
-	)
+> = (domain, values, options) => {
+	const node = nodes.Rules({
+		algorithm: options?.algorithm ?? "denyOverrides",
+		rules: Array.from(values),
+	})
+	// A rule does not keep its domain in its type, so a rule of another domain
+	// can come here. Such a rule is a mistake in the code, so it is a defect.
+	const issues = validate(domain, encodeNode(node))
+	if (issues.length > 0) {
+		throw new globalThis.Error(
+			`A rule does not fit the domain: ${issues.map((issue) => issue.issue).join("; ")}`,
+		)
+	}
+	return fromNode(domain, node)
+}
 
 /**
  * Makes a policy from a generator function that gives rules. It is pure and it
@@ -894,11 +901,20 @@ export interface Residuals<E = never, R = never, O = never> {
 
 const always: Ast = Condition.always
 const never: Ast = Condition.never
+// These helpers work on nodes with no types, so they leave out the type field
+// of a condition.
 const and = (...values: ReadonlyArray<Ast>): Ast =>
-	Condition.simplify(Condition.and(...values))
+	Condition.simplify(Condition.and(...(values as ReadonlyArray<never>)))
 const or = (...values: ReadonlyArray<Ast>): Ast =>
-	Condition.simplify(Condition.or(...values))
-const not = (value: Ast): Ast => Condition.simplify(Condition.not(value))
+	Condition.simplify(Condition.or(...(values as ReadonlyArray<never>)))
+const not = (value: Ast): Ast =>
+	Condition.simplify(Condition.not(value as never))
+
+/** The two residual conditions of a node, with no types. */
+interface Pair {
+	readonly allow: Ast
+	readonly deny: Ast
+}
 
 interface ResidualContext {
 	readonly action: string
@@ -924,7 +940,7 @@ const ruleCondition = (value: Rule.Any, context: ResidualContext): Ast =>
 const firstApplicableResidual = (
 	values: ReadonlyArray<Rule.Any>,
 	context: ResidualContext,
-): Residuals<unknown, unknown, unknown> => {
+): Pair => {
 	let allow: Ast = never
 	let deny: Ast = never
 	for (const value of values.slice().reverse()) {
@@ -945,13 +961,9 @@ const firstApplicableResidual = (
  * first. It runs every predicate that `decide` runs for the node, so a failure
  * of a predicate is not lost.
  */
-const runAll = (pair: Residuals<unknown, unknown, unknown>): Ast =>
-	or(pair.allow, pair.deny, always)
+const runAll = (pair: Pair): Ast => or(pair.allow, pair.deny, always)
 
-const residualNode = (
-	node: Node,
-	context: ResidualContext,
-): Residuals<unknown, unknown, unknown> => {
+const residualNode = (node: Node, context: ResidualContext): Pair => {
 	switch (node._tag) {
 		case "Rules": {
 			switch (node.algorithm) {
@@ -1002,7 +1014,13 @@ const residualNode = (
 			}
 			const pairs = node.policies.map((child) => residualNode(child, context))
 			const deny = or(...pairs.map((pair) => pair.deny))
-			const allow = and(...pairs.map((pair) => pair.allow), not(deny))
+			// `decide` tests every child, also after a child that does not allow.
+			// So the predicates of every child run first.
+			const allow = and(
+				...pairs.map(runAll),
+				...pairs.map((pair) => pair.allow),
+				not(deny),
+			)
 			return { allow, deny }
 		}
 		case "Any": {
@@ -1046,7 +1064,7 @@ const residualsAny = (
 		readonly kind: string
 		readonly field?: string | undefined
 	},
-): Residuals<unknown, unknown, unknown> => {
+): Pair => {
 	const descriptor = policy.domain.resources.get(request.kind)
 	if (descriptor === undefined) {
 		return { allow: never, deny: never }
@@ -1224,6 +1242,11 @@ const principalRefs = (ast: Condition.Encoded | Ast): ReadonlyArray<string> => {
 	return output
 }
 
+interface Issue {
+	readonly path: ReadonlyArray<PropertyKey>
+	readonly issue: string
+}
+
 /**
  * Checks the names in an encoded policy against the domain. It gives one
  * message for each problem.
@@ -1231,8 +1254,8 @@ const principalRefs = (ast: Condition.Encoded | Ast): ReadonlyArray<string> => {
 const validate = (
 	domain: Domain.Any,
 	root: EncodedNode,
-): ReadonlyArray<Schema.FilterIssue> => {
-	const issues: Array<Schema.FilterIssue> = []
+): ReadonlyArray<Issue> => {
+	const issues: Array<Issue> = []
 	const principalPaths = new Set(Resource.fieldPaths(domain.principal))
 	const visit = (node: EncodedNode, path: ReadonlyArray<PropertyKey>) => {
 		switch (node._tag) {

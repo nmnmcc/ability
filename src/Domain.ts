@@ -157,7 +157,9 @@ class DomainData extends Data.Class<{
 
 /**
  * Makes a domain. Each resource must have its own kind name. Give `meta` when
- * rules must keep extra data, such as the scope of a grant.
+ * rules must keep extra data, such as the scope of a grant. The `meta` Schema
+ * may not need services, because `Policy.schema` gives a Schema that needs
+ * none.
  *
  * @stability stable
  * @category constructors
@@ -166,7 +168,7 @@ class DomainData extends Data.Class<{
 export const make: <
 	P extends PrincipalSchema.Any,
 	const Resources extends ReadonlyArray<Resource.Any>,
-	M extends Schema.Top = Schema.Never,
+	M extends Schema.Codec<any, any, never, never> = Schema.Never,
 >(options: {
 	readonly principal: P
 	readonly resources: Resources

@@ -192,4 +192,65 @@ describe("Condition", () => {
 			"level",
 		])
 	})
+
+	describe("keeps the work of predicates when it makes a condition smaller", () => {
+		const failing = $.predicate("offline", () => Effect.fail("offline"))
+		const run = (
+			condition: Condition.Condition<string, never, Condition.Opaque>,
+		) =>
+			Effect.exit(
+				Condition.evaluate(condition, { value: aliceBot, principal: alice }),
+			)
+
+		it.effect("keeps the tests that guard a predicate", () =>
+			Effect.gen(function* () {
+				const condition = $.or($.eq("id", "b1"), failing, Condition.always)
+				assert.deepStrictEqual(yield* run(condition), Exit.succeed(true))
+				assert.deepStrictEqual(
+					yield* run(Condition.simplify(condition)),
+					Exit.succeed(true),
+				)
+			}),
+		)
+
+		it.effect("does not absorb a test past a predicate", () =>
+			Effect.gen(function* () {
+				const a = $.eq("id", "b1")
+				const condition = $.or($.and(a, $.eq("name", "Helper")), failing, a)
+				assert.deepStrictEqual(
+					yield* run(Condition.simplify(condition)),
+					Exit.succeed(true),
+				)
+			}),
+		)
+
+		it.effect("runs a predicate each time it is in the condition", () =>
+			Effect.gen(function* () {
+				let calls = 0
+				const once = $.predicate("once", () => {
+					calls = calls + 1
+					return calls === 1
+				})
+				const condition = Condition.simplify($.and(once, once))
+				assert.deepStrictEqual(
+					yield* Effect.exit(
+						Condition.evaluate(condition, {
+							value: aliceBot,
+							principal: alice,
+						}),
+					),
+					Exit.succeed(false),
+				)
+			}),
+		)
+	})
+
+	it("does not put a principal value that is not a scalar in a condition", () => {
+		const principal = { ...alice, userId: 1n } as unknown as Caller
+		const condition = $.eq("ownerUserId", $.principal("userId"))
+		assert.deepStrictEqual(
+			Condition.partial(condition, { principal, path }),
+			Condition.never,
+		)
+	})
 })

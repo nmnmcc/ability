@@ -709,6 +709,18 @@ describe("Policy", () => {
 			),
 		)
 
+		it.effect("in a child of all after a child with no answer", () =>
+			check(
+				Policy.any([
+					Policy.all([
+						Policy.empty(App),
+						Policy.rules(App, [offline("allow")]),
+					]),
+					Policy.rules(App, [_.allow("read", Bot)]),
+				]),
+			),
+		)
+
 		it.effect("in a child that does not allow", () =>
 			check(
 				Policy.any([
@@ -758,5 +770,41 @@ describe("Policy", () => {
 		const PolicySchema = Policy.schema(Blog)
 		const json = Schema.encodeSync(PolicySchema)(policy)
 		assert.isTrue(Equal.equals(Schema.decodeSync(PolicySchema)(json), policy))
+	})
+
+	it("gives the fields inside a suspended struct", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: {
+				settings: Schema.suspend(() =>
+					Schema.Struct({ open: Schema.String, secret: Schema.String }),
+				),
+			},
+		})
+		assert.deepStrictEqual(Resource.descriptor(Note).fieldPaths, [
+			"settings.open",
+			"settings.secret",
+		])
+	})
+
+	it("does not let a resource have a field named _tag", () => {
+		assert.throws(() =>
+			Resource.make("Secret", {
+				actions: ["read"],
+				fields: { _tag: Schema.String, id: Schema.String },
+			}),
+		)
+	})
+
+	it("does not take a rule of another domain", () => {
+		const Small = Resource.make("Bot", {
+			actions: ["read"],
+			fields: { id: Schema.String },
+		})
+		const Other = Domain.make({ principal: Caller, resources: [Small] })
+		const rule = Rule.builder(App).allow("read", Bot, {
+			when: ($) => $.eq("ownerUserId", null),
+		})
+		assert.throws(() => Policy.rules(Other, [rule]))
 	})
 })

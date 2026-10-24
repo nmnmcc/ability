@@ -22,8 +22,9 @@
  * @since 0.3.0
  */
 import { Class as DataClass } from "effect/Data"
-import { hasProperty, isObject } from "effect/Predicate"
+import { hasProperty } from "effect/Predicate"
 import * as Schema from "effect/Schema"
+import type * as SchemaAST from "effect/SchemaAST"
 
 /**
  * One part of a resource path. A string is a fixed part. A field reference
@@ -161,22 +162,59 @@ export interface Options<
 class ResourceDescriptor extends DataClass<Descriptor> {}
 
 /**
- * Gives the struct fields inside a Schema. It looks through the wrappers of
- * `Schema.optionalKey` and `Schema.optional`, and through the members of a
- * union, such as `Schema.NullOr`. A union of structs gives the fields of each
- * struct.
+ * Gives the structs inside a Schema, with the `Schema.suspend` nodes that are
+ * open on the way to each one. It looks through optional keys, unions such as
+ * `Schema.NullOr`, `Schema.suspend`, and `Schema.Class`. A suspend node that
+ * is already open is not opened again, so a recursive Schema has an end.
  */
-const structFields = (schema: unknown): ReadonlyArray<Schema.Struct.Fields> => {
-	if (hasProperty(schema, "fields") && isObject(schema.fields)) {
-		return [schema.fields as Schema.Struct.Fields]
+const structsOf = (
+	ast: SchemaAST.AST,
+	open: ReadonlySet<SchemaAST.AST>,
+): ReadonlyArray<readonly [SchemaAST.Objects, ReadonlySet<SchemaAST.AST>]> => {
+	switch (ast._tag) {
+		case "Objects":
+			return ast.propertySignatures.length === 0 ? [] : [[ast, open]]
+		case "Union":
+			return ast.types.flatMap((type) => structsOf(type, open))
+		case "Suspend":
+			return open.has(ast)
+				? []
+				: structsOf(ast.thunk(), new Set([...open, ast]))
+		case "Declaration": {
+			// A `Schema.Class` is a declaration with one struct as its type
+			// parameter, and it is encoded as that struct. Other declarations,
+			// such as `Schema.Option` or `Schema.ReadonlyMap`, are not.
+			const [inner] = ast.typeParameters
+			return ast.encoding?.length === 1 &&
+				ast.typeParameters.length === 1 &&
+				inner?._tag === "Objects"
+				? structsOf(inner, open)
+				: []
+		}
+		default:
+			return []
 	}
-	if (hasProperty(schema, "members") && Array.isArray(schema.members)) {
-		return schema.members.flatMap(structFields)
+}
+
+/**
+ * Visits the path of every field of a Schema, with a dot between the names of
+ * nested fields. `leaf` is `false` for a field that is a struct.
+ */
+const walkFields = (
+	ast: SchemaAST.AST,
+	visit: (path: string, leaf: boolean) => void,
+	prefix = "",
+	open: ReadonlySet<SchemaAST.AST> = new Set(),
+): void => {
+	for (const [struct, inner] of structsOf(ast, open)) {
+		for (const property of struct.propertySignatures) {
+			if (typeof property.name !== "string") continue
+			const path = prefix === "" ? property.name : `${prefix}.${property.name}`
+			const leaf = structsOf(property.type, inner).length === 0
+			visit(path, leaf)
+			if (!leaf) walkFields(property.type, visit, path, inner)
+		}
 	}
-	if (hasProperty(schema, "schema")) {
-		return structFields(schema.schema)
-	}
-	return []
 }
 
 /**
@@ -190,36 +228,10 @@ const structFields = (schema: unknown): ReadonlyArray<Schema.Struct.Fields> => {
  */
 export const fieldPaths = (schema: Schema.Top): ReadonlyArray<string> => {
 	const output = new Set<string>()
-	const visit = (value: unknown, prefix: string): void => {
-		for (const fields of structFields(value)) {
-			for (const key of Object.keys(fields)) {
-				const path = prefix === "" ? key : `${prefix}.${key}`
-				output.add(path)
-				visit(fields[key], path)
-			}
-		}
-	}
-	visit(schema, "")
+	walkFields(schema.ast, (path) => {
+		output.add(path)
+	})
 	return Array.from(output)
-}
-
-/**
- * Gives the paths of the data fields: the fields with no nested struct.
- */
-const dataFieldPaths = (
-	fields: Schema.Struct.Fields,
-	prefix: string,
-	output: Set<string>,
-): void => {
-	for (const key of Object.keys(fields)) {
-		const path = prefix === "" ? key : `${prefix}.${key}`
-		const nested = structFields(fields[key])
-		if (nested.length > 0) {
-			for (const inner of nested) dataFieldPaths(inner, path, output)
-		} else {
-			output.add(path)
-		}
-	}
 }
 
 const makeDescriptor = (
@@ -227,12 +239,19 @@ const makeDescriptor = (
 	options: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
 	schema: Schema.Top,
 ): Descriptor => {
+	// The kind of a value comes from its `_tag`. A field with this name could
+	// give a value another kind, so it is a defect.
+	if (Object.hasOwn(options.fields, "_tag")) {
+		throw new Error(`The resource "${kind}" may not have a field "_tag"`)
+	}
 	const refs: Record<string, FieldRef<string>> = {}
 	for (const key of Object.keys(options.fields)) {
 		refs[key] = { _tag: "Field", field: key }
 	}
 	const paths = new Set<string>()
-	dataFieldPaths(options.fields, "", paths)
+	walkFields(Schema.Struct(options.fields).ast, (path, leaf) => {
+		if (leaf) paths.add(path)
+	})
 	return new ResourceDescriptor({
 		kind,
 		actions: [...options.actions],

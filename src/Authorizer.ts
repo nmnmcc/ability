@@ -42,6 +42,8 @@ import * as Cache from "effect/Cache"
 import * as Context from "effect/Context"
 import type * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
+import * as Equal from "effect/Equal"
+import * as Hash from "effect/Hash"
 import * as Layer from "effect/Layer"
 import * as Schema from "effect/Schema"
 import * as Condition from "./Condition.ts"
@@ -335,6 +337,101 @@ export interface Options<D extends Domain.Any, E, R, EL, RL, RP> {
 		| false
 }
 
+/**
+ * A cache key for a principal. Two keys are equal when they have the same
+ * text, so two principals with the same value share one policy. The key also
+ * keeps the principal, so the cache can load its policy. A plain `Data` value
+ * can not do both, so the key gives its own equality with `Equal.Equal`.
+ */
+class PrincipalKey implements Equal.Equal {
+	readonly principal: object
+	readonly text: string
+	constructor(principal: object, text: string) {
+		this.principal = principal
+		this.text = text
+	}
+	[Equal.symbol](that: unknown): boolean {
+		return that instanceof PrincipalKey && that.text === this.text
+	}
+	[Hash.symbol](): number {
+		return Hash.string(this.text)
+	}
+}
+
+/**
+ * Gives a text that names a principal value. Two values get one text only when
+ * they have the same types and the same data. So a string `"1"` and a bigint
+ * `1n` get two texts. The text keeps the name of the class of each object.
+ *
+ * It gives `undefined` for a value that it can not name with no loss, such as
+ * a function, a symbol, an object with symbol keys, or a value that contains
+ * itself.
+ */
+const keyText = (value: unknown, seen: Set<object>): string | undefined => {
+	switch (typeof value) {
+		case "string":
+			return `s${JSON.stringify(value)}`
+		case "number":
+			return Object.is(value, -0) ? "n-0" : `n${String(value)}`
+		case "bigint":
+			return `b${String(value)}`
+		case "boolean":
+			return value ? "true" : "false"
+		case "undefined":
+			return "undefined"
+		case "object":
+			break
+		default:
+			return undefined
+	}
+	if (value === null) {
+		return "null"
+	}
+	if (seen.has(value)) {
+		return undefined
+	}
+	seen.add(value)
+	const all = (items: Iterable<unknown>): Array<string> | undefined => {
+		const output: Array<string> = []
+		for (const item of items) {
+			const text = keyText(item, seen)
+			if (text === undefined) {
+				return undefined
+			}
+			output.push(text)
+		}
+		return output
+	}
+	let text: string | undefined
+	if (value instanceof Date) {
+		text = `d${String(value.getTime())}`
+	} else if (Array.isArray(value)) {
+		const items = all(value)
+		text = items === undefined ? undefined : `[${items.join(",")}]`
+	} else if (value instanceof Map) {
+		const entries = all(Array.from(value, ([key, item]) => [key, item]))
+		text =
+			entries === undefined ? undefined : `Map{${entries.sort().join(",")}}`
+	} else if (value instanceof Set) {
+		const items = all(value)
+		text = items === undefined ? undefined : `Set{${items.sort().join(",")}}`
+	} else if (Object.getOwnPropertySymbols(value).length > 0) {
+		text = undefined
+	} else {
+		const keys = Object.keys(value).sort()
+		const items = all(
+			keys.map((key) => (value as Record<string, unknown>)[key]),
+		)
+		const name = Object.getPrototypeOf(value)?.constructor?.name ?? ""
+		text =
+			items === undefined
+				? undefined
+				: `${String(name)}{${keys.map((key, index) => `${JSON.stringify(key)}:${items[index]!}`).join(",")}}`
+	}
+	seen.delete(value)
+	return text
+}
+
 const forbidden = (
 	target: AnyTarget,
 	kind: string,
@@ -363,24 +460,11 @@ const makeLayer = (
 	},
 ) => {
 	const domain: Domain.Any = service.domain
-	// The cache key of a principal is its JSON text, so two principals with the
-	// same value share one policy. The JSON codec turns every value into JSON
-	// with no loss. A plain encoder may give a value that JSON can not hold,
-	// such as a `Map` or a `bigint`, and two other principals may then get one
-	// key.
-	const codec = Schema.toCodecJson(
-		domain.principal as unknown as Schema.Codec<object, unknown>,
-	)
-	const encode = Schema.encodeUnknownSync(codec)
-	const decode = Schema.decodeUnknownEffect(codec)
 	// It gives `undefined` when the principal has no key. Such a principal does
 	// not use the cache.
-	const keyOf = (principal: object): string | undefined => {
-		try {
-			return JSON.stringify(encode(principal))
-		} catch {
-			return undefined
-		}
+	const keyOf = (principal: object): PrincipalKey | undefined => {
+		const text = keyText(principal, new Set())
+		return text === undefined ? undefined : new PrincipalKey(principal, text)
 	}
 	return Layer.effect(
 		service,
@@ -406,13 +490,7 @@ const makeLayer = (
 					: yield* Cache.make({
 							capacity: options.cache?.capacity ?? 1000,
 							timeToLive: options.cache?.timeToLive ?? "30 seconds",
-							// The key came from the principal, so it gives the principal
-							// back.
-							lookup: (key: string) =>
-								decode(JSON.parse(key)).pipe(
-									Effect.mapError((cause) => PolicyUnavailable.make({ cause })),
-									Effect.flatMap(load),
-								),
+							lookup: (key: PrincipalKey) => load(key.principal),
 						})
 
 			const policyFor = (principal: object) => {

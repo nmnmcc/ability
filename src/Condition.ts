@@ -253,12 +253,16 @@ export interface Variance<E, R, O> {
  * predicates. `O` is {@link Opaque} when the condition has a predicate, and
  * `never` when it is plain data.
  *
+ * The `"~Condition"` field is only in the types. A plain node made by hand
+ * does not have it, so it is not a condition. Use the builder. This keeps the
+ * types of a predicate inside a node made by hand from being lost.
+ *
  * @stability stable
  * @category models
  * @since 0.3.0
  */
 export type Condition<E = never, R = never, O = never> = Ast & {
-	readonly "~Condition"?: Variance<E, R, O>
+	readonly "~Condition": Variance<E, R, O>
 }
 
 /**
@@ -372,6 +376,10 @@ export type PathValue<
  */
 export type OperandOf<A> = Extract<A, Scalar> | Ref<A>
 
+type ScalarPath<T> = {
+	[F in FieldPath<T>]: PathValue<T, F> extends Scalar ? F : never
+}[FieldPath<T>]
+
 type OrderedPath<T> = {
 	[F in FieldPath<T>]: Exclude<PathValue<T, F>, null> extends number | string
 		? F
@@ -424,8 +432,11 @@ export interface Builder<Data, Value, P> {
 	readonly under: (
 		...prefix: ReadonlyArray<string | null | Ref<string | null>>
 	) => Condition
-	/** A field of the principal, to use as a value. */
-	readonly principal: <const F extends FieldPath<P>>(
+	/**
+	 * A field of the principal, to use as a value. The field must have a
+	 * {@link Scalar} type.
+	 */
+	readonly principal: <const F extends ScalarPath<P>>(
 		field: F,
 	) => Ref<PathValue<P, F>>
 	readonly and: <const Cs extends ReadonlyArray<Any>>(
@@ -528,7 +539,7 @@ export const builder = <Data, Value, P>(): Builder<Data, Value, P> =>
  * @category constructors
  * @since 0.3.0
  */
-export const always: Condition = nodes.True()
+export const always: Condition = nodes.True() as Condition
 
 /**
  * Always false.
@@ -537,7 +548,7 @@ export const always: Condition = nodes.True()
  * @category constructors
  * @since 0.3.0
  */
-export const never: Condition = nodes.False()
+export const never: Condition = nodes.False() as Condition
 
 /**
  * True when all the conditions are true. With no conditions, it is true.
@@ -549,7 +560,7 @@ export const never: Condition = nodes.False()
 export const and: <const Cs extends ReadonlyArray<Any>>(
 	...conditions: Cs
 ) => Condition<Error<Cs[number]>, Services<Cs[number]>, OpaqueOf<Cs[number]>> =
-	makeAnd
+	makeAnd as never
 
 /**
  * True when one of the conditions is true. With no conditions, it is false.
@@ -561,7 +572,7 @@ export const and: <const Cs extends ReadonlyArray<Any>>(
 export const or: <const Cs extends ReadonlyArray<Any>>(
 	...conditions: Cs
 ) => Condition<Error<Cs[number]>, Services<Cs[number]>, OpaqueOf<Cs[number]>> =
-	makeOr
+	makeOr as never
 
 /**
  * @stability stable
@@ -570,7 +581,7 @@ export const or: <const Cs extends ReadonlyArray<Any>>(
  */
 export const not: <C extends Any>(
 	condition: C,
-) => Condition<Error<C>, Services<C>, OpaqueOf<C>> = makeNot
+) => Condition<Error<C>, Services<C>, OpaqueOf<C>> = makeNot as never
 
 /**
  * The data that a condition needs for a test.
@@ -606,16 +617,25 @@ const getField = (value: unknown, path: string): unknown => {
 	return cursor === undefined ? null : cursor
 }
 
+const isScalar = (value: unknown): value is Scalar =>
+	typeof value === "string" ||
+	typeof value === "boolean" ||
+	(typeof value === "number" && Number.isFinite(value))
+
 /**
- * Gives the value of an operand. A principal field that is `null` or missing
- * gives `undefined`. No field of a resource is `undefined`, so a test with it
- * is never true. This keeps the check closed: a principal with no id never
- * matches a resource with no owner.
+ * Gives the value of an operand. A principal field that is `null`, missing, or
+ * not a {@link Scalar} gives `undefined`. No field of a resource is
+ * `undefined`, so a test with it is never true. This keeps the check closed: a
+ * principal with no id never matches a resource with no owner. It also keeps
+ * other values, such as a `bigint`, out of the residual condition.
  */
-const resolve = (operand: Operand, principal: unknown): unknown =>
-	operand._tag === "Literal"
-		? operand.value
-		: (getField(principal, operand.path) ?? undefined)
+const resolve = (operand: Operand, principal: unknown): unknown => {
+	if (operand._tag === "Literal") {
+		return operand.value
+	}
+	const value = getField(principal, operand.path)
+	return isScalar(value) ? value : undefined
+}
 
 const testCompare = (
 	op: CompareOperator,
@@ -682,7 +702,7 @@ const testUnder = (prefix: ReadonlyArray<Operand>, input: Input): boolean => {
  * @category predicates
  * @since 0.4.0
  */
-export const hasPredicate: (condition: Any) => boolean = nodes.$match({
+export const hasPredicate: (condition: Ast) => boolean = nodes.$match({
 	Predicate: () => true,
 	And: (node) => node.conditions.some(hasPredicate),
 	Or: (node) => node.conditions.some(hasPredicate),
@@ -855,14 +875,23 @@ const absorb = (
 	conditions.filter(
 		(condition) =>
 			condition._tag !== inner ||
-			// A predicate may fail, so a child with a predicate stays.
-			hasPredicate(condition) ||
 			!conditions.some(
 				(other) =>
 					other !== condition &&
 					condition.conditions.some((part) => Equal.equals(part, other)),
 			),
 	)
+
+/**
+ * Removes children that do not change the result. A predicate may fail, and it
+ * may give another answer when it runs again. So when a child has a predicate,
+ * every child stays, and each one runs in its place.
+ */
+const reduce = (
+	inner: "And" | "Or",
+	conditions: ReadonlyArray<Ast>,
+): ReadonlyArray<Ast> =>
+	conditions.some(hasPredicate) ? conditions : absorb(inner, dedupe(conditions))
 
 const flatten = (
 	tag: "And" | "Or",
@@ -876,8 +905,9 @@ const flatten = (
 /**
  * Gives the result of an `And` with a `False` child, or of an `Or` with a
  * `True` child. The children are tested in order, so a predicate before the
- * constant still runs, and it may fail. Such predicates stay in front of the
- * constant, so the failure is not lost.
+ * constant still runs, and it may fail. When there is such a predicate, the
+ * children before the constant stay, so the failure is not lost. The other
+ * children stay too, because they decide if the predicate runs.
  */
 const shortCircuit = (
 	tag: "And" | "Or",
@@ -885,8 +915,11 @@ const shortCircuit = (
 	index: number,
 ): Ast => {
 	const constant = tag === "And" ? never : always
-	const before = children.slice(0, index).filter(hasPredicate)
-	if (before.length === 0) {
+	const neutral = tag === "And" ? "True" : "False"
+	const before = children
+		.slice(0, index)
+		.filter((child) => child._tag !== neutral)
+	if (!before.some(hasPredicate)) {
 		return constant
 	}
 	return tag === "And"
@@ -903,7 +936,7 @@ const simplifyAst = (ast: Ast): Ast => {
 				return shortCircuit("And", flat, stop)
 			}
 			const children = flat.filter((child) => child._tag !== "True")
-			const unique = absorb("Or", dedupe(children))
+			const unique = reduce("Or", children)
 			if (unique.length === 0) {
 				return always
 			}
@@ -916,7 +949,7 @@ const simplifyAst = (ast: Ast): Ast => {
 				return shortCircuit("Or", flat, stop)
 			}
 			const children = flat.filter((child) => child._tag !== "False")
-			const unique = absorb("And", dedupe(children))
+			const unique = reduce("And", children)
 			if (unique.length === 0) {
 				return never
 			}
@@ -967,7 +1000,7 @@ const simplifyAst = (ast: Ast): Ast => {
  */
 export const simplify: <E, R, O>(
 	condition: Condition<E, R, O>,
-) => Condition<E, R, O> = simplifyAst
+) => Condition<E, R, O> = simplifyAst as never
 
 /**
  * Puts the value of the principal into an operand. It gives `undefined` for a
@@ -1211,7 +1244,7 @@ export const fold: {
  * @category getters
  * @since 0.3.0
  */
-export const fields = (condition: Any): ReadonlyArray<string> => {
+export const fields = (condition: Ast): ReadonlyArray<string> => {
 	const output = new Set<string>()
 	const visit = (node: Ast): void => {
 		switch (node._tag) {
