@@ -2289,6 +2289,45 @@ const principalTestsIn = (
 	})
 
 /**
+ * Tests if a node has a fixed value that is not a {@link Condition.Scalar},
+ * such as `undefined`. A shared node is visited one time.
+ */
+const hasBadLiteralIn = (
+	node: ConditionNode,
+	memo: Map<ConditionNode, boolean>,
+): boolean =>
+	remember(memo, node, () => {
+		const bad = (operands: ReadonlyArray<Condition.Operand>) =>
+			Arr.some(
+				operands,
+				(operand) =>
+					operand._tag === "Literal" &&
+					operand.value !== null &&
+					typeof operand.value !== "string" &&
+					typeof operand.value !== "number" &&
+					typeof operand.value !== "boolean",
+			)
+		switch (node._tag) {
+			case "Compare":
+				return bad([node.value])
+			case "In":
+				return bad(node.values)
+			case "Under":
+				return bad(node.prefix)
+			case "And":
+			case "Or":
+				return Arr.some(
+					node.conditions as ReadonlyArray<ConditionNode>,
+					(child) => hasBadLiteralIn(child, memo),
+				)
+			case "Not":
+				return hasBadLiteralIn(node.condition, memo)
+			default:
+				return false
+		}
+	})
+
+/**
  * The principal fields in the prefixes of `Under` nodes, each as the JSON text
  * of the place in the prefix and the path of the field. See
  * {@link literalTestsIn}.
@@ -2584,6 +2623,17 @@ const validate = (
 					issue: `The field "${field}" can not hold a value of the principal field "${ref}"`,
 				}),
 			),
+			// A fixed value such as `undefined` is not a value of a test. Its
+			// JSON text would be `null`, and the test would mean another thing.
+			...(value.when !== undefined && hasBadLiteralIn(value.when, new Map())
+				? [
+						{
+							path: [...at, "when"],
+							issue:
+								"A test has a fixed value that is not a string, a number, a boolean or null",
+						} satisfies Issue,
+					]
+				: []),
 			// A principal field in a path test must hold a value that the path
 			// may have at that place. Else the test is always false.
 			...Arr.map(

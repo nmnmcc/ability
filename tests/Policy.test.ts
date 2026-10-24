@@ -1780,6 +1780,20 @@ describe("Policy", () => {
 		)
 	})
 
+	it("does not take a test with a fixed value of undefined", () => {
+		const ids: Record<string, string> = {}
+		assert.throws(
+			() =>
+				Policy.define(App)(function* (_) {
+					yield* _.allow("read", Bot, {
+						when: ($) =>
+							$.not($.eq("ownerUserId", ids["owner"] as unknown as string)),
+					})
+				}),
+			/not a string, a number, a boolean or null/,
+		)
+	})
+
 	it("does not take a test with a principal field of another type", () => {
 		assert.throws(
 			() =>
