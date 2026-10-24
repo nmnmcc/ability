@@ -1169,9 +1169,17 @@ export const evaluate: {
  * @since 0.3.0
  */
 export const evaluateSync: {
-	// A condition with no predicate reads nothing, so `I` does not matter.
-	(input: Input): (condition: Condition<never, never, never, any>) => boolean
-	(condition: Condition<never, never, never, any>, input: Input): boolean
+	// The input must have the value that the condition reads, as in
+	// `evaluate`. A residual of one kind can not test a value of another kind.
+	<In extends Input>(
+		input: In,
+	): <I>(
+		condition: Condition<never, never, never, I> & ReadsFrom<I, In>,
+	) => boolean
+	<I, In extends Input>(
+		condition: Condition<never, never, never, I>,
+		input: In & ReadsInput<I>,
+	): boolean
 } = dual(2, evaluateSyncAst)
 
 /**
@@ -1644,7 +1652,21 @@ const literalValue = (operand: Operand, field: string): Scalar => {
 	return operand.value
 }
 
-const foldAst = <A>(ast: Ast, interpreter: Interpreter<A>): A => {
+/**
+ * Folds one node. The memo keeps the result of each node, so a node that is a
+ * child of many nodes is folded one time.
+ */
+const foldAst = <A>(
+	ast: Ast,
+	interpreter: Interpreter<A>,
+	done: Map<Ast, A> = new Map(),
+): A => remember(done, ast, () => foldOnce(ast, interpreter, done))
+
+const foldOnce = <A>(
+	ast: Ast,
+	interpreter: Interpreter<A>,
+	done: Map<Ast, A>,
+): A => {
 	switch (ast._tag) {
 		case "True":
 			return interpreter.true()
@@ -1670,14 +1692,14 @@ const foldAst = <A>(ast: Ast, interpreter: Interpreter<A>): A => {
 			})
 		case "And":
 			return interpreter.and(
-				ast.conditions.map((child) => foldAst(child, interpreter)),
+				Arr.map(ast.conditions, (child) => foldAst(child, interpreter, done)),
 			)
 		case "Or":
 			return interpreter.or(
-				ast.conditions.map((child) => foldAst(child, interpreter)),
+				Arr.map(ast.conditions, (child) => foldAst(child, interpreter, done)),
 			)
 		case "Not":
-			return interpreter.not(foldAst(ast.condition, interpreter))
+			return interpreter.not(foldAst(ast.condition, interpreter, done))
 		case "Predicate":
 			if (interpreter.predicate === undefined) {
 				throw Untranslatable.make({
@@ -1778,8 +1800,8 @@ export interface Example {
  * - `Satisfiable`: some value makes the condition true. `example` is one.
  * - `Unsatisfiable`: no value makes the condition true.
  * - `Unknown`: the search can not say. The condition has a predicate, the
- *   search went past its budget, or it set two fields below a union of
- *   structs, where the fields of one branch go together.
+ *   search went past its budget, or it set two fields that the Schema ties
+ *   together, as below a union or a field that may be missing.
  *
  * @stability stable
  * @category models
@@ -1962,6 +1984,11 @@ interface Search {
 	/** The memo of the simplification and of the numbers of structures. */
 	readonly memo: Memo
 	readonly cells: (field: string) => ReadonlyArray<unknown>
+	/**
+	 * The texts of the values of each `In` test, so one test of a value does
+	 * not read every value of the test. See `cellText`.
+	 */
+	readonly members: Map<Ast, HashSet.HashSet<string>>
 	readonly budget: number
 }
 
@@ -2003,12 +2030,33 @@ const fixedValue = (
 				: null
 			: free
 
-const testFixed = (ast: Compare | In | Exists, value: unknown): boolean => {
+const testFixed = (
+	ast: Compare | In | Exists,
+	value: unknown,
+	search: Search,
+): boolean => {
 	switch (ast._tag) {
 		case "Compare":
 			return testCompare(ast.op, value, literalOf(ast.value))
 		case "In":
-			return Arr.some(ast.values, (operand) => literalOf(operand) === value)
+			// `===` finds no `NaN`, so the set has none, and `NaN` is in no test.
+			return (
+				!Number.isNaN(value) &&
+				HashSet.has(
+					remember(search.members, ast, () =>
+						HashSet.fromIterable(
+							Arr.map(
+								Arr.filter(
+									Arr.map(ast.values, literalOf),
+									(literal) => !Number.isNaN(literal),
+								),
+								cellText,
+							),
+						),
+					),
+					cellText(value),
+				)
+			)
 		case "Exists":
 			return value !== null
 	}
@@ -2023,16 +2071,21 @@ const fix = (
 	ast: Ast,
 	field: string,
 	value: unknown,
+	search: Search,
 	done: Map<Ast, Ast>,
 ): Ast =>
 	remember(done, ast, () => {
-		const fixChild = (child: Ast) => fix(child, field, value, done)
+		const fixChild = (child: Ast) => fix(child, field, value, search, done)
 		switch (ast._tag) {
 			case "Compare":
 			case "In":
 			case "Exists": {
 				const known = fixedValue(ast.field, field, value)
-				return known === free ? ast : testFixed(ast, known) ? always : never
+				return known === free
+					? ast
+					: testFixed(ast, known, search)
+						? always
+						: never
 			}
 			case "And":
 				return makeAnd(...Arr.map(ast.conditions, fixChild))
@@ -2132,7 +2185,7 @@ const searchAst = (
 				return before
 			}
 			const done = new Map<Ast, Ast>()
-			const fixed = fix(current, field, cell, done)
+			const fixed = fix(current, field, cell, search, done)
 			const steps = before.state.steps + done.size
 			if (steps > search.budget) {
 				throw new OutOfBudget()
@@ -2244,6 +2297,20 @@ const constantsOf = (
 		}
 	})
 
+/**
+ * Tests if two fields that a search set are below one choice of the Schema.
+ * See `Resource.choicesOf`.
+ */
+const tiedFields = (
+	schema: Schema.Top,
+	assignment: ReadonlyArray<readonly [string, unknown]>,
+): boolean => {
+	const choices = Arr.flatMap(assignment, ([field]) =>
+		Resource.choicesOf(schema, field),
+	)
+	return Arr.dedupe(choices).length < choices.length
+}
+
 const satisfiableAst = (
 	ast: Ast,
 	options: SatisfiableOptions = {},
@@ -2258,6 +2325,7 @@ const satisfiableAst = (
 	const cells = MutableHashMap.empty<string, ReadonlyArray<unknown>>()
 	const search: Search = {
 		memo: makeMemo(),
+		members: new Map(),
 		cells: (field) =>
 			Option.getOrElse(MutableHashMap.get(cells, field), () => {
 				// The cells come from the constants, so many constants are work
@@ -2292,12 +2360,11 @@ const satisfiableAst = (
 		return Option.match(found.assignment, {
 			onNone: () => satisfiability.Unsatisfiable(),
 			onSome: (assignment) =>
-				// The search sets each field on its own. Below a union of structs
-				// two fields go together, so values that it set on their own may
-				// make a value that no branch has. Then it can not say.
-				schema !== undefined &&
-				assignment.length > 1 &&
-				Arr.some(assignment, ([field]) => Resource.crossesUnion(schema, field))
+				// The search sets each field on its own. Below a union, or below a
+				// field that may be missing, two fields go together, so values that
+				// it set on their own may make a value that the Schema does not
+				// have. Then it can not say.
+				schema !== undefined && tiedFields(schema, assignment)
 					? satisfiability.Unknown({ reason: "union" })
 					: satisfiability.Satisfiable({ example: exampleOf(assignment) }),
 		})

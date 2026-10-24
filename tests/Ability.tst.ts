@@ -425,6 +425,23 @@ describe("Policy", () => {
 		})
 	})
 
+	it("does not let evaluateSync test a value of another kind", () => {
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot)
+		})
+		const residual = Policy.residual(policy, {
+			principal: alice,
+			action: "read",
+			kind: "Bot",
+		})
+		expect(Condition.evaluateSync).type.toBeCallableWith(residual, {
+			value: aliceBot,
+		})
+		expect(Condition.evaluateSync).type.not.toBeCallableWith(residual, {
+			value: aliceTrigger,
+		})
+	})
+
 	it("keeps the kind of a residual", () => {
 		const policy = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot, {

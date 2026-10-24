@@ -686,11 +686,11 @@ describe("Policy", () => {
 		)
 
 		/** A plain value of the kind, made from an example of a search. */
-		const fromExample = (example: Condition.Example) => ({
-			...aliceBot,
-			_tag: "Bot",
-			...example,
-		})
+		// The data of a Bot with the fields of the example. `Bot.make` would
+		// check the example, and a test here needs the value as the search made
+		// it. The conditions read only the data, so the cast is safe here.
+		const fromExample = (example: Condition.Example): Bot =>
+			({ ...aliceBot, _tag: "Bot", ...example }) as unknown as Bot
 
 		const scopedRequest = (
 			request: typeof Request.Type,
@@ -710,7 +710,7 @@ describe("Policy", () => {
 		const inScope = (
 			scope: typeof ScopeName.Type,
 			principal: Caller,
-			value: object,
+			value: Bot,
 		) => {
 			const within = scopes[scope]
 			return (
@@ -1436,6 +1436,104 @@ describe("Policy", () => {
 			"Unknown",
 		)
 		assert.isBelow(Date.now() - start, 300)
+	})
+
+	it("lets an empty struct field hold a scalar in the search", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { data: Schema.Struct({}) },
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.rules(Notes, [
+			Rule.builder(Notes).allow("read", Note),
+			Rule.make({
+				_tag: "Deny",
+				actions: ["read"],
+				resources: ["Note"],
+				when: Condition.builder<
+					{ readonly data: string },
+					unknown,
+					unknown
+				>().eq("data", "secret"),
+			}),
+		])
+		assert.notStrictEqual(
+			Policy.coverage(policy, {
+				principal: alice,
+				action: "read",
+				kind: "Note",
+			})._tag,
+			"All",
+		)
+	})
+
+	it("can not say for two fields of a parent that may be missing", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: {
+				info: Schema.optionalKey(
+					Schema.Struct({ a: Schema.String, b: Schema.String }),
+				),
+			},
+		})
+		const $ = Condition.builder<
+			{ readonly info?: { readonly a: string; readonly b: string } },
+			unknown,
+			unknown
+		>()
+		assert.notStrictEqual(
+			Condition.satisfiable($.and($.eq("info.a", null), $.eq("info.b", "x")), {
+				schema: Resource.descriptor(Note).schema,
+			})._tag,
+			"Satisfiable",
+		)
+	})
+
+	it("folds a condition with shared parts in a short time", () => {
+		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
+		const shared = Arr.reduce(
+			Arr.range(0, 31),
+			$.eq("level", 0) as Condition.Test<Bot>,
+			(c, level) =>
+				$.and(
+					$.or(c, $.eq("name", `${String(level)}-a`)),
+					$.or(c, $.eq("name", `${String(level)}-b`)),
+				),
+		)
+		const count = Condition.fold<number>({
+			true: () => 1,
+			false: () => 1,
+			compare: () => 1,
+			in: () => 1,
+			exists: () => 1,
+			and: (parts) => parts.length,
+			or: (parts) => parts.length,
+			not: () => 1,
+		})
+		const start = Date.now()
+		Effect.runSync(count(shared))
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
+	it("tests many values of one In test in a short time", () => {
+		const Counter = Resource.make("Counter", {
+			actions: ["read"],
+			fields: { x: Schema.Int },
+		})
+		const Counters = Domain.make({ principal: Caller, resources: [Counter] })
+		const values = Array.from({ length: 100_000 }, (_, index) => index)
+		const policy = Policy.define(Counters)(function* (_) {
+			yield* _.allow("read", Counter, {
+				when: ($) => $.or($.lt("x", 0), $.gte("x", 100_000), $.in("x", values)),
+			})
+		})
+		const start = Date.now()
+		Policy.coverage(policy, {
+			principal: alice,
+			action: "read",
+			kind: "Counter",
+		})
+		assert.isBelow(Date.now() - start, 5000)
 	})
 
 	it("searches many values of one field without a deep stack", () => {

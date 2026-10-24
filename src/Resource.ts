@@ -358,57 +358,80 @@ export const fieldPaths = (schema: Schema.Top): ReadonlyArray<string> =>
 	Arr.dedupe(Arr.map(walkFields(schema.ast), (visit) => visit.path))
 
 /**
- * Tests if a path goes into a union with two or more structs. In such a union
- * the fields of one branch go together, so two fields below the union are not
- * free of each other. A search that sets each field on its own may then make
- * a value that no branch has.
+ * Gives the choices in a Schema that a path goes past, as the paths of the
+ * fields that hold them. A choice is a union, or a field that may be missing
+ * or `null`. Two fields below one choice go together: the fields of one
+ * branch of a union, or the fields of a parent that is there or not. A search
+ * that sets each of them on its own may then make a value that the Schema does
+ * not have. A field that holds the choice itself is not below it.
  *
  * @stability stable
- * @category predicates
+ * @category getters
  * @since 0.5.0
  */
-export const crossesUnion = (schema: Schema.Top, path: string): boolean =>
-	crosses(schema.ast, path.split("."), 0, new Set())
+export const choicesOf = (
+	schema: Schema.Top,
+	path: string,
+): ReadonlyArray<string> =>
+	Arr.dedupe(choicesAt(schema.ast, path.split("."), 0, new Set()))
 
-const crosses = (
+const choicesAt = (
 	ast: SchemaAST.AST,
 	names: ReadonlyArray<string>,
 	index: number,
 	open: ReadonlySet<SchemaAST.AST>,
-): boolean => {
-	// Only a node that the path goes past can tie two fields together.
+): ReadonlyArray<string> => {
+	// Only a node that the path goes past is a choice for it.
 	if (index >= names.length) {
-		return false
+		return []
 	}
+	const here = names.slice(0, index).join(".")
 	const name = names[index]!
 	switch (ast._tag) {
 		case "Objects": {
 			const property = ast.propertySignatures.find(
 				(signature) => signature.name === name,
 			)
-			return property !== undefined
-				? crosses(property.type, names, index + 1, new Set())
-				: Arr.some(ast.indexSignatures, (signature) =>
-						crosses(signature.type, names, index + 1, new Set()),
-					)
+			if (property === undefined) {
+				return Arr.flatMap(ast.indexSignatures, (signature) =>
+					choicesAt(signature.type, names, index + 1, new Set()),
+				)
+			}
+			// A parent that may be missing is a choice for the fields below it.
+			const field = names.slice(0, index + 1).join(".")
+			return [
+				...(SchemaAST.isOptional(property.type) && index + 1 < names.length
+					? [field]
+					: []),
+				...choicesAt(property.type, names, index + 1, new Set()),
+			]
 		}
-		case "Union":
-			return (
-				Arr.filter(ast.types, (type) => structsOf(type, open).length > 0)
-					.length > 1 ||
-				Arr.some(ast.types, (type) => crosses(type, names, index, open))
-			)
+		case "Union": {
+			// Two struct branches, or a struct branch and a branch with no
+			// fields, such as `null`, make a choice.
+			const structs = Arr.filter(
+				ast.types,
+				(type) => structsOf(type, open).length > 0,
+			).length
+			return [
+				...(structs > 1 || (structs > 0 && structs < ast.types.length)
+					? [here]
+					: []),
+				...Arr.flatMap(ast.types, (type) =>
+					choicesAt(type, names, index, open),
+				),
+			]
+		}
 		case "Suspend":
-			return (
-				!open.has(ast) &&
-				crosses(ast.thunk(), names, index, new Set([...open, ast]))
-			)
+			return open.has(ast)
+				? []
+				: choicesAt(ast.thunk(), names, index, new Set([...open, ast]))
 		case "Declaration": {
 			const inner = classStruct(ast)
-			return inner !== undefined && crosses(inner, names, index, open)
+			return inner === undefined ? [] : choicesAt(inner, names, index, open)
 		}
 		default:
-			return false
+			return []
 	}
 }
 
@@ -627,6 +650,13 @@ const domainOfType = (
 			return open.has(ast)
 				? anyDomain
 				: domainOfType(ast.thunk(), new Set([...open, ast]))
+		case "Objects":
+			// A struct with no fields holds any value: Effect's
+			// `Schema.Struct({})` takes a string too.
+			return ast.propertySignatures.length === 0 &&
+				ast.indexSignatures.length === 0
+				? anyDomain
+				: objectDomain
 		case "Declaration":
 			// A class, and a declaration of Effect in `objectDeclarations`, holds
 			// a value with parts. Another declaration may hold any value, as
