@@ -2222,6 +2222,57 @@ describe("Policy", () => {
 		)
 	})
 
+	it("checks a rule that names one kind many times in a short time", () => {
+		const start = Date.now()
+		const exit = Schema.decodeUnknownExit(PolicySchemaOfApp)({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: Array.from({ length: 6000 }, () => "Bot"),
+					when: {
+						_tag: "In",
+						field: "level",
+						values: Array.from({ length: 6000 }, (_, index) => ({
+							_tag: "Literal",
+							value: index,
+						})),
+					},
+				},
+			],
+		})
+		assert.isTrue(Exit.isSuccess(exit))
+		assert.isBelow(Date.now() - start, 2000)
+	})
+
+	it("keeps decisions of shared nodes with a predicate for another action", () => {
+		const leaf = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot)
+			yield* _.allow("update", Bot, {
+				when: ($) => $.predicate("never", () => false),
+			})
+		})
+		const shared = Arr.reduce(
+			Arr.range(1, 20),
+			leaf as typeof leaf,
+			(policy) => Policy.all([policy, policy]) as typeof leaf,
+		)
+		const start = Date.now()
+		assert.strictEqual(
+			Effect.runSync(
+				Policy.decide(shared, {
+					principal: alice,
+					action: "read",
+					resource: aliceBot,
+				}),
+			)._tag,
+			"Allow",
+		)
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
 	it("decodes a condition with many fields in a short time", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],

@@ -908,11 +908,10 @@ const decideNode = (
 	context: DecideContext,
 	path: ReadonlyArray<number>,
 ): Effect.Effect<Decision.Decision, unknown, unknown> => {
-	// A predicate must run each time, and a trace must have each step.
-	if (
-		context.trace !== undefined ||
-		nodeHasPredicate(node, context.predicates)
-	) {
+	// A predicate that the request may use must run each time, and a trace
+	// must have each step. A predicate of a rule for another action, kind or
+	// field never runs, so the decision may be kept.
+	if (context.trace !== undefined || usesPredicate(node, context)) {
 		return decideOnce(node, context, path)
 	}
 	const cached = context.decisions.get(node)
@@ -1617,10 +1616,19 @@ const nodeHasPredicate = (
 	})
 
 /** Tests if a rule that the request may use has a predicate. */
-const usesPredicate = (node: Node, context: ResidualContext): boolean =>
+/** What {@link usesPredicate} needs: the request and a memo. */
+interface PredicateContext {
+	readonly action: string
+	readonly kind: string
+	readonly field: string | undefined
+	readonly descriptor: Resource.Descriptor
+	readonly predicates: Map<Node, boolean>
+}
+
+const usesPredicate = (node: Node, context: PredicateContext): boolean =>
 	remember(context.predicates, node, () => usesPredicateOnce(node, context))
 
-const usesPredicateOnce = (node: Node, context: ResidualContext): boolean => {
+const usesPredicateOnce = (node: Node, context: PredicateContext): boolean => {
 	switch (node._tag) {
 		case "Rules":
 			return node.rules.some(
@@ -2516,7 +2524,11 @@ const validate = (
 		at: ReadonlyArray<PropertyKey>,
 	): ReadonlyArray<Issue> => {
 		const all = value.resources.includes("*")
-		const named = Arr.filter(value.resources, (kind) => kind !== "*")
+		// Each kind is checked one time, also when the list names it again. The
+		// order of the kinds does not change the issues, so a set is enough.
+		const named = Array.from(
+			HashSet.fromIterable(Arr.filter(value.resources, (kind) => kind !== "*")),
+		)
 		const descriptors = Arr.flatMap(named, (kind) => {
 			const descriptor = Domain.descriptorOf(domain, kind)
 			return descriptor === undefined ? [] : [descriptor]
