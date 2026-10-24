@@ -25,6 +25,7 @@ import { Authorizer, Policy } from "../src/index.ts"
 import {
 	alice,
 	aliceBot,
+	aliceTrigger,
 	App,
 	Bot,
 	bob,
@@ -67,6 +68,11 @@ const findBot = (id: string | undefined) =>
 		Effect.mapError(() => BotNotFound.make({ id: id ?? "" })),
 	)
 
+// A wrapper that takes any kind. Its load function gives a Trigger, also when
+// the kind is "Bot".
+const readAny = (kind: "Bot" | "Trigger") =>
+	Authorization.requires(Auth, "read", kind, () => Effect.succeed(aliceTrigger))
+
 const Api = HttpApi.make("api").add(
 	HttpApiGroup.make("bots")
 		.add(
@@ -87,6 +93,9 @@ const Api = HttpApi.make("api").add(
 			HttpApiEndpoint.get("secret", "/secret", {
 				success: Schema.String,
 			}),
+			HttpApiEndpoint.get("mixed", "/mixed", {
+				success: Schema.String,
+			}).annotate(Authorization.Required, [readAny("Bot")]),
 		)
 		.annotate(Authorization.GroupRequired, {
 			read: [Authorization.requires(Auth, "read", "Bot")],
@@ -110,7 +119,8 @@ const BotsLive = HttpApiBuilder.group(Api, "bots", (handlers) =>
 			.handle("rename", ({ params }) => Effect.succeed(`renamed ${params.id}`))
 			.handle("count", () => Effect.succeed(bots.size))
 			.handle("health", () => Effect.succeed("ok"))
-			.handle("secret", () => Effect.succeed("secret")),
+			.handle("secret", () => Effect.succeed("secret"))
+			.handle("mixed", () => Effect.succeed("mixed")),
 	),
 )
 
@@ -180,6 +190,29 @@ const BrokenServerLive = Layer.mergeAll(BotsLive, AdminLive).pipe(
 	Layer.provideMerge(PlatformLive),
 )
 
+const MixedServerLive = Layer.mergeAll(BotsLive, AdminLive).pipe(
+	Layer.provideMerge(
+		Layer.mergeAll(
+			AuthenticationLive,
+			Authorization.layer(Authorize, Auth),
+		).pipe(
+			Layer.provide(
+				Authorizer.layer(Auth, {
+					principal: Identity,
+					policy: () =>
+						Effect.succeed(
+							Policy.define(App)(function* (_) {
+								yield* _.allow("read", "Trigger")
+								yield* _.deny("read", Bot)
+							}),
+						),
+				}),
+			),
+		),
+	),
+	Layer.provideMerge(PlatformLive),
+)
+
 describe("HttpApi", () => {
 	it.effect("checks a loaded resource for an endpoint", () =>
 		Effect.gen(function* () {
@@ -234,5 +267,13 @@ describe("HttpApi", () => {
 			)
 			assert.notInclude(JSON.stringify(error), "secret")
 		}).pipe(Effect.scoped, Effect.provide(BrokenServerLive)),
+	)
+
+	it.effect("does not check a loaded value of another kind", () =>
+		Effect.gen(function* () {
+			const client = yield* HttpApiTest.groups(Api, ["bots", "admin"])
+			const exit = yield* Effect.exit(client.bots.mixed())
+			assert.isTrue(Exit.isFailure(exit))
+		}).pipe(Effect.scoped, Effect.provide(MixedServerLive)),
 	)
 })

@@ -123,16 +123,31 @@ export interface CeilingNode {
 export type Node = RulesNode | AllNode | AnyNode | FirstOfNode | CeilingNode
 
 /**
- * The tree of a policy with the types of its predicates. `"~Node"` is only in
- * the types. A node made by hand does not have it, and the node of a policy
- * with predicates has their types. So the node of one policy can not go into
- * a policy with other types.
+ * The tree of a policy with the types of its predicates. Each rule and each
+ * child has the types too, and `"~Node"` is only in the types. A node made by
+ * hand does not have it. So the node of one policy, or a part of it, can not
+ * go into a policy with other types.
  *
  * @stability stable
  * @category models
  * @since 0.4.0
  */
-export type TypedNode<E = never, R = never, O = never> = Node & {
+export type TypedNode<E = never, R = never, O = never> = (
+	| {
+			readonly _tag: "Rules"
+			readonly algorithm: Algorithm
+			readonly rules: ReadonlyArray<Rule.Rule<E, R, O, any, any>>
+	  }
+	| {
+			readonly _tag: "All" | "Any" | "FirstOf"
+			readonly policies: ReadonlyArray<TypedNode<E, R, O>>
+	  }
+	| {
+			readonly _tag: "Ceiling"
+			readonly cap: TypedNode<E, R, O>
+			readonly policy: TypedNode<E, R, O>
+	  }
+) & {
 	readonly "~Node": Condition.Variance<E, R, O>
 }
 
@@ -617,6 +632,12 @@ interface DecideContext {
 	readonly field: string | undefined
 	readonly input: Condition.Input
 	readonly trace: Array<Step> | undefined
+	/**
+	 * The decisions of nodes with no predicates. One node may be a child of
+	 * many nodes, and its decision is the same each time, so it is made only
+	 * one time. A tree with shared nodes may have very many paths.
+	 */
+	readonly decisions: Map<Node, Decision.Decision>
 }
 
 const ruleApplies = (
@@ -691,6 +712,26 @@ const decideRules = Effect.fnUntraced(function* (
 })
 
 const decideNode = (
+	node: Node,
+	context: DecideContext,
+	path: ReadonlyArray<number>,
+): Effect.Effect<Decision.Decision, unknown, unknown> => {
+	// A predicate must run each time, and a trace must have each step.
+	if (context.trace !== undefined || nodeHasPredicate(node)) {
+		return decideOnce(node, context, path)
+	}
+	const cached = context.decisions.get(node)
+	if (cached !== undefined) {
+		return Effect.succeed(cached)
+	}
+	return Effect.tap(decideOnce(node, context, path), (decision) =>
+		Effect.sync(() => {
+			context.decisions.set(node, decision)
+		}),
+	)
+}
+
+const decideOnce = (
 	node: Node,
 	context: DecideContext,
 	path: ReadonlyArray<number>,
@@ -772,6 +813,7 @@ const makeContext = (
 			path: descriptor.path,
 		},
 		trace,
+		decisions: new Map(),
 	}
 }
 
@@ -1051,6 +1093,12 @@ interface ResidualContext {
 		readonly principal: object
 		readonly path: Condition.Input["path"]
 	}
+	/**
+	 * The work done on each node. One node may be a child of many nodes, so
+	 * the work on it is done only one time.
+	 */
+	readonly pairs: Map<Node, Pair>
+	readonly predicates: Map<Node, boolean>
 }
 
 const ruleCondition = (value: Rule.Any, context: ResidualContext): Ast =>
@@ -1084,6 +1132,16 @@ const firstApplicableResidual = (
 }
 
 const residualNode = (node: Node, context: ResidualContext): Pair => {
+	const cached = context.pairs.get(node)
+	if (cached !== undefined) {
+		return cached
+	}
+	const pair = residualOnce(node, context)
+	context.pairs.set(node, pair)
+	return pair
+}
+
+const residualOnce = (node: Node, context: ResidualContext): Pair => {
 	switch (node._tag) {
 		case "Rules": {
 			switch (node.algorithm) {
@@ -1166,8 +1224,20 @@ const residualNode = (node: Node, context: ResidualContext): Pair => {
 /** The name of the predicate of a residual condition that runs `decide`. */
 const policyPredicate = "policy"
 
+const predicateNodes = new WeakMap<Node, boolean>()
+
 /** Tests if a rule of a policy tree has a predicate. */
 const nodeHasPredicate = (node: Node): boolean => {
+	const cached = predicateNodes.get(node)
+	if (cached !== undefined) {
+		return cached
+	}
+	const result = nodeHasPredicateOnce(node)
+	predicateNodes.set(node, result)
+	return result
+}
+
+const nodeHasPredicateOnce = (node: Node): boolean => {
 	switch (node._tag) {
 		case "Rules":
 			return node.rules.some(
@@ -1185,6 +1255,16 @@ const nodeHasPredicate = (node: Node): boolean => {
 
 /** Tests if a rule that the request may use has a predicate. */
 const usesPredicate = (node: Node, context: ResidualContext): boolean => {
+	const cached = context.predicates.get(node)
+	if (cached !== undefined) {
+		return cached
+	}
+	const result = usesPredicateOnce(node, context)
+	context.predicates.set(node, result)
+	return result
+}
+
+const usesPredicateOnce = (node: Node, context: ResidualContext): boolean => {
 	switch (node._tag) {
 		case "Rules":
 			return node.rules.some(
@@ -1222,6 +1302,8 @@ const residualsAny = (
 		kind: request.kind,
 		field: request.field,
 		input: { principal: request.principal, path: descriptor.path },
+		pairs: new Map(),
+		predicates: new Map(),
 	}
 	if (!usesPredicate(policy.node, context)) {
 		try {
@@ -1255,6 +1337,7 @@ const residualsAny = (
 					path: descriptor.path,
 				},
 				trace: undefined,
+				decisions: new Map(),
 			},
 			[],
 		)

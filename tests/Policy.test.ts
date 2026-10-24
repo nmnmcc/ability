@@ -932,6 +932,30 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 1000)
 	})
 
+	it("does the work on a shared child only one time", () => {
+		let any: Policy.Policy<App> = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot)
+		})
+		let all = any
+		for (let depth = 0; depth < 24; depth++) {
+			any = Policy.any([any, any])
+			all = Policy.all([all, all])
+		}
+		const request = { principal: alice, action: "read", kind: "Bot" } as const
+		const start = Date.now()
+		assert.deepStrictEqual(Policy.residual(any, request), Condition.always)
+		assert.deepStrictEqual(Policy.residual(all, request), Condition.always)
+		assert.strictEqual(
+			Policy.decideSync(all, {
+				principal: alice,
+				action: "read",
+				resource: aliceBot,
+			})._tag,
+			"Allow",
+		)
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
 	it("simplifies a long list of tests in a short time", () => {
 		const ids = Array.from({ length: 4000 }, (_, index) => `b${String(index)}`)
 		const policy = Policy.define(App)(function* (_) {

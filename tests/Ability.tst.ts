@@ -236,6 +236,19 @@ describe("Policy", () => {
 		})
 	})
 
+	it("does not let a rule hide in the node of a plain policy", () => {
+		const quota = Rule.builder(App).allow("read", Bot, {
+			when: ($) => $.predicate("quota", () => Effect.map(Quota, (n) => n > 0)),
+		})
+		const plain = Policy.empty(App).node
+		expect<Policy.TypedNode>().type.not.toBeAssignableFrom({
+			_tag: "Rules" as const,
+			algorithm: "denyOverrides" as const,
+			rules: [quota],
+			"~Node": plain["~Node"],
+		})
+	})
+
 	it("does not let the node of a policy go into a policy of other types", () => {
 		expect<Policy.Policy<App>>().type.not.toBeAssignableFrom({
 			...Policy.empty(App),

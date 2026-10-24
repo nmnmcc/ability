@@ -45,6 +45,7 @@ import { HttpRouter } from "effect/http"
 import { HttpApiSchema } from "effect/http-api"
 import * as Authorizer from "./Authorizer.ts"
 import type * as Domain from "./Domain.ts"
+import * as Resource from "./Resource.ts"
 
 /**
  * One check that an endpoint needs: an action on a kind of resource. With
@@ -205,6 +206,16 @@ const makeLayer = (
 							requirement.load(params),
 							services,
 						)
+						// The check is for the kind of the requirement. A value of
+						// another kind is a mistake in `load`, and the check must not
+						// pass with the rules of that other kind.
+						if (Resource.kindOf(value) !== requirement.kind) {
+							return yield* Effect.die(
+								new Error(
+									`The load function of ${options.group.identifier}.${options.endpoint.name} gave a value that is not a ${requirement.kind}`,
+								),
+							)
+						}
 						yield* service.check({
 							action: requirement.action,
 							resource: value,
