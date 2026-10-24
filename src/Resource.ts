@@ -638,9 +638,11 @@ const resolves = (
  * Tests if a Schema has a field whose path fits a pattern. `parts` are the
  * parts of the pattern, split at the dots. A part `**` stands for any number
  * of parts, also none. Another part fits a name when `fits` says so, as a
- * part with `*` fits many names. A record has any key that its key Schema
- * takes, so the walk tries a key made from the part, with each `*` as an
- * empty text or as `a`.
+ * part with `*` fits many names. For a record, the walk asks if the key
+ * Schema takes a key that fits the part. For a template literal key Schema,
+ * with parts that are literals, strings and whole numbers, the answer is
+ * exact. For another key Schema, the walk tries sample keys, so it may miss a
+ * key, and then the answer is `false`.
  *
  * @stability stable
  * @category predicates
@@ -711,16 +713,210 @@ const matchesFrom = (
 			Arr.some(ast.indexSignatures, (signature) =>
 				part === "**"
 					? next(signature.type, index, true)
-					: Arr.some(
-							Arr.dedupe([...fromPart, ...sampleKeys(signature.parameter)]),
-							(key) =>
-								Schema.is(Schema.make(signature.parameter))(key) &&
-								fits(part, key) &&
-								next(signature.type, index + 1, true),
-						),
+					: // A template literal key Schema gives an exact answer. Another
+						// key Schema is tried with sample keys.
+						(globMeetsKeys(part, signature.parameter) ??
+							Arr.some(
+								Arr.dedupe([...fromPart, ...sampleKeys(signature.parameter)]),
+								(key) =>
+									Schema.is(Schema.make(signature.parameter))(key) &&
+									fits(part, key),
+							)) &&
+						next(signature.type, index + 1, true),
 			)
 		)
 	})
+
+/** A part of a key pattern: one character, or `*` for any characters. */
+type GlobToken =
+	{ readonly _tag: "Char"; readonly char: string } | { readonly _tag: "Star" }
+
+/**
+ * A part of a template literal: one character, any characters, or a digit
+ * and then any digits.
+ */
+type TemplateToken =
+	| { readonly _tag: "Char"; readonly char: string }
+	| { readonly _tag: "Any" }
+	| { readonly _tag: "Digit" }
+	| { readonly _tag: "Digits" }
+
+const charsOf = (text: string): ReadonlyArray<TemplateToken> =>
+	Arr.map(Array.from(text), (char) => ({ _tag: "Char", char }) as const)
+
+/**
+ * Gives the token lists of a template literal, one for each choice of its
+ * unions of literals, or `undefined` for a part that this walk does not know,
+ * or a part with checks.
+ */
+const templateTokens = (
+	ast: SchemaAST.TemplateLiteral,
+): ReadonlyArray<ReadonlyArray<TemplateToken>> | undefined => {
+	const partTokens = (
+		part: SchemaAST.AST,
+	): ReadonlyArray<ReadonlyArray<TemplateToken>> | undefined => {
+		if ((part.checks ?? []).length > 0) {
+			return undefined
+		}
+		switch (part._tag) {
+			case "Literal":
+				return [charsOf(String(part.literal))]
+			case "String":
+				return [[{ _tag: "Any" }]]
+			case "Number":
+				// Only whole numbers with no sign. A number such as `-1.5` is
+				// not found, and then the answer is the samples.
+				return [[{ _tag: "Digit" }, { _tag: "Digits" }]]
+			case "Union": {
+				const choices = Arr.map(part.types, partTokens)
+				return Arr.every(choices, (choice) => choice !== undefined)
+					? Arr.flatten(
+							choices as ReadonlyArray<
+								ReadonlyArray<ReadonlyArray<TemplateToken>>
+							>,
+						)
+					: undefined
+			}
+			default:
+				return undefined
+		}
+	}
+	return Arr.reduce(
+		ast.parts,
+		[[]] as ReadonlyArray<ReadonlyArray<TemplateToken>> | undefined,
+		(lists, part) => {
+			const choices = partTokens(part)
+			return lists === undefined || choices === undefined
+				? undefined
+				: // Each list so far, with each choice of this part. The number
+					// of lists is kept small.
+					Arr.take(
+						Arr.flatMap(lists, (list) =>
+							Arr.map(choices, (choice) => [...list, ...choice]),
+						),
+						64,
+					)
+		},
+	)
+}
+
+/**
+ * Tests if a key pattern and a list of template tokens share a key. It walks
+ * the pairs of places in the two lists, with a few characters that stand for
+ * all others, so the answer is exact for these tokens.
+ */
+const tokensMeet = (
+	glob: ReadonlyArray<GlobToken>,
+	template: ReadonlyArray<TemplateToken>,
+): boolean => {
+	const key = (t: number, g: number) => t * (glob.length + 1) + g
+	// The places that a pair can reach with no character.
+	const closeOf = (
+		t: number,
+		g: number,
+	): ReadonlyArray<readonly [number, number]> => [
+		[t, g],
+		...(template[t]?._tag === "Any" || template[t]?._tag === "Digits"
+			? closeOf(t + 1, g)
+			: []),
+		...(glob[g]?._tag === "Star" ? closeOf(t, g + 1) : []),
+	]
+	const alphabet = Arr.dedupe([
+		"a",
+		"0",
+		...Arr.flatMap(glob, (token) =>
+			token._tag === "Char" ? [token.char] : [],
+		),
+		...Arr.flatMap(template, (token) =>
+			token._tag === "Char" ? [token.char] : [],
+		),
+	])
+	const stepTemplate = (t: number, char: string): ReadonlyArray<number> => {
+		const token = template[t]
+		if (token === undefined) {
+			return []
+		}
+		const digit = char >= "0" && char <= "9"
+		switch (token._tag) {
+			case "Char":
+				return token.char === char ? [t + 1] : []
+			case "Any":
+				return [t]
+			case "Digit":
+				return digit ? [t + 1] : []
+			case "Digits":
+				return digit ? [t] : []
+		}
+	}
+	const stepGlob = (g: number, char: string): ReadonlyArray<number> => {
+		const token = glob[g]
+		return token === undefined
+			? []
+			: token._tag === "Char"
+				? token.char === char
+					? [g + 1]
+					: []
+				: char === "."
+					? []
+					: [g]
+	}
+	// A search over the pairs: each pair is seen one time.
+	const search = (
+		frontier: ReadonlyArray<readonly [number, number]>,
+		seen: HashSet.HashSet<number>,
+	): boolean => {
+		const fresh = Arr.filter(
+			Arr.flatMap(frontier, ([t, g]) => closeOf(t, g)),
+			([t, g]) => !HashSet.has(seen, key(t, g)),
+		)
+		if (fresh.length === 0) {
+			return false
+		}
+		if (
+			Arr.some(fresh, ([t, g]) => t === template.length && g === glob.length)
+		) {
+			return true
+		}
+		const next = HashSet.union(
+			seen,
+			HashSet.fromIterable(Arr.map(fresh, ([t, g]) => key(t, g))),
+		)
+		return search(
+			Arr.flatMap(fresh, ([t, g]) =>
+				Arr.flatMap(alphabet, (char) =>
+					Arr.flatMap(stepTemplate(t, char), (t2) =>
+						Arr.map(stepGlob(g, char), (g2) => [t2, g2] as const),
+					),
+				),
+			),
+			next,
+		)
+	}
+	return search([[0, 0]], HashSet.empty())
+}
+
+/**
+ * Tests if a key pattern fits a key of a template literal key Schema, or
+ * `undefined` when the walk does not know the Schema.
+ */
+const globMeetsKeys = (
+	part: string,
+	ast: SchemaAST.AST,
+): boolean | undefined => {
+	if (ast._tag !== "TemplateLiteral" || (ast.checks ?? []).length > 0) {
+		return undefined
+	}
+	const lists = templateTokens(ast)
+	if (lists === undefined) {
+		return undefined
+	}
+	const glob = Arr.map(
+		(part.match(/\*+|[^*]/gu) ?? []) as ReadonlyArray<string>,
+		(token): GlobToken =>
+			token.startsWith("*") ? { _tag: "Star" } : { _tag: "Char", char: token },
+	)
+	return Arr.some(lists, (list) => tokensMeet(glob, list))
+}
 
 /**
  * A few keys that a key Schema of a record takes: each part of a template

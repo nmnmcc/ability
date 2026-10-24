@@ -2170,6 +2170,29 @@ describe("Policy", () => {
 			)._tag
 		assert.strictEqual(decide("entries.*"), "Allow")
 		assert.strictEqual(decide("entries.y*"), "NotApplicable")
+		const Labels = Resource.make("Labels", {
+			actions: ["read"],
+			fields: {
+				labels: Schema.Record(
+					Schema.TemplateLiteral(["id-", Schema.String]),
+					Schema.String,
+				),
+			},
+		})
+		const LabelDomain = Domain.make({ principal: Caller, resources: [Labels] })
+		const label = (pattern: string) =>
+			Policy.decideSync(
+				Policy.define(LabelDomain)(function* (_) {
+					yield* _.allow("read", Labels, { fields: [pattern as never] })
+				}),
+				{
+					principal: alice,
+					action: "read",
+					resource: Labels.make({ labels: {} }),
+				},
+			)._tag
+		assert.strictEqual(label("labels.*-z"), "Allow")
+		assert.strictEqual(label("labels.x*"), "NotApplicable")
 	})
 
 	it("checks a path test only on kinds whose path may have its whole prefix", () => {
