@@ -358,6 +358,61 @@ export const fieldPaths = (schema: Schema.Top): ReadonlyArray<string> =>
 	Arr.dedupe(Arr.map(walkFields(schema.ast), (visit) => visit.path))
 
 /**
+ * Tests if a path goes into a union with two or more structs. In such a union
+ * the fields of one branch go together, so two fields below the union are not
+ * free of each other. A search that sets each field on its own may then make
+ * a value that no branch has.
+ *
+ * @stability stable
+ * @category predicates
+ * @since 0.5.0
+ */
+export const crossesUnion = (schema: Schema.Top, path: string): boolean =>
+	crosses(schema.ast, path.split("."), 0, new Set())
+
+const crosses = (
+	ast: SchemaAST.AST,
+	names: ReadonlyArray<string>,
+	index: number,
+	open: ReadonlySet<SchemaAST.AST>,
+): boolean => {
+	// Only a node that the path goes past can tie two fields together.
+	if (index >= names.length) {
+		return false
+	}
+	const name = names[index]!
+	switch (ast._tag) {
+		case "Objects": {
+			const property = ast.propertySignatures.find(
+				(signature) => signature.name === name,
+			)
+			return property !== undefined
+				? crosses(property.type, names, index + 1, new Set())
+				: Arr.some(ast.indexSignatures, (signature) =>
+						crosses(signature.type, names, index + 1, new Set()),
+					)
+		}
+		case "Union":
+			return (
+				Arr.filter(ast.types, (type) => structsOf(type, open).length > 0)
+					.length > 1 ||
+				Arr.some(ast.types, (type) => crosses(type, names, index, open))
+			)
+		case "Suspend":
+			return (
+				!open.has(ast) &&
+				crosses(ast.thunk(), names, index, new Set([...open, ast]))
+			)
+		case "Declaration": {
+			const inner = classStruct(ast)
+			return inner !== undefined && crosses(inner, names, index, open)
+		}
+		default:
+			return false
+	}
+}
+
+/**
  * Tests if a path names a field of a Schema that holds a value with no named
  * fields: a scalar, or a value such as a record or an array. It goes into
  * records by their keys, and into recursive Schemas as far as the path goes.

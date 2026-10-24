@@ -842,11 +842,20 @@ export interface Input {
  * Gets a field of an object by a path with dots. A missing field, or a field
  * under a value that is not an object, gives `null`.
  */
+/**
+ * Tests if an object has a field. A field may be the object's own, or come
+ * from its class, as a getter does: `Schema.is` reads such a field too. A
+ * name that every object has from `Object.prototype`, such as `constructor`
+ * or `__proto__`, is not a field unless the object has it as its own.
+ */
+const hasField = (value: object, key: string): boolean =>
+	Object.hasOwn(value, key) || (key in value && !(key in Object.prototype))
+
 const getField = (value: unknown, path: string): unknown =>
 	Option.match(
 		Arr.reduce(path.split("."), Option.some(value), (cursor, key) =>
 			Option.flatMap(cursor, (current) =>
-				isObject(current) && Object.hasOwn(current, key)
+				isObject(current) && hasField(current, key)
 					? Option.some((current as Record<string, unknown>)[key])
 					: Option.none(),
 			),
@@ -1768,8 +1777,9 @@ export interface Example {
  * The answer of {@link satisfiable}:
  * - `Satisfiable`: some value makes the condition true. `example` is one.
  * - `Unsatisfiable`: no value makes the condition true.
- * - `Unknown`: the search can not say. The condition has a predicate, or the
- *   search went past its budget.
+ * - `Unknown`: the search can not say. The condition has a predicate, the
+ *   search went past its budget, or it set two fields below a union of
+ *   structs, where the fields of one branch go together.
  *
  * @stability stable
  * @category models
@@ -1778,7 +1788,7 @@ export interface Example {
 export type Satisfiability = Data.TaggedEnum<{
 	Satisfiable: { readonly example: Example }
 	Unsatisfiable: {}
-	Unknown: { readonly reason: "predicate" | "budget" }
+	Unknown: { readonly reason: "predicate" | "budget" | "union" }
 }>
 
 const satisfiability = Data.taggedEnum<Satisfiability>()
@@ -1805,9 +1815,6 @@ const opaque: object = Object.freeze({})
 
 /** Marks a field that a step of the search did not fix. */
 const free: unique symbol = Symbol("free")
-
-const sameValue = (left: unknown, right: unknown): boolean =>
-	left === right || (Number.isNaN(left) && Number.isNaN(right))
 
 /** The least number that is greater than `value`. */
 const nextUp = (value: number): number => {
@@ -1906,26 +1913,47 @@ const cellsOf = (
 	domain: Resource.FieldDomain,
 	constants: ReadonlyArray<Scalar>,
 ): ReadonlyArray<unknown> =>
-	Arr.dedupeWith(
-		[
-			...(domain.null ? [null] : []),
-			...(domain.object ? [opaque] : []),
-			...(domain.boolean ? [true, false] : []),
-			...(domain.string
-				? stringCells(
-						Arr.filter(constants, (value) => typeof value === "string"),
-					)
-				: []),
-			...(domain.number === "none"
-				? []
-				: numberCells(
-						domain.number,
-						Arr.filter(constants, (value) => typeof value === "number"),
-					)),
-			...domain.literals,
-		] as ReadonlyArray<unknown>,
-		sameValue,
+	dedupeCells([
+		...(domain.null ? [null] : []),
+		...(domain.object ? [opaque] : []),
+		...(domain.boolean ? [true, false] : []),
+		...(domain.string
+			? stringCells(Arr.filter(constants, (value) => typeof value === "string"))
+			: []),
+		...(domain.number === "none"
+			? []
+			: numberCells(
+					domain.number,
+					Arr.filter(constants, (value) => typeof value === "number"),
+				)),
+		...domain.literals,
+	])
+
+/**
+ * A text for a cell. Two cells get one text when every test gives the same
+ * answer for them: `0` and `-0` are one, and `NaN` is one.
+ */
+const cellText = (cell: unknown): string =>
+	cell === opaque
+		? "opaque"
+		: typeof cell === "number"
+			? `number:${Object.is(cell, -0) ? "0" : String(cell)}`
+			: `${typeof cell}:${String(cell)}`
+
+/**
+ * Keeps the first cell of each text, in order. A map from each text to its
+ * first place does it in one pass. A test of each pair would take a very long
+ * time for many constants.
+ */
+const dedupeCells = (cells: ReadonlyArray<unknown>): ReadonlyArray<unknown> => {
+	const texts = Arr.map(cells, cellText)
+	const first = HashMap.fromIterable(
+		Arr.reverse(Arr.map(texts, (text, index) => [text, index] as const)),
 	)
+	return Arr.filter(cells, (_, index) =>
+		Option.contains(HashMap.get(first, texts[index]!), index),
+	)
+}
 
 class OutOfBudget {}
 
@@ -2232,6 +2260,15 @@ const satisfiableAst = (
 		memo: makeMemo(),
 		cells: (field) =>
 			Option.getOrElse(MutableHashMap.get(cells, field), () => {
+				// The cells come from the constants, so many constants are work
+				// that the budget must count before the cells are made.
+				const known = HashMap.get(constants, field)
+				if (
+					Option.isSome(known) &&
+					HashSet.size(known.value) > (options.budget ?? 1_000_000)
+				) {
+					throw new OutOfBudget()
+				}
 				const found = cellsOf(
 					schema === undefined
 						? Resource.anyDomain
@@ -2255,7 +2292,14 @@ const satisfiableAst = (
 		return Option.match(found.assignment, {
 			onNone: () => satisfiability.Unsatisfiable(),
 			onSome: (assignment) =>
-				satisfiability.Satisfiable({ example: exampleOf(assignment) }),
+				// The search sets each field on its own. Below a union of structs
+				// two fields go together, so values that it set on their own may
+				// make a value that no branch has. Then it can not say.
+				schema !== undefined &&
+				assignment.length > 1 &&
+				Arr.some(assignment, ([field]) => Resource.crossesUnion(schema, field))
+					? satisfiability.Unknown({ reason: "union" })
+					: satisfiability.Satisfiable({ example: exampleOf(assignment) }),
 		})
 	} catch (error) {
 		if (error instanceof OutOfBudget) {

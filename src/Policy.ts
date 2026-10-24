@@ -1788,7 +1788,7 @@ export type Coverage<
 	}
 	Unknown: {
 		readonly condition: Condition.Condition<E, R, O, I>
-		readonly reason: "predicate" | "budget"
+		readonly reason: "predicate" | "budget" | "union"
 	}
 }>
 
@@ -1803,7 +1803,7 @@ type AnyCoverage = Data.TaggedEnum<{
 	}
 	Unknown: {
 		readonly condition: Ast
-		readonly reason: "predicate" | "budget"
+		readonly reason: "predicate" | "budget" | "union"
 	}
 }>
 

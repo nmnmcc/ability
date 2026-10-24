@@ -491,23 +491,23 @@ const keyTexts = (
 			readonly texts: ReadonlyArray<string>
 			readonly seen: ReadonlySet<object>
 	  }
-	| undefined =>
-	Option.getOrUndefined(
-		Arr.reduce(
-			values,
-			Option.some({ texts: Arr.empty<string>(), seen }),
-			(state, value) =>
-				Option.flatMap(state, (done) => {
-					const keyed = keyText(value, done.seen, classes)
-					return keyed === undefined
-						? Option.none()
-						: Option.some({
-								texts: Arr.append(done.texts, keyed.text),
-								seen: keyed.seen,
-							})
-				}),
-		),
+	| undefined => {
+	// `mapAccum` passes the seen objects from each value to the next, and it
+	// makes the list of texts in one pass. A value with no text makes the
+	// state `undefined`, and the values after it are not read.
+	const [last, texts] = Arr.mapAccum(
+		values,
+		seen as ReadonlySet<object> | undefined,
+		(before, value): readonly [ReadonlySet<object> | undefined, string] => {
+			if (before === undefined) {
+				return [undefined, ""]
+			}
+			const keyed = keyText(value, before, classes)
+			return keyed === undefined ? [undefined, ""] : [keyed.seen, keyed.text]
+		},
 	)
+	return last === undefined ? undefined : { texts, seen: last }
+}
 
 /**
  * Gives a text that names a principal value. Two values get one text only when

@@ -1131,4 +1131,38 @@ describe("Authorizer", () => {
 			assert.strictEqual(failureTag(exit), "Forbidden")
 		}),
 	)
+
+	it.effect("makes the cache key of a long list in a short time", () =>
+		Effect.gen(function* () {
+			class Many extends Principal.Class<Many>("Many")({
+				roles: Schema.Array(Schema.String),
+			}) {}
+			const Manys = Domain.make({ principal: Many, resources: [Bot] })
+			class CurrentMany extends Context.Service<CurrentMany, Many>()(
+				"@nmnmcc/ability/tests/Authorizer.test/CurrentMany",
+			) {}
+			class ManyAuth extends Authorizer.Service<
+				ManyAuth,
+				{ requires: CurrentMany }
+			>()("test/ManyAuth", Manys) {}
+			const layer = Authorizer.layer(ManyAuth, {
+				principal: CurrentMany,
+				policy: () =>
+					Effect.succeed(
+						Policy.define(Manys)(function* (_) {
+							yield* _.allow("read", Bot)
+						}),
+					),
+			})
+			const user = Many.make({
+				roles: Array.from({ length: 40_000 }, (_, index) => String(index)),
+			})
+			const start = Date.now()
+			yield* ManyAuth.check({ action: "read", resource: aliceBot }).pipe(
+				Effect.provideService(CurrentMany, user),
+				Effect.provide(layer),
+			)
+			assert.isBelow(Date.now() - start, 1000)
+		}),
+	)
 })

@@ -1356,6 +1356,88 @@ describe("Policy", () => {
 		assert.notStrictEqual(covered._tag, "All")
 	})
 
+	it("reads a field that a value has from its class", () => {
+		class Info {
+			get owner() {
+				return "alice"
+			}
+		}
+		const value = { info: new Info() }
+		const $ = Condition.builder<
+			{ readonly info: { readonly owner: string } },
+			unknown,
+			unknown
+		>()
+		assert.isTrue(Condition.evaluateSync($.exists("info.owner"), { value }))
+		// A name of `Object.prototype` is not a field.
+		assert.isFalse(
+			Condition.evaluateSync(
+				Condition.builder<
+					{ readonly constructor: string | null },
+					unknown,
+					unknown
+				>().exists("constructor"),
+				{ value: {} },
+			),
+		)
+	})
+
+	it("can not say for two fields below a union of structs", () => {
+		const Pair = Resource.make("Pair", {
+			actions: ["read"],
+			fields: {
+				pair: Schema.Union([
+					Schema.Struct({ a: Schema.Literal("a"), b: Schema.Literal("a") }),
+					Schema.Struct({ a: Schema.Literal("b"), b: Schema.Literal("b") }),
+				]),
+			},
+		})
+		const condition = Condition.builder<
+			{ readonly pair: { readonly a: "a" | "b"; readonly b: "a" | "b" } },
+			unknown,
+			unknown
+		>().and(
+			Condition.builder<
+				{ readonly pair: { readonly a: "a" | "b" } },
+				unknown,
+				unknown
+			>().eq("pair.a", "a"),
+			Condition.builder<
+				{ readonly pair: { readonly b: "a" | "b" } },
+				unknown,
+				unknown
+			>().eq("pair.b", "b"),
+		)
+		assert.notStrictEqual(
+			Condition.satisfiable(condition, {
+				schema: Resource.descriptor(Pair).schema,
+			})._tag,
+			"Satisfiable",
+		)
+	})
+
+	it("stops a search with many constants at once when the budget is small", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { name: Schema.String },
+		})
+		const names = Array.from({ length: 12_000 }, (_, index) => String(index))
+		const condition = Condition.builder<
+			{ readonly name: string },
+			unknown,
+			unknown
+		>().in("name", names)
+		const start = Date.now()
+		assert.strictEqual(
+			Condition.satisfiable(condition, {
+				schema: Resource.descriptor(Note).schema,
+				budget: 0,
+			})._tag,
+			"Unknown",
+		)
+		assert.isBelow(Date.now() - start, 300)
+	})
+
 	it("searches many values of one field without a deep stack", () => {
 		const ids = Array.from({ length: 4000 }, (_, index) => `b${String(index)}`)
 		const policy = Policy.define(App)(function* (_) {
