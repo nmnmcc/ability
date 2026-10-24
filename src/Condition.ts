@@ -18,8 +18,8 @@
  * check. A rule with a predicate can not become JSON, and the type system
  * stops you when you try.
  *
+ * @stability stable
  * @since 0.3.0
- * @module
  */
 import type * as Effect from "effect/Effect"
 import type * as Schema from "effect/Schema"
@@ -29,16 +29,18 @@ import type * as Resource from "./Resource.ts"
 /**
  * A value that a condition can compare.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Scalar = string | number | boolean | null
 
 /**
  * A fixed value in a condition.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Literal {
 	readonly _tag: "Literal"
@@ -49,8 +51,9 @@ export interface Literal {
  * A field of the principal. {@link partial} puts the value of the field in its
  * place.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface PrincipalRef {
 	readonly _tag: "Principal"
@@ -60,28 +63,32 @@ export interface PrincipalRef {
 /**
  * A field of the principal with a known value type.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Ref<A> = PrincipalRef & { readonly "~Ref"?: () => A }
 
 /**
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Operand = Literal | PrincipalRef
 
 /**
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type CompareOperator = "eq" | "ne" | "lt" | "lte" | "gt" | "gte"
 
 /**
  * Always true.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface True {
 	readonly _tag: "True"
@@ -90,8 +97,9 @@ export interface True {
 /**
  * Always false.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface False {
 	readonly _tag: "False"
@@ -102,8 +110,9 @@ export interface False {
  * `lte`, `gt` and `gte` are false when the two sides are not both numbers or
  * both strings.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Compare {
 	readonly _tag: "Compare"
@@ -115,8 +124,9 @@ export interface Compare {
 /**
  * True when a field is equal to one of the values.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface In {
 	readonly _tag: "In"
@@ -127,8 +137,9 @@ export interface In {
 /**
  * True when a field is not `null` and not missing.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Exists {
 	readonly _tag: "Exists"
@@ -139,8 +150,9 @@ export interface Exists {
  * True when the path of the resource starts with the prefix. A resource with
  * no path is never under a prefix.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Under {
 	readonly _tag: "Under"
@@ -148,8 +160,9 @@ export interface Under {
 }
 
 /**
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface And {
 	readonly _tag: "And"
@@ -157,8 +170,9 @@ export interface And {
 }
 
 /**
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Or {
 	readonly _tag: "Or"
@@ -166,8 +180,9 @@ export interface Or {
 }
 
 /**
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Not {
 	readonly _tag: "Not"
@@ -177,8 +192,9 @@ export interface Not {
 /**
  * A test that runs an `Effect`. It can not become JSON or a query.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Predicate {
 	readonly _tag: "Predicate"
@@ -192,8 +208,9 @@ export interface Predicate {
 /**
  * The nodes of a condition, without types.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Ast =
 	True | False | Compare | In | Exists | Under | And | Or | Not | Predicate
@@ -201,14 +218,16 @@ export type Ast =
 /**
  * The type marker for a condition with a {@link Predicate}.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Opaque = "Opaque"
 
 /**
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Variance<E, R, O> {
 	readonly E: () => E
@@ -221,8 +240,9 @@ export interface Variance<E, R, O> {
  * predicates. `O` is {@link Opaque} when the condition has a predicate, and
  * `never` when it is plain data.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Condition<E = never, R = never, O = never> = Ast & {
 	readonly "~Condition"?: Variance<E, R, O>
@@ -231,16 +251,18 @@ export type Condition<E = never, R = never, O = never> = Ast & {
 /**
  * Any condition.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Any = Condition<any, any, any>
 
 /**
  * The error type of a condition.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type Error<C> = C extends {
 	readonly "~Condition"?: Variance<infer E, infer _R, infer _O>
@@ -251,10 +273,11 @@ export type Error<C> = C extends {
 /**
  * The service type of a condition.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
-export type Context<C> = C extends {
+export type Services<C> = C extends {
 	readonly "~Condition"?: Variance<infer _E, infer R, infer _O>
 }
 	? R
@@ -263,8 +286,9 @@ export type Context<C> = C extends {
 /**
  * {@link Opaque} when a condition has a predicate.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type OpaqueOf<C> = C extends {
 	readonly "~Condition"?: Variance<infer _E, infer _R, infer O>
@@ -292,8 +316,9 @@ type FieldPathInternal<T, Depth extends number> = [Depth] extends [never]
  * checking stays fast. For a union of types, only the common fields are
  * paths.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type FieldPath<T> = [T] extends [object]
 	? FieldPathInternal<T, 4>
@@ -305,8 +330,9 @@ type Normalize<A> = Exclude<A, undefined> | (undefined extends A ? null : never)
  * The type of the field of `T` at `Path`. A field that may be missing may also
  * be `null`.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type PathValue<
 	T,
@@ -327,8 +353,9 @@ export type PathValue<
  * A value for a field of type `A`: a fixed value, or a field of the principal
  * with the same type.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type OperandOf<A> = Extract<A, Scalar> | Ref<A>
 
@@ -342,8 +369,9 @@ type OrderedPath<T> = {
  * Makes conditions for a resource with the data type `Data` and the value type
  * `Value`, and a principal with the type `P`.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Builder<Data, Value, P> {
 	/** The field is equal to the value. */
@@ -389,13 +417,13 @@ export interface Builder<Data, Value, P> {
 	) => Ref<PathValue<P, F>>
 	readonly and: <const Cs extends ReadonlyArray<Any>>(
 		...conditions: Cs
-	) => Condition<Error<Cs[number]>, Context<Cs[number]>, OpaqueOf<Cs[number]>>
+	) => Condition<Error<Cs[number]>, Services<Cs[number]>, OpaqueOf<Cs[number]>>
 	readonly or: <const Cs extends ReadonlyArray<Any>>(
 		...conditions: Cs
-	) => Condition<Error<Cs[number]>, Context<Cs[number]>, OpaqueOf<Cs[number]>>
+	) => Condition<Error<Cs[number]>, Services<Cs[number]>, OpaqueOf<Cs[number]>>
 	readonly not: <C extends Any>(
 		condition: C,
-	) => Condition<Error<C>, Context<C>, OpaqueOf<C>>
+	) => Condition<Error<C>, Services<C>, OpaqueOf<C>>
 	/**
 	 * A test that runs any code. It may give a boolean or an `Effect`. A
 	 * condition with a predicate can not become JSON or a query.
@@ -413,8 +441,9 @@ export interface Builder<Data, Value, P> {
  * Makes a builder. Rules give you a builder with the right types, so you do not
  * often need this.
  *
+ * @stability stable
+ * @category constructors
  * @since 0.3.0
- * @category Constructors
  */
 export const builder: <Data, Value, P>() => Builder<Data, Value, P> =
 	internal.builder
@@ -422,54 +451,60 @@ export const builder: <Data, Value, P>() => Builder<Data, Value, P> =
 /**
  * Always true.
  *
+ * @stability stable
+ * @category constructors
  * @since 0.3.0
- * @category Constructors
  */
 export const always: Condition = internal.always
 
 /**
  * Always false.
  *
+ * @stability stable
+ * @category constructors
  * @since 0.3.0
- * @category Constructors
  */
 export const never: Condition = internal.never
 
 /**
  * True when all the conditions are true. With no conditions, it is true.
  *
+ * @stability stable
+ * @category combinators
  * @since 0.3.0
- * @category Combinators
  */
 export const and: <const Cs extends ReadonlyArray<Any>>(
 	...conditions: Cs
-) => Condition<Error<Cs[number]>, Context<Cs[number]>, OpaqueOf<Cs[number]>> =
+) => Condition<Error<Cs[number]>, Services<Cs[number]>, OpaqueOf<Cs[number]>> =
 	internal.and as never
 
 /**
  * True when one of the conditions is true. With no conditions, it is false.
  *
+ * @stability stable
+ * @category combinators
  * @since 0.3.0
- * @category Combinators
  */
 export const or: <const Cs extends ReadonlyArray<Any>>(
 	...conditions: Cs
-) => Condition<Error<Cs[number]>, Context<Cs[number]>, OpaqueOf<Cs[number]>> =
+) => Condition<Error<Cs[number]>, Services<Cs[number]>, OpaqueOf<Cs[number]>> =
 	internal.or as never
 
 /**
+ * @stability stable
+ * @category combinators
  * @since 0.3.0
- * @category Combinators
  */
 export const not: <C extends Any>(
 	condition: C,
-) => Condition<Error<C>, Context<C>, OpaqueOf<C>> = internal.not as never
+) => Condition<Error<C>, Services<C>, OpaqueOf<C>> = internal.not as never
 
 /**
  * The data that a condition needs for a test.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Input {
 	/** The resource value. */
@@ -483,22 +518,31 @@ export interface Input {
 /**
  * Tests a condition on a value. A predicate may fail with its error.
  *
+ * @stability stable
+ * @category evaluation
  * @since 0.3.0
- * @category Evaluation
  */
-export const evaluate: <E, R, O>(
-	condition: Condition<E, R, O>,
-	input: Input,
-) => Effect.Effect<boolean, E, R> = internal.evaluate as never
+export const evaluate: {
+	(
+		input: Input,
+	): <E, R, O>(condition: Condition<E, R, O>) => Effect.Effect<boolean, E, R>
+	<E, R, O>(
+		condition: Condition<E, R, O>,
+		input: Input,
+	): Effect.Effect<boolean, E, R>
+} = internal.evaluate as never
 
 /**
  * Tests a condition with no predicate on a value, at once.
  *
+ * @stability stable
+ * @category evaluation
  * @since 0.3.0
- * @category Evaluation
  */
-export const evaluateSync: (condition: Condition, input: Input) => boolean =
-	internal.evaluateSync
+export const evaluateSync: {
+	(input: Input): (condition: Condition) => boolean
+	(condition: Condition, input: Input): boolean
+} = internal.evaluateSync
 
 /**
  * Puts the principal into a condition and expands `Under` with the path of the
@@ -506,24 +550,32 @@ export const evaluateSync: (condition: Condition, input: Input) => boolean =
  * `Under` nodes. It is `True` or `False` when the answer does not depend on the
  * resource value.
  *
+ * @stability stable
+ * @category evaluation
  * @since 0.3.0
- * @category Evaluation
  */
-export const partial: <E, R, O>(
-	condition: Condition<E, R, O>,
-	input: {
+export const partial: {
+	(input: {
 		readonly principal?: object | undefined
 		readonly path?: ReadonlyArray<Resource.PathSegment> | undefined
-	},
-) => Condition<E, R, O> = internal.partial as never
+	}): <E, R, O>(condition: Condition<E, R, O>) => Condition<E, R, O>
+	<E, R, O>(
+		condition: Condition<E, R, O>,
+		input: {
+			readonly principal?: object | undefined
+			readonly path?: ReadonlyArray<Resource.PathSegment> | undefined
+		},
+	): Condition<E, R, O>
+} = internal.partial as never
 
 /**
  * Makes a condition smaller without a change to its meaning. It removes `True`
  * and `False` from `And` and `Or`, joins nested `And` and `Or` nodes, and
  * removes double `Not` nodes.
  *
+ * @stability stable
+ * @category evaluation
  * @since 0.3.0
- * @category Evaluation
  */
 export const simplify: <E, R, O>(
 	condition: Condition<E, R, O>,
@@ -533,8 +585,9 @@ export const simplify: <E, R, O>(
  * The functions that change each node of a condition into another form, such
  * as a database query.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Interpreter<A> {
 	readonly true: () => A
@@ -552,15 +605,17 @@ export interface Interpreter<A> {
 /**
  * The error when `fold` can not change a node.
  *
+ * @stability stable
+ * @category errors
  * @since 0.3.0
- * @category Errors
  */
 export const Untranslatable: typeof internal.Untranslatable =
 	internal.Untranslatable
 
 /**
+ * @stability stable
+ * @category errors
  * @since 0.3.0
- * @category Errors
  */
 export type Untranslatable = internal.Untranslatable
 
@@ -569,8 +624,9 @@ export type Untranslatable = internal.Untranslatable
  * {@link partial} first: `fold` fails on principal fields and on `Under`
  * nodes, and on predicates when the interpreter has no `predicate` function.
  *
+ * @stability stable
+ * @category converting
  * @since 0.3.0
- * @category Conversions
  */
 export const fold: {
 	<A>(
@@ -585,23 +641,26 @@ export const fold: {
 /**
  * The fields that a condition uses.
  *
+ * @stability stable
+ * @category getters
  * @since 0.3.0
- * @category Accessors
  */
 export const fields: (condition: Any) => ReadonlyArray<string> = internal.fields
 
 /**
  * The JSON form of a condition with no predicate.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Encoded =
 	Exclude<Ast, Predicate | And | Or | Not> | EncodedAnd | EncodedOr | EncodedNot
 
 /**
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface EncodedAnd {
 	readonly _tag: "And"
@@ -609,8 +668,9 @@ export interface EncodedAnd {
 }
 
 /**
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface EncodedOr {
 	readonly _tag: "Or"
@@ -618,8 +678,9 @@ export interface EncodedOr {
 }
 
 /**
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface EncodedNot {
 	readonly _tag: "Not"
@@ -630,7 +691,8 @@ export interface EncodedNot {
  * The Schema of a condition with no predicate. It checks the shape only. Use
  * `Policy.schema` to check the field names against a domain too.
  *
+ * @stability stable
+ * @category schemas
  * @since 0.3.0
- * @category Schemas
  */
 export const schema: Schema.Codec<Condition, Encoded> = internal.schema

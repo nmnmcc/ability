@@ -18,21 +18,23 @@
  * `["org", organizationId, "user", ownerUserId, "bot", id]`. A condition can
  * then ask if a value is under a part of the tree. See `Condition.under`.
  *
+ * @stability stable
  * @since 0.3.0
- * @module
  */
 import * as Schema from "effect/Schema"
 import * as internal from "./internal/resource.ts"
 
 /**
+ * @stability stable
+ * @category type IDs
  * @since 0.3.0
- * @category Type Ids
  */
 export const TypeId: "~@nmnmcc/ability/Resource" = internal.TypeId
 
 /**
+ * @stability stable
+ * @category type IDs
  * @since 0.3.0
- * @category Type Ids
  */
 export type TypeId = typeof TypeId
 
@@ -40,16 +42,18 @@ export type TypeId = typeof TypeId
  * One part of a resource path. A string is a fixed part. A field reference
  * takes the part from a field of the value.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type PathSegment = string | FieldRef<string>
 
 /**
  * A reference to a top-level field of a resource, used in a path.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface FieldRef<Name extends string> {
 	readonly _tag: "Field"
@@ -59,8 +63,9 @@ export interface FieldRef<Name extends string> {
 /**
  * The runtime data of a resource.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Descriptor {
 	readonly kind: string
@@ -76,8 +81,9 @@ export interface Descriptor {
  * A resource. `Kind` is its name, `Action` is the union of its actions, `Data`
  * is the type of its Schema fields, and `Value` is the type of its values.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Resource<
 	Kind extends string,
@@ -97,48 +103,54 @@ export interface Resource<
 /**
  * Any resource.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Any = Resource<string, string, object, { readonly _tag: string }>
 
 /**
  * The kind name of a resource.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type Kind<R> = R extends Resource<infer K, any, any, any> ? K : never
 
 /**
  * The actions of a resource.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type Action<R> = R extends Resource<any, infer A, any, any> ? A : never
 
 /**
  * The type of the Schema fields of a resource, without `_tag`.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type Data<R> = R extends Resource<any, any, infer D, any> ? D : never
 
 /**
  * The type of the values of a resource.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type Value<R> = R extends Resource<any, any, any, infer V> ? V : never
 
 /**
  * The options of a resource.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Options<
 	Actions extends ReadonlyArray<string>,
@@ -158,8 +170,9 @@ export interface Options<
 /**
  * The type of a class made by {@link Class}.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Class<
 	Self,
@@ -198,8 +211,9 @@ export type Class<
  * const bot = new Bot({ id: "b1", ownerUserId: "u1" })
  * ```
  *
+ * @stability stable
+ * @category constructors
  * @since 0.3.0
- * @category Constructors
  */
 export const Class: <Self = never>(
 	identifier?: string,
@@ -217,8 +231,9 @@ export const Class: <Self = never>(
 /**
  * A resource made by {@link make}. Its values are plain objects.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Struct<
 	Kind extends string,
@@ -243,8 +258,9 @@ export interface Struct<
  * Makes a resource from plain fields. Its values are plain objects with a
  * `_tag` field.
  *
+ * @stability stable
+ * @category constructors
  * @since 0.3.0
- * @category Constructors
  */
 export const make: <
 	const Kind extends string,
@@ -258,15 +274,17 @@ export const make: <
 /**
  * Tests if a value is a resource.
  *
+ * @stability stable
+ * @category guards
  * @since 0.3.0
- * @category Guards
  */
 export const isResource: (u: unknown) => u is Any = internal.isResource
 
 /**
  * Gets the runtime data of a resource.
  *
+ * @stability stable
+ * @category getters
  * @since 0.3.0
- * @category Accessors
  */
 export const descriptor: (resource: Any) => Descriptor = internal.descriptor

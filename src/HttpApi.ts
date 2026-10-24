@@ -25,8 +25,8 @@
  * This module is a separate entry point, `@nmnmcc/ability/HttpApi`, because
  * `effect/http-api` is not stable yet.
  *
+ * @stability unstable
  * @since 0.3.0
- * @module
  */
 import * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
@@ -42,8 +42,9 @@ import * as internal from "./internal/httpApi.ts"
  * and checks the action on that value. Without `load`, it checks the action
  * on the kind.
  *
+ * @stability unstable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Requirement {
 	readonly action: string
@@ -56,8 +57,9 @@ export interface Requirement {
 /**
  * The checks that an endpoint needs.
  *
+ * @stability unstable
+ * @category annotations
  * @since 0.3.0
- * @category Annotations
  */
 export class Required extends Context.Service<
 	Required,
@@ -68,8 +70,9 @@ export class Required extends Context.Service<
  * The checks for every endpoint of a group with no {@link Required}
  * annotation. `read` is for GET requests. `write` is for all other methods.
  *
+ * @stability unstable
+ * @category annotations
  * @since 0.3.0
- * @category Annotations
  */
 export class GroupRequired extends Context.Service<
 	GroupRequired,
@@ -86,8 +89,9 @@ export class GroupRequired extends Context.Service<
  * `load` may fail. Its errors must be errors of the middleware, and the
  * services that it needs must be given to {@link layer}.
  *
+ * @stability unstable
+ * @category constructors
  * @since 0.3.0
- * @category Constructors
  */
 export const requires: <
 	A extends { readonly domain: Domain.Any },
@@ -105,8 +109,9 @@ export const requires: <
  * The errors of the middleware, with HTTP status codes: 403 for
  * `Forbidden`, 503 for `PolicyUnavailable`, and 409 for `Pending`.
  *
+ * @stability unstable
+ * @category errors
  * @since 0.3.0
- * @category Errors
  */
 export const errors = [
 	Authorizer.Forbidden.pipe(HttpApiSchema.status(403)),
@@ -124,8 +129,9 @@ export const errors = [
  * caller. `R` is the type of the services that the `load` functions need. The
  * layer takes them when it is built too.
  *
+ * @stability unstable
+ * @category layers
  * @since 0.3.0
- * @category Layers
  */
 export const layer: <
 	Self,

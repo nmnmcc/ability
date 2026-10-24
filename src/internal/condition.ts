@@ -185,7 +185,7 @@ export const hasPredicate = (ast: Ast): boolean => {
 }
 
 /** @internal */
-export const evaluateSync = (ast: Ast, input: Condition.Input): boolean => {
+export const evaluateSyncOf = (ast: Ast, input: Condition.Input): boolean => {
 	switch (ast._tag) {
 		case "True":
 			return true
@@ -208,11 +208,11 @@ export const evaluateSync = (ast: Ast, input: Condition.Input): boolean => {
 		case "Under":
 			return testUnder(ast.prefix, input)
 		case "And":
-			return ast.conditions.every((child) => evaluateSync(child, input))
+			return ast.conditions.every((child) => evaluateSyncOf(child, input))
 		case "Or":
-			return ast.conditions.some((child) => evaluateSync(child, input))
+			return ast.conditions.some((child) => evaluateSyncOf(child, input))
 		case "Not":
-			return !evaluateSync(ast.condition, input)
+			return !evaluateSyncOf(ast.condition, input)
 		case "Predicate":
 			// The types stop this. A predicate needs `evaluate`.
 			throw new Error(
@@ -222,22 +222,22 @@ export const evaluateSync = (ast: Ast, input: Condition.Input): boolean => {
 }
 
 /** @internal */
-export const evaluate = (
+export const evaluateOf = (
 	ast: Ast,
 	input: Condition.Input,
 ): Effect.Effect<boolean, unknown, unknown> => {
 	if (!hasPredicate(ast)) {
-		return Effect.sync(() => evaluateSync(ast, input))
+		return Effect.sync(() => evaluateSyncOf(ast, input))
 	}
 	switch (ast._tag) {
 		case "Predicate":
 			return ast.run(input.value, input.principal)
 		case "Not":
-			return Effect.map(evaluate(ast.condition, input), (value) => !value)
+			return Effect.map(evaluateOf(ast.condition, input), (value) => !value)
 		case "And":
 			return Effect.gen(function* () {
 				for (const child of ast.conditions) {
-					if (!(yield* evaluate(child, input))) {
+					if (!(yield* evaluateOf(child, input))) {
 						return false
 					}
 				}
@@ -246,14 +246,14 @@ export const evaluate = (
 		case "Or":
 			return Effect.gen(function* () {
 				for (const child of ast.conditions) {
-					if (yield* evaluate(child, input)) {
+					if (yield* evaluateOf(child, input)) {
 						return true
 					}
 				}
 				return false
 			})
 		default:
-			return Effect.sync(() => evaluateSync(ast, input))
+			return Effect.sync(() => evaluateSyncOf(ast, input))
 	}
 }
 
@@ -422,7 +422,7 @@ const bind = (
 }
 
 /** @internal */
-export const partial = (
+export const partialOf = (
 	ast: Ast,
 	input: {
 		readonly principal?: object | undefined
@@ -431,10 +431,18 @@ export const partial = (
 ): Ast => simplify(bind(ast, input.principal, input.path))
 
 /** @internal */
-export class Untranslatable extends Schema.TaggedError<Untranslatable>()(
-	"Untranslatable",
-	{ reason: Schema.String },
-) {}
+export const evaluate = dual(2, evaluateOf)
+
+/** @internal */
+export const evaluateSync = dual(2, evaluateSyncOf)
+
+/** @internal */
+export const partial = dual(2, partialOf)
+
+/** @internal */
+export class Untranslatable extends Schema.TaggedError<Untranslatable>(
+	"@nmnmcc/ability/Condition/Untranslatable",
+)("Untranslatable", { reason: Schema.String }) {}
 
 const foldNode = <A>(ast: Ast, interpreter: Condition.Interpreter<A>): A => {
 	switch (ast._tag) {

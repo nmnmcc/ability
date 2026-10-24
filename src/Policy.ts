@@ -27,8 +27,8 @@
  *
  * A policy without predicates can become JSON with {@link schema}.
  *
+ * @stability stable
  * @since 0.3.0
- * @module
  */
 import type * as Effect from "effect/Effect"
 import type * as Equal from "effect/Equal"
@@ -42,27 +42,31 @@ import * as internal from "./internal/policy.ts"
 import type * as Rule from "./Rule.ts"
 
 /**
+ * @stability stable
+ * @category type IDs
  * @since 0.3.0
- * @category Type Ids
  */
 export const TypeId: "~@nmnmcc/ability/Policy" = internal.TypeId
 
 /**
+ * @stability stable
+ * @category type IDs
  * @since 0.3.0
- * @category Type Ids
  */
 export type TypeId = typeof TypeId
 
 /**
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Algorithm =
 	"denyOverrides" | "permitOverrides" | "firstApplicable" | "lastApplicable"
 
 /**
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface RulesNode {
 	readonly _tag: "Rules"
@@ -71,8 +75,9 @@ export interface RulesNode {
 }
 
 /**
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface AllNode {
 	readonly _tag: "All"
@@ -80,8 +85,9 @@ export interface AllNode {
 }
 
 /**
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface AnyNode {
 	readonly _tag: "Any"
@@ -89,8 +95,9 @@ export interface AnyNode {
 }
 
 /**
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface FirstOfNode {
 	readonly _tag: "FirstOf"
@@ -98,8 +105,9 @@ export interface FirstOfNode {
 }
 
 /**
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface CeilingNode {
 	readonly _tag: "Ceiling"
@@ -110,8 +118,9 @@ export interface CeilingNode {
 /**
  * The nodes of a policy tree.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Node = RulesNode | AllNode | AnyNode | FirstOfNode | CeilingNode
 
@@ -119,8 +128,9 @@ export type Node = RulesNode | AllNode | AnyNode | FirstOfNode | CeilingNode
  * A policy for the domain `D`. `E`, `R` and `O` come from the conditions of
  * its rules. See `Condition.Condition`.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Policy<D extends Domain.Any, E = never, R = never, O = never>
 	extends Equal.Equal, Inspectable.Inspectable, Pipeable.Pipeable {
@@ -133,24 +143,27 @@ export interface Policy<D extends Domain.Any, E = never, R = never, O = never>
 /**
  * Any policy.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Any = Policy<any, any, any, any>
 
 /**
  * The domain of a policy.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type DomainOf<P> = P extends Policy<infer D, any, any, any> ? D : never
 
 /**
  * The error type of a policy.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type Error<P> = P extends {
 	readonly "~Policy"?: Condition.Variance<infer E, infer _R, infer _O>
@@ -161,10 +174,11 @@ export type Error<P> = P extends {
 /**
  * The service type of a policy.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
-export type Context<P> = P extends {
+export type Services<P> = P extends {
 	readonly "~Policy"?: Condition.Variance<infer _E, infer R, infer _O>
 }
 	? R
@@ -173,8 +187,9 @@ export type Context<P> = P extends {
 /**
  * `Condition.Opaque` when a policy has a predicate.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type OpaqueOf<P> = P extends {
 	readonly "~Policy"?: Condition.Variance<infer _E, infer _R, infer O>
@@ -186,8 +201,9 @@ export type OpaqueOf<P> = P extends {
  * One act on one resource value, for each kind of the domain. The action must
  * be an action of the kind, and the field must be a field of the kind.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Target<D> = {
 	[K in Domain.Kind<D>]: {
@@ -200,8 +216,9 @@ export type Target<D> = {
 /**
  * One act on one kind of resource, with no value.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type KindTarget<D> = {
 	[K in Domain.Kind<D>]: {
@@ -214,16 +231,18 @@ export type KindTarget<D> = {
 /**
  * A request: a principal, an action, and a resource value.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Request<D> = Target<D> & { readonly principal: Domain.Principal<D> }
 
 /**
  * A request about a kind of resource, with no value.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type KindRequest<D> = KindTarget<D> & {
 	readonly principal: Domain.Principal<D>
@@ -232,8 +251,9 @@ export type KindRequest<D> = KindTarget<D> & {
 /**
  * A request with no types.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface AnyRequest {
 	readonly principal: object
@@ -246,8 +266,9 @@ export interface AnyRequest {
  * One rule that a decision tested. `path` gives the place of the rule in the
  * policy tree: the index of each child, then the index of the rule.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Step {
 	readonly path: ReadonlyArray<number>
@@ -259,8 +280,9 @@ export interface Step {
  * A decision, and the rules that were tested to make it, in order. Keep it in
  * an audit log.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Explanation {
 	readonly decision: Decision.Decision
@@ -270,8 +292,9 @@ export interface Explanation {
 /**
  * The options of a list of rules.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Options {
 	/** The default is `denyOverrides`. */
@@ -292,43 +315,46 @@ export interface Options {
  * })
  * ```
  *
+ * @stability stable
+ * @category constructors
  * @since 0.3.0
- * @category Constructors
  */
 export const define: <D extends Domain.Any>(
 	domain: D,
 	options?: Options,
 ) => <Rules extends Rule.Any, A>(
 	body: (builder: Rule.Builder<D>) => Generator<Rules, A, unknown>,
-) => Policy<D, Rule.Error<Rules>, Rule.Context<Rules>, Rule.OpaqueOf<Rules>> =
+) => Policy<D, Rule.Error<Rules>, Rule.Services<Rules>, Rule.OpaqueOf<Rules>> =
 	internal.define as never
 
 /**
  * Makes a policy from a list of rules.
  *
+ * @stability stable
+ * @category constructors
  * @since 0.3.0
- * @category Constructors
  */
 export const rules: <D extends Domain.Any, Rules extends Rule.Any>(
 	domain: D,
 	rules: Iterable<Rules>,
 	options?: Options,
-) => Policy<D, Rule.Error<Rules>, Rule.Context<Rules>, Rule.OpaqueOf<Rules>> =
+) => Policy<D, Rule.Error<Rules>, Rule.Services<Rules>, Rule.OpaqueOf<Rules>> =
 	internal.rules
 
 /**
  * A policy with no rules. It is not applicable to any request.
  *
+ * @stability stable
+ * @category constructors
  * @since 0.3.0
- * @category Constructors
  */
-export const empty = <D extends Domain.Any>(domain: D): Policy<D> =>
-	internal.rules(domain, [])
+export const empty: <D extends Domain.Any>(domain: D) => Policy<D> =
+	internal.empty
 
 type Combined<D extends Domain.Any, Ps extends ReadonlyArray<Any>> = Policy<
 	D,
 	Error<Ps[number]>,
-	Context<Ps[number]>,
+	Services<Ps[number]>,
 	OpaqueOf<Ps[number]>
 >
 
@@ -336,8 +362,9 @@ type Combined<D extends Domain.Any, Ps extends ReadonlyArray<Any>> = Policy<
  * Every policy must allow, and one deny is enough to deny. With some policies
  * not applicable and none that deny, the result is not applicable.
  *
+ * @stability stable
+ * @category combinators
  * @since 0.3.0
- * @category Combinators
  */
 export const all: <
 	const Ps extends readonly [Policy<any, any, any, any>, ...Array<Any>],
@@ -348,8 +375,9 @@ export const all: <
 /**
  * One allow is enough. Without an allow, one deny gives a deny.
  *
+ * @stability stable
+ * @category combinators
  * @since 0.3.0
- * @category Combinators
  */
 export const any: <
 	const Ps extends readonly [Policy<any, any, any, any>, ...Array<Any>],
@@ -360,8 +388,9 @@ export const any: <
 /**
  * The first policy that allows or denies gives the answer.
  *
+ * @stability stable
+ * @category combinators
  * @since 0.3.0
- * @category Combinators
  */
 export const firstOf: <
 	const Ps extends readonly [Policy<any, any, any, any>, ...Array<Any>],
@@ -373,8 +402,9 @@ export const firstOf: <
  * Puts a limit on a policy. A deny from `cap` always wins. An allow from `cap`
  * does nothing.
  *
+ * @stability stable
+ * @category combinators
  * @since 0.3.0
- * @category Combinators
  */
 export const ceiling: {
 	<D extends Domain.Any, E2, R2, O2>(
@@ -389,8 +419,9 @@ export const ceiling: {
 /**
  * Gives the decision of a policy for a request.
  *
+ * @stability stable
+ * @category evaluation
  * @since 0.3.0
- * @category Evaluation
  */
 export const decide: {
 	<D extends Domain.Any>(
@@ -407,8 +438,9 @@ export const decide: {
 /**
  * Gives the decision of a policy with no predicates, at once.
  *
+ * @stability stable
+ * @category evaluation
  * @since 0.3.0
- * @category Evaluation
  */
 export const decideSync: {
 	<D extends Domain.Any>(
@@ -423,8 +455,9 @@ export const decideSync: {
 /**
  * Gives the decision of a policy and the rules that were tested to make it.
  *
+ * @stability stable
+ * @category evaluation
  * @since 0.3.0
- * @category Evaluation
  */
 export const explain: {
 	<D extends Domain.Any>(
@@ -444,8 +477,9 @@ export const explain: {
  *
  * Predicates stay in the condition. They take the principal with them.
  *
+ * @stability stable
+ * @category evaluation
  * @since 0.3.0
- * @category Evaluation
  */
 export const residual: {
 	<D extends Domain.Any>(
@@ -461,8 +495,9 @@ export const residual: {
  * Gives the fields of a resource value that the policy lets a request use. It
  * tests each field of the resource Schema, with dots for nested fields.
  *
+ * @stability stable
+ * @category evaluation
  * @since 0.3.0
- * @category Evaluation
  */
 export const permittedFields: {
 	<D extends Domain.Any>(
@@ -479,8 +514,9 @@ export const permittedFields: {
 /**
  * The JSON form of a rule.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface EncodedRule {
 	readonly _tag: "Allow" | "Deny"
@@ -496,8 +532,9 @@ export interface EncodedRule {
 /**
  * The JSON form of a policy.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type EncodedNode =
 	| {
@@ -520,8 +557,9 @@ export type EncodedNode =
  * every kind, action, field and principal field against the domain, and the
  * `meta` of each rule against the `meta` Schema of the domain.
  *
+ * @stability stable
+ * @category schemas
  * @since 0.3.0
- * @category Schemas
  */
 export const schema: <D extends Domain.Any>(
 	domain: D,
@@ -530,7 +568,8 @@ export const schema: <D extends Domain.Any>(
 /**
  * Tests if a value is a policy.
  *
+ * @stability stable
+ * @category guards
  * @since 0.3.0
- * @category Guards
  */
 export const isPolicy: (u: unknown) => u is Any = internal.isPolicy

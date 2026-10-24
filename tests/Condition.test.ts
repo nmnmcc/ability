@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Exit, Schema } from "effect"
+import { Effect, Exit, pipe, Schema } from "effect"
 import { Condition, type Resource } from "../src/index.ts"
 import { alice, aliceBot, Bot, Caller, sharedBot } from "./fixtures.ts"
 
@@ -158,6 +158,22 @@ describe("Condition", () => {
 				Condition.evaluate(failing, { value: aliceBot }),
 			)
 			assert.isTrue(Exit.isFailure(exit))
+		}),
+	)
+
+	it.effect("works in a pipe", () =>
+		Effect.gen(function* () {
+			const condition = $.and(
+				$.under("org", $.principal("organizationId")),
+				$.eq("ownerUserId", $.principal("userId")),
+			)
+			const input = { value: aliceBot, principal: alice, path }
+			assert.isTrue(pipe(condition, Condition.evaluateSync(input)))
+			assert.isTrue(yield* pipe(condition, Condition.evaluate(input)))
+			assert.deepStrictEqual(
+				pipe(condition, Condition.partial({ principal: alice, path })),
+				Condition.partial(condition, { principal: alice, path }),
+			)
 		}),
 	)
 

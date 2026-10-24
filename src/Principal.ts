@@ -6,16 +6,17 @@
  * `Schema.Class`, or use any `Schema.Struct`. Conditions can use the fields of
  * the principal. See `Condition.Builder.principal`.
  *
+ * @stability stable
  * @since 0.3.0
- * @module
  */
 import * as Schema from "effect/Schema"
 
 /**
  * Any Schema that can be a principal. Its type must be an object.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Any = Schema.Top & { readonly Type: object }
 
@@ -33,7 +34,8 @@ export type Any = Schema.Top & { readonly Type: object }
  * }) {}
  * ```
  *
+ * @stability stable
+ * @category constructors
  * @since 0.3.0
- * @category Constructors
  */
 export const Class: typeof Schema.Class = Schema.Class

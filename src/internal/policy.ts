@@ -111,6 +111,9 @@ export const rules = (
 	)
 
 /** @internal */
+export const empty = (domain: Domain.Any): any => rules(domain, [])
+
+/** @internal */
 export const define =
 	(domain: Domain.Any, options?: { readonly algorithm?: Policy.Algorithm }) =>
 	(body: (builder: unknown) => Generator<Rule.Any, unknown, unknown>): any => {
@@ -187,7 +190,7 @@ const ruleApplies = (
 	const test =
 		value.when === undefined
 			? Effect.succeed(true)
-			: condition.evaluate(value.when, context.input)
+			: condition.evaluateOf(value.when, context.input)
 	return context.trace === undefined
 		? test
 		: Effect.tap(test, (applies) =>
@@ -204,50 +207,48 @@ const fromRule = (value: Rule.Any): Decision.Decision =>
 			? Decision.Deny({ rule: value })
 			: Decision.Deny({ rule: value, reason: value.reason })
 
-const firstApplying = (
+const firstApplying = Effect.fnUntraced(function* (
 	candidates: ReadonlyArray<readonly [Rule.Any, number]>,
 	context: Context,
 	path: ReadonlyArray<number>,
-): Effect.Effect<Rule.Any | undefined, unknown, unknown> =>
-	Effect.gen(function* () {
-		for (const [value, index] of candidates) {
-			if (yield* ruleApplies(value, context, [...path, index])) {
-				return value
-			}
+): Effect.fn.Return<Rule.Any | undefined, unknown, unknown> {
+	for (const [value, index] of candidates) {
+		if (yield* ruleApplies(value, context, [...path, index])) {
+			return value
 		}
-		return undefined
-	})
+	}
+	return undefined
+})
 
-const decideRules = (
+const decideRules = Effect.fnUntraced(function* (
 	node: Policy.RulesNode,
 	context: Context,
 	path: ReadonlyArray<number>,
-): Effect.Effect<Decision.Decision, unknown, unknown> =>
-	Effect.gen(function* () {
-		const indexed = node.rules.map((value, index) => [value, index] as const)
-		const denies = indexed.filter(([value]) => value._tag === "Deny")
-		const allows = indexed.filter(([value]) => value._tag === "Allow")
-		let found: Rule.Any | undefined
-		switch (node.algorithm) {
-			case "denyOverrides":
-				found =
-					(yield* firstApplying(denies, context, path)) ??
-					(yield* firstApplying(allows, context, path))
-				break
-			case "permitOverrides":
-				found =
-					(yield* firstApplying(allows, context, path)) ??
-					(yield* firstApplying(denies, context, path))
-				break
-			case "firstApplicable":
-				found = yield* firstApplying(indexed, context, path)
-				break
-			case "lastApplicable":
-				found = yield* firstApplying(indexed.slice().reverse(), context, path)
-				break
-		}
-		return found === undefined ? Decision.NotApplicable : fromRule(found)
-	})
+): Effect.fn.Return<Decision.Decision, unknown, unknown> {
+	const indexed = node.rules.map((value, index) => [value, index] as const)
+	const denies = indexed.filter(([value]) => value._tag === "Deny")
+	const allows = indexed.filter(([value]) => value._tag === "Allow")
+	let found: Rule.Any | undefined
+	switch (node.algorithm) {
+		case "denyOverrides":
+			found =
+				(yield* firstApplying(denies, context, path)) ??
+				(yield* firstApplying(allows, context, path))
+			break
+		case "permitOverrides":
+			found =
+				(yield* firstApplying(allows, context, path)) ??
+				(yield* firstApplying(denies, context, path))
+			break
+		case "firstApplicable":
+			found = yield* firstApplying(indexed, context, path)
+			break
+		case "lastApplicable":
+			found = yield* firstApplying(indexed.slice().reverse(), context, path)
+			break
+	}
+	return found === undefined ? Decision.NotApplicable : fromRule(found)
+})
 
 const decideNode = (
 	node: Node,
@@ -383,30 +384,29 @@ export const explainOf = (
 export const explain = dual(2, explainOf)
 
 /** @internal */
-export const permittedFieldsOf = (
+export const permittedFieldsOf = Effect.fnUntraced(function* (
 	policy: unknown,
 	request: Omit<Policy.AnyRequest, "field">,
-): Effect.Effect<ReadonlyArray<string>, unknown, unknown> =>
-	Effect.gen(function* () {
-		const domain = domainOf(policy)
-		const kind = kindOf(request.resource)
-		const descriptor =
-			kind === undefined ? undefined : getDescriptor(domain, kind)
-		if (descriptor === undefined) {
-			return []
+): Effect.fn.Return<ReadonlyArray<string>, unknown, unknown> {
+	const domain = domainOf(policy)
+	const kind = kindOf(request.resource)
+	const descriptor =
+		kind === undefined ? undefined : getDescriptor(domain, kind)
+	if (descriptor === undefined) {
+		return []
+	}
+	const output: Array<string> = []
+	for (const field of descriptor.fieldPaths) {
+		const result: Decision.Decision = yield* decideOf(policy, {
+			...request,
+			field,
+		})
+		if (result._tag === "Allow") {
+			output.push(field)
 		}
-		const output: Array<string> = []
-		for (const field of descriptor.fieldPaths) {
-			const result: Decision.Decision = yield* decideOf(policy, {
-				...request,
-				field,
-			})
-			if (result._tag === "Allow") {
-				output.push(field)
-			}
-		}
-		return Object.freeze(output)
-	})
+	}
+	return Object.freeze(output)
+})
 
 /** @internal */
 export const permittedFields = dual(2, permittedFieldsOf)
@@ -441,7 +441,7 @@ const ruleCondition = (value: Rule.Any, context: ResidualContext): Ast =>
 		? never
 		: value.when === undefined
 			? always
-			: condition.partial(value.when, context.input)
+			: condition.partialOf(value.when, context.input)
 
 /**
  * Gives the conditions for "the first rule that applies is an allow rule" and

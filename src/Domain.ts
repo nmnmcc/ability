@@ -11,8 +11,8 @@
  * const App = Domain.make({ principal: Caller, resources: [Bot, Trigger] })
  * ```
  *
+ * @stability stable
  * @since 0.3.0
- * @module
  */
 import type * as Schema from "effect/Schema"
 import * as internal from "./internal/domain.ts"
@@ -20,14 +20,16 @@ import type * as PrincipalSchema from "./Principal.ts"
 import type * as Resource from "./Resource.ts"
 
 /**
+ * @stability stable
+ * @category type IDs
  * @since 0.3.0
- * @category Type Ids
  */
 export const TypeId: "~@nmnmcc/ability/Domain" = internal.TypeId
 
 /**
+ * @stability stable
+ * @category type IDs
  * @since 0.3.0
- * @category Type Ids
  */
 export type TypeId = typeof TypeId
 
@@ -35,8 +37,9 @@ export type TypeId = typeof TypeId
  * A domain. `P` is the type of the principal, `Resources` is the union of the
  * resources, and `Meta` is the type of the extra data that a rule may keep.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Domain<
 	P extends object,
@@ -57,48 +60,54 @@ export interface Domain<
 /**
  * Any domain.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Any = Domain<any, any, any>
 
 /**
  * The type of the principal of a domain.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type Principal<D> = D extends Domain<infer P, any, any> ? P : never
 
 /**
  * The union of the resources of a domain.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type Resources<D> = D extends Domain<any, infer R, any> ? R : never
 
 /**
  * The type of the extra data that a rule of the domain may keep.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type Meta<D> = D extends Domain<any, any, infer M> ? M : never
 
 /**
  * The kind names of a domain.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type Kind<D> = Resource.Kind<Resources<D>>
 
 /**
  * The resource of a domain with the kind `K`.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type ResourceOf<D, K extends string> =
 	Resources<D> extends infer R
@@ -110,40 +119,45 @@ export type ResourceOf<D, K extends string> =
 /**
  * The actions of the resource with the kind `K`.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type ActionOf<D, K extends string> = Resource.Action<ResourceOf<D, K>>
 
 /**
  * All the actions of all the resources of a domain.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type AnyAction<D> = Resource.Action<Resources<D>>
 
 /**
  * The data type of the resource with the kind `K`.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type DataOf<D, K extends string> = Resource.Data<ResourceOf<D, K>>
 
 /**
  * The value type of the resource with the kind `K`.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type ValueOf<D, K extends string> = Resource.Value<ResourceOf<D, K>>
 
 /**
  * The union of the value types of all the resources of a domain.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type AnyValue<D> = Resource.Value<Resources<D>>
 
@@ -151,8 +165,9 @@ export type AnyValue<D> = Resource.Value<Resources<D>>
  * Makes a domain. Each resource must have its own kind name. Give `meta` when
  * rules must keep extra data, such as the scope of a grant.
  *
+ * @stability stable
+ * @category constructors
  * @since 0.3.0
- * @category Constructors
  */
 export const make: <
 	P extends PrincipalSchema.Any,
@@ -167,7 +182,8 @@ export const make: <
 /**
  * Tests if a value is a domain.
  *
+ * @stability stable
+ * @category guards
  * @since 0.3.0
- * @category Guards
  */
 export const isDomain: (u: unknown) => u is Any = internal.isDomain

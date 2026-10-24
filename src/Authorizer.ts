@@ -31,8 +31,8 @@
  * one. A decider may answer at once, or fail with {@link Pending} when a person
  * or a Bot must answer later.
  *
+ * @stability stable
  * @since 0.3.0
- * @module
  */
 import type * as Context from "effect/Context"
 import type * as Duration from "effect/Duration"
@@ -47,14 +47,16 @@ import type * as Policy from "./Policy.ts"
 /**
  * The error when a policy says no.
  *
+ * @stability stable
+ * @category errors
  * @since 0.3.0
- * @category Errors
  */
 export const Forbidden: typeof internal.Forbidden = internal.Forbidden
 
 /**
+ * @stability stable
+ * @category errors
  * @since 0.3.0
- * @category Errors
  */
 export type Forbidden = internal.Forbidden
 
@@ -62,15 +64,17 @@ export type Forbidden = internal.Forbidden
  * The error when the policy of the principal can not be loaded. The cause is
  * kept, but it is not shown to the client.
  *
+ * @stability stable
+ * @category errors
  * @since 0.3.0
- * @category Errors
  */
 export const PolicyUnavailable: typeof internal.PolicyUnavailable =
 	internal.PolicyUnavailable
 
 /**
+ * @stability stable
+ * @category errors
  * @since 0.3.0
- * @category Errors
  */
 export type PolicyUnavailable = internal.PolicyUnavailable
 
@@ -78,14 +82,16 @@ export type PolicyUnavailable = internal.PolicyUnavailable
  * The error when a decider must wait for an answer. `ticket` names the
  * request that waits, so the client can come back for the answer.
  *
+ * @stability stable
+ * @category errors
  * @since 0.3.0
- * @category Errors
  */
 export const Pending: typeof internal.Pending = internal.Pending
 
 /**
+ * @stability stable
+ * @category errors
  * @since 0.3.0
- * @category Errors
  */
 export type Pending = internal.Pending
 
@@ -93,8 +99,9 @@ export type Pending = internal.Pending
  * The services and the errors of the principal and the decider of an
  * authorizer.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Config {
 	readonly requires?: unknown
@@ -109,24 +116,27 @@ type ErrorOf<C> = C extends { readonly error: infer E } ? E : never
  * resource. A check on a kind passes only when the policy allows the act on
  * every value of the kind.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Target<D> = Policy.Target<D> | Policy.KindTarget<D>
 
 /**
  * A request to the decider.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type DeciderRequest<D> = Policy.Request<D> | Policy.KindRequest<D>
 
 /**
  * The options of a guard.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface GuardOptions<D, E2> {
 	/** The action that lets the principal see the resource. The default is `"read"`. */
@@ -138,8 +148,9 @@ export interface GuardOptions<D, E2> {
 /**
  * The service.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Authorizer<D extends Domain.Any, E, R> {
 	readonly domain: D
@@ -191,8 +202,9 @@ export interface Authorizer<D extends Domain.Any, E, R> {
  * The class made by {@link Service}. The static functions use the service
  * from the context.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface ServiceClass<
 	Self,
@@ -235,8 +247,9 @@ export interface ServiceClass<
 /**
  * Any service class made by {@link Service}.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type AnyServiceClass = Context.Key<any, any> & {
 	readonly domain: Domain.Any
@@ -245,8 +258,9 @@ export type AnyServiceClass = Context.Key<any, any> & {
 /**
  * Makes an authorizer service class for a domain.
  *
+ * @stability stable
+ * @category constructors
  * @since 0.3.0
- * @category Constructors
  */
 export const Service: <Self, C extends Config = {}>() => <
 	const Id extends string,
@@ -260,8 +274,9 @@ export const Service: <Self, C extends Config = {}>() => <
 /**
  * The options of {@link layer}.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Options<D extends Domain.Any, E, R, EL, RL, RP> {
 	/** Gives the principal of the current request. */
@@ -296,8 +311,9 @@ export interface Options<D extends Domain.Any, E, R, EL, RL, RP> {
 /**
  * Makes the layer of an authorizer.
  *
+ * @stability stable
+ * @category layers
  * @since 0.3.0
- * @category Layers
  */
 export const layer: <
 	Self,
@@ -309,6 +325,6 @@ export const layer: <
 	RL = never,
 	RP = never,
 >(
-	tag: ServiceClass<Self, Id, D, E, R>,
+	service: ServiceClass<Self, Id, D, E, R>,
 	options: Options<D, NoInfer<E>, NoInfer<R>, EL, RL, RP>,
 ) => Layer.Layer<Self, never, RL | RP> = internal.layer as never

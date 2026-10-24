@@ -30,7 +30,7 @@ export const layer = (
 		Effect.gen(function* () {
 			const service = yield* authorizer
 			const services = yield* Effect.context<never>()
-			return (
+			return Effect.fnUntraced(function* (
 				httpEffect: Effect.Effect<unknown, unknown, unknown>,
 				options: {
 					readonly endpoint: {
@@ -43,43 +43,42 @@ export const layer = (
 						readonly annotations: Context.Context<never>
 					}
 				},
-			) =>
-				Effect.gen(function* () {
-					const requirements = Option.orElse(
-						Context.getOption(options.endpoint.annotations, Required),
-						() =>
-							Option.map(
-								Context.getOption(options.group.annotations, GroupRequired),
-								(rules) =>
-									options.endpoint.method === "GET" ? rules.read : rules.write,
-							),
+			) {
+				const requirements = Option.orElse(
+					Context.getOption(options.endpoint.annotations, Required),
+					() =>
+						Option.map(
+							Context.getOption(options.group.annotations, GroupRequired),
+							(rules) =>
+								options.endpoint.method === "GET" ? rules.read : rules.write,
+						),
+				)
+				if (Option.isNone(requirements)) {
+					return yield* Effect.die(
+						new Error(
+							`The endpoint ${options.group.identifier}.${options.endpoint.name} does not say what it needs. Give it the HttpApi.Required annotation.`,
+						),
 					)
-					if (Option.isNone(requirements)) {
-						return yield* Effect.die(
-							new Error(
-								`The endpoint ${options.group.identifier}.${options.endpoint.name} does not say what it needs. Give it the HttpApi.Required annotation.`,
-							),
+				}
+				for (const requirement of requirements.value) {
+					if (requirement.load === undefined) {
+						yield* service.check({
+							action: requirement.action,
+							kind: requirement.kind,
+						} as never)
+					} else {
+						const params = yield* HttpRouter.params
+						const value = yield* Effect.provideContext(
+							requirement.load(params),
+							services,
 						)
+						yield* service.check({
+							action: requirement.action,
+							resource: value,
+						} as never)
 					}
-					for (const requirement of requirements.value) {
-						if (requirement.load === undefined) {
-							yield* service.check({
-								action: requirement.action,
-								kind: requirement.kind,
-							} as never)
-						} else {
-							const params = yield* HttpRouter.params
-							const value = yield* Effect.provideContext(
-								requirement.load(params),
-								services,
-							)
-							yield* service.check({
-								action: requirement.action,
-								resource: value,
-							} as never)
-						}
-					}
-					return yield* httpEffect
-				})
+				}
+				return yield* httpEffect
+			})
 		}),
 	)

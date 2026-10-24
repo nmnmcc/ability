@@ -16,8 +16,8 @@
  * field name, and `**` stands for any number of parts. So `address.*` covers
  * `address.city`, and `**` covers every field.
  *
+ * @stability stable
  * @since 0.3.0
- * @module
  */
 import type * as Equal from "effect/Equal"
 import type * as Inspectable from "effect/Inspectable"
@@ -28,14 +28,16 @@ import * as internal from "./internal/rule.ts"
 import type * as Resource from "./Resource.ts"
 
 /**
+ * @stability stable
+ * @category type IDs
  * @since 0.3.0
- * @category Type Ids
  */
 export const TypeId: "~@nmnmcc/ability/Rule" = internal.TypeId
 
 /**
+ * @stability stable
+ * @category type IDs
  * @since 0.3.0
- * @category Type Ids
  */
 export type TypeId = typeof TypeId
 
@@ -43,8 +45,9 @@ export type TypeId = typeof TypeId
  * A rule. `E`, `R` and `O` come from its condition. See
  * `Condition.Condition`.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Rule<E = never, R = never, O = never>
 	extends Equal.Equal, Inspectable.Inspectable, Pipeable.Pipeable {
@@ -64,16 +67,18 @@ export interface Rule<E = never, R = never, O = never>
 /**
  * Any rule.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Any = Rule<any, any, any>
 
 /**
  * The error type of a rule.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type Error<A> = A extends {
 	readonly "~Rule"?: Condition.Variance<infer E, infer _R, infer _O>
@@ -84,10 +89,11 @@ export type Error<A> = A extends {
 /**
  * The service type of a rule.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
-export type Context<A> = A extends {
+export type Services<A> = A extends {
 	readonly "~Rule"?: Condition.Variance<infer _E, infer R, infer _O>
 }
 	? R
@@ -96,8 +102,9 @@ export type Context<A> = A extends {
 /**
  * `Condition.Opaque` when a rule has a predicate.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type OpaqueOf<A> = A extends {
 	readonly "~Rule"?: Condition.Variance<infer _E, infer _R, infer O>
@@ -108,24 +115,27 @@ export type OpaqueOf<A> = A extends {
 /**
  * A resource in a rule: a kind name, a resource of the domain, or `"*"`.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Target<D> = Domain.Kind<D> | Domain.Resources<D> | "*"
 
 /**
  * The kind name of a target.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type KindOf<T> = T extends string ? T : Resource.Kind<T>
 
 /**
  * The actions that a rule may use for the kinds `K`.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type ActionFor<D, K> =
 	| "*"
@@ -136,8 +146,9 @@ export type ActionFor<D, K> =
 /**
  * The data type of the kinds `K`. For `"*"` it has no fields.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type DataFor<D, K> = "*" extends K
 	? {}
@@ -146,8 +157,9 @@ export type DataFor<D, K> = "*" extends K
 /**
  * The value type of the kinds `K`.
  *
+ * @stability stable
+ * @category utility types
  * @since 0.3.0
- * @category Type Helpers
  */
 export type ValueFor<D, K> = "*" extends K
 	? Domain.AnyValue<D>
@@ -156,8 +168,9 @@ export type ValueFor<D, K> = "*" extends K
 /**
  * A field name or a field pattern of the kinds `K`.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type FieldFor<D, K> =
 	Condition.FieldPath<DataFor<D, K>> | `${string}*${string}`
@@ -165,8 +178,9 @@ export type FieldFor<D, K> =
 /**
  * The options of a rule.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Options<D, K, C extends Condition.Any> {
 	/** The condition. It gets a builder with the types of the resource. */
@@ -188,8 +202,9 @@ type SingleOrArray<A> = A | ReadonlyArray<A>
 /**
  * Makes rules with the types of a domain.
  *
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export interface Builder<D> {
 	readonly allow: <
@@ -200,7 +215,7 @@ export interface Builder<D> {
 		action: SingleOrArray<A>,
 		resource: SingleOrArray<T>,
 		options?: Options<D, KindOf<T>, C>,
-	) => Rule<Condition.Error<C>, Condition.Context<C>, Condition.OpaqueOf<C>>
+	) => Rule<Condition.Error<C>, Condition.Services<C>, Condition.OpaqueOf<C>>
 	readonly deny: <
 		const T extends Target<D>,
 		const A extends ActionFor<D, KindOf<T>>,
@@ -209,7 +224,7 @@ export interface Builder<D> {
 		action: SingleOrArray<A>,
 		resource: SingleOrArray<T>,
 		options?: Options<D, KindOf<T>, C>,
-	) => Rule<Condition.Error<C>, Condition.Context<C>, Condition.OpaqueOf<C>>
+	) => Rule<Condition.Error<C>, Condition.Services<C>, Condition.OpaqueOf<C>>
 }
 
 /**
@@ -223,8 +238,9 @@ export interface Builder<D> {
  * })
  * ```
  *
+ * @stability stable
+ * @category constructors
  * @since 0.3.0
- * @category Constructors
  */
 export const builder: <D extends Domain.Any>(domain: D) => Builder<D> =
 	internal.builder
@@ -232,16 +248,18 @@ export const builder: <D extends Domain.Any>(domain: D) => Builder<D> =
 /**
  * Tests if a value is a rule.
  *
+ * @stability stable
+ * @category guards
  * @since 0.3.0
- * @category Guards
  */
 export const isRule: (u: unknown) => u is Any = internal.isRule
 
 /**
  * Tests if a field name matches a field name or a field pattern of a rule.
  *
+ * @stability stable
+ * @category predicates
  * @since 0.3.0
- * @category Utils
  */
 export const matchesField: (pattern: string, field: string) => boolean =
 	internal.matchesFieldPattern

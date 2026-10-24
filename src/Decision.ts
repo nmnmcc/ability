@@ -8,15 +8,16 @@
  * an `Authorizer` with a decider asks the decider first. See
  * `Authorizer.Options.decider`.
  *
+ * @stability stable
  * @since 0.3.0
- * @module
  */
 import * as Data from "effect/Data"
 import type * as Rule from "./Rule.ts"
 
 /**
+ * @stability stable
+ * @category models
  * @since 0.3.0
- * @category Models
  */
 export type Decision = Data.TaggedEnum<{
 	Allow: {
@@ -40,14 +41,16 @@ const {
 } = Data.taggedEnum<Decision>()
 
 /**
+ * @stability stable
+ * @category constructors
  * @since 0.3.0
- * @category Constructors
  */
 export const Allow: (args: { readonly rule?: Rule.Any }) => Decision = allow
 
 /**
+ * @stability stable
+ * @category constructors
  * @since 0.3.0
- * @category Constructors
  */
 export const Deny: (args: {
 	readonly rule?: Rule.Any
@@ -55,30 +58,34 @@ export const Deny: (args: {
 }) => Decision = deny
 
 /**
+ * @stability stable
+ * @category constructors
  * @since 0.3.0
- * @category Constructors
  */
 export const NotApplicable: Decision = notApplicable()
 
 /**
+ * @stability stable
+ * @category guards
  * @since 0.3.0
- * @category Guards
  */
 export const isAllow: (
 	decision: Decision,
 ) => decision is Extract<Decision, { readonly _tag: "Allow" }> = $is("Allow")
 
 /**
+ * @stability stable
+ * @category guards
  * @since 0.3.0
- * @category Guards
  */
 export const isDeny: (
 	decision: Decision,
 ) => decision is Extract<Decision, { readonly _tag: "Deny" }> = $is("Deny")
 
 /**
+ * @stability stable
+ * @category guards
  * @since 0.3.0
- * @category Guards
  */
 export const isNotApplicable: (
 	decision: Decision,
@@ -88,8 +95,9 @@ export const isNotApplicable: (
 /**
  * Matches each kind of decision.
  *
+ * @stability stable
+ * @category pattern matching
  * @since 0.3.0
- * @category Pattern Matching
  */
 export const match = $match
 
@@ -97,8 +105,9 @@ export const match = $match
  * The reason of a decision: the reason of a `Deny`, or the reason of the rule
  * that gave the answer.
  *
+ * @stability stable
+ * @category getters
  * @since 0.3.0
- * @category Accessors
  */
 export const reason = (decision: Decision): string | undefined =>
 	decision._tag === "Deny"

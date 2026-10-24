@@ -19,7 +19,9 @@ import { kindOf } from "./domain.ts"
 import * as policy from "./policy.ts"
 
 /** @internal */
-export class Forbidden extends Schema.TaggedError<Forbidden>()("Forbidden", {
+export class Forbidden extends Schema.TaggedError<Forbidden>(
+	"@nmnmcc/ability/Authorizer/Forbidden",
+)("Forbidden", {
 	action: Schema.String,
 	kind: Schema.String,
 	field: Schema.optionalKey(Schema.String),
@@ -27,13 +29,14 @@ export class Forbidden extends Schema.TaggedError<Forbidden>()("Forbidden", {
 }) {}
 
 /** @internal */
-export class PolicyUnavailable extends Schema.TaggedError<PolicyUnavailable>()(
-	"PolicyUnavailable",
-	{ cause: Schema.Defect() },
-) {}
+export class PolicyUnavailable extends Schema.TaggedError<PolicyUnavailable>(
+	"@nmnmcc/ability/Authorizer/PolicyUnavailable",
+)("PolicyUnavailable", { cause: Schema.Defect() }) {}
 
 /** @internal */
-export class Pending extends Schema.TaggedError<Pending>()("Pending", {
+export class Pending extends Schema.TaggedError<Pending>(
+	"@nmnmcc/ability/Authorizer/Pending",
+)("Pending", {
 	ticket: Schema.String,
 	reason: Schema.optionalKey(Schema.String),
 }) {}
@@ -98,7 +101,7 @@ const forbidden = (
 
 /** @internal */
 export const layer = (
-	tag: Authorizer.AnyServiceClass,
+	service: Authorizer.AnyServiceClass,
 	options: {
 		readonly principal: Effect.Effect<object, unknown, unknown>
 		readonly policy: (
@@ -111,14 +114,14 @@ export const layer = (
 			{ readonly capacity?: number; readonly timeToLive?: any } | false
 	},
 ) => {
-	const domain: Domain.Any = tag.domain
+	const domain: Domain.Any = service.domain
 	const encode = Schema.encodeUnknownSync(
 		domain.principal as unknown as Schema.Codec<unknown, unknown>,
 	)
 	const keyOf = (principal: object) =>
 		new PrincipalKey(principal, JSON.stringify(encode(principal)))
 	return Layer.effect(
-		tag,
+		service,
 		Effect.gen(function* () {
 			// The services of the policy loader and of the predicates come from the
 			// layer, so a check does not need them.
@@ -161,14 +164,13 @@ export const layer = (
 				return { principal, policy: value }
 			})
 
-			const decide = (target: AnyTarget) =>
-				Effect.gen(function* () {
-					const { principal, policy: value } = yield* current
-					const decision: Decision.Decision = yield* withServices(
-						policy.decideOf(value, { ...target, principal } as never),
-					)
-					return decision
-				})
+			const decide = Effect.fnUntraced(function* (target: AnyTarget) {
+				const { principal, policy: value } = yield* current
+				const decision: Decision.Decision = yield* withServices(
+					policy.decideOf(value, { ...target, principal } as never),
+				)
+				return decision
+			})
 
 			const kindDecision = (
 				value: Policy.Any,
@@ -188,51 +190,49 @@ export const layer = (
 				return Decision.NotApplicable
 			}
 
-			const check = (target: AnyTarget) =>
-				Effect.gen(function* () {
-					const { principal, policy: value } = yield* current
-					const kind =
-						target.resource === undefined
-							? (target.kind ?? "")
-							: (kindOf(target.resource) ?? "")
-					let decision: Decision.Decision =
-						target.resource === undefined
-							? kindDecision(value, principal, target)
-							: yield* withServices(
-									policy.decideOf(value, { ...target, principal } as never),
-								)
-					if (
-						decision._tag === "NotApplicable" &&
-						options.decider !== undefined
-					) {
-						decision = yield* options.decider({ ...target, principal })
-					}
-					if (decision._tag !== "Allow") {
-						return yield* forbidden(target, kind, Decision.reason(decision))
-					}
-				})
+			const check = Effect.fnUntraced(function* (target: AnyTarget) {
+				const { principal, policy: value } = yield* current
+				const kind =
+					target.resource === undefined
+						? (target.kind ?? "")
+						: (kindOf(target.resource) ?? "")
+				let decision: Decision.Decision =
+					target.resource === undefined
+						? kindDecision(value, principal, target)
+						: yield* withServices(
+								policy.decideOf(value, { ...target, principal } as never),
+							)
+				if (
+					decision._tag === "NotApplicable" &&
+					options.decider !== undefined
+				) {
+					decision = yield* options.decider({ ...target, principal })
+				}
+				if (decision._tag !== "Allow") {
+					return yield* forbidden(target, kind, Decision.reason(decision))
+				}
+			})
 
-			const guard = (
+			const guard = Effect.fnUntraced(function* (
 				target: AnyTarget,
 				guardOptions: {
 					readonly read?: string
 					readonly hide: () => unknown
 				},
-			) =>
-				Effect.gen(function* () {
-					const read = guardOptions.read ?? "read"
-					const { field: _field, ...rest } = target
-					const visible: Decision.Decision = yield* decide({
-						...rest,
-						action: read,
-					})
-					if (visible._tag !== "Allow") {
-						return yield* Effect.fail(guardOptions.hide())
-					}
-					if (target.action !== read || target.field !== undefined) {
-						yield* check(target)
-					}
+			) {
+				const read = guardOptions.read ?? "read"
+				const { field: _field, ...rest } = target
+				const visible: Decision.Decision = yield* decide({
+					...rest,
+					action: read,
 				})
+				if (visible._tag !== "Allow") {
+					return yield* Effect.fail(guardOptions.hide())
+				}
+				if (target.action !== read || target.field !== undefined) {
+					yield* check(target)
+				}
+			})
 
 			const filter = (
 				target: AnyTarget,
@@ -241,13 +241,12 @@ export const layer = (
 					policy.residualOf(value, { ...target, principal } as never),
 				)
 
-			const permittedFields = (target: AnyTarget) =>
-				Effect.gen(function* () {
-					const { principal, policy: value } = yield* current
-					return yield* withServices(
-						policy.permittedFieldsOf(value, { ...target, principal } as never),
-					)
-				})
+			const permittedFields = Effect.fnUntraced(function* (target: AnyTarget) {
+				const { principal, policy: value } = yield* current
+				return yield* withServices(
+					policy.permittedFieldsOf(value, { ...target, principal } as never),
+				)
+			})
 
 			const invalidate = (principal?: object) =>
 				cache === undefined
