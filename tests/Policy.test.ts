@@ -2112,6 +2112,54 @@ describe("Policy", () => {
 		assert.throws(() => JSON.stringify(shared), /more than 100000 nodes/)
 	})
 
+	it("counts shared parts of conditions in the size of the JSON form", () => {
+		const shared = Arr.reduce(
+			Arr.range(1, 30),
+			Condition.builder<{ readonly level: number }, unknown, unknown>().eq(
+				"level",
+				1,
+			) as Condition.Condition,
+			(condition) => Condition.and(condition, condition),
+		)
+		const policy = Policy.rules(App, [
+			Rule.make({
+				_tag: "Allow",
+				actions: ["read"],
+				resources: ["Bot"],
+				when: shared,
+			}),
+		])
+		const start = Date.now()
+		assert.throws(
+			() => Schema.encodeSync(PolicySchemaOfApp)(policy),
+			/more than 100000 nodes/,
+		)
+		assert.throws(() => JSON.stringify(policy), /more than 100000 nodes/)
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
+	it.effect("explains a policy with many rules in a short time", () =>
+		Effect.gen(function* () {
+			const _ = Rule.builder(App)
+			const policy = Policy.rules(App, [
+				...Arr.map(Arr.range(1, 30_000), (index) =>
+					_.deny("read", Bot, {
+						when: ($) => $.eq("name", `n${String(index)}`),
+					}),
+				),
+				_.allow("read", Bot),
+			])
+			const start = Date.now()
+			const explained = yield* Policy.explain(policy, {
+				principal: alice,
+				action: "read",
+				resource: aliceBot,
+			})
+			assert.strictEqual(explained.decision._tag, "Allow")
+			assert.isBelow(Date.now() - start, 1500)
+		}),
+	)
+
 	it("makes the residual of a very wide condition", () => {
 		const policy = Schema.decodeUnknownSync(PolicySchemaOfApp)({
 			_tag: "Rules",

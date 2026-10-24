@@ -43,6 +43,7 @@
 import type * as Context from "effect/Context"
 import * as Data from "effect/Data"
 import * as Arr from "effect/Array"
+import * as Chunk from "effect/Chunk"
 import * as Effect from "effect/Effect"
 import { dual } from "effect/Function"
 import * as HashMap from "effect/HashMap"
@@ -407,22 +408,63 @@ const nodes = Data.taggedEnum<Node>()
  */
 const maxEncodedNodes = 100_000
 
-/** The number of nodes of the JSON form of a tree. */
-const encodedSize = (node: Node, memo: Map<Node, number> = new Map()): number =>
+/**
+ * The number of nodes of the JSON form of a condition. A shared child counts
+ * one time for each place, as the JSON form writes it out each time.
+ */
+const conditionSize = (ast: Ast, memo: Map<Ast, number>): number =>
+	remember(memo, ast, () => {
+		switch (ast._tag) {
+			case "And":
+			case "Or":
+				return Arr.reduce(
+					ast.conditions,
+					1,
+					(size, child) => size + conditionSize(child, memo),
+				)
+			case "Not":
+				return 1 + conditionSize(ast.condition, memo)
+			default:
+				return 1
+		}
+	})
+
+/**
+ * The number of nodes of the JSON form of a tree, with the conditions of its
+ * rules.
+ */
+const encodedSize = (
+	node: Node,
+	memo: Map<Node, number> = new Map(),
+	conditions: Map<Ast, number> = new Map(),
+): number =>
 	remember(memo, node, () => {
 		switch (node._tag) {
 			case "Rules":
-				return 1 + node.rules.length
+				return Arr.reduce(
+					node.rules,
+					1,
+					(size, value) =>
+						size +
+						1 +
+						(value.when === undefined
+							? 0
+							: conditionSize(value.when as Ast, conditions)),
+				)
 			case "All":
 			case "Any":
 			case "FirstOf":
 				return Arr.reduce(
 					node.policies,
 					1,
-					(size, child) => size + encodedSize(child, memo),
+					(size, child) => size + encodedSize(child, memo, conditions),
 				)
 			case "Ceiling":
-				return 1 + encodedSize(node.cap, memo) + encodedSize(node.policy, memo)
+				return (
+					1 +
+					encodedSize(node.cap, memo, conditions) +
+					encodedSize(node.policy, memo, conditions)
+				)
 		}
 	})
 
@@ -853,7 +895,7 @@ interface DecideContext {
 	/** The resource of the kind, for the fields that a rule may grant. */
 	readonly descriptor: Resource.Descriptor
 	/** The rules that were tested, for {@link explain}. */
-	readonly trace: Ref.Ref<ReadonlyArray<Step>> | undefined
+	readonly trace: Ref.Ref<Chunk.Chunk<Step>> | undefined
 	readonly predicates: Map<Node, boolean>
 	/**
 	 * The decisions of nodes with no predicates. One node may be a child of
@@ -881,7 +923,8 @@ const ruleApplies = (
 	return trace === undefined
 		? test
 		: Effect.tap(test, (applies) =>
-				Ref.update(trace, Arr.append({ path, rule: value, applies })),
+				// A chunk adds a step with no copy of the steps before.
+				Ref.update(trace, Chunk.append({ path, rule: value, applies })),
 			)
 }
 
@@ -1101,7 +1144,7 @@ export const fitsKind = (
 const makeContext = (
 	domain: Domain.Any,
 	request: AnyRequest,
-	trace: Ref.Ref<ReadonlyArray<Step>> | undefined,
+	trace: Ref.Ref<Chunk.Chunk<Step>> | undefined,
 ): DecideContext | undefined => {
 	const kind = Resource.kindOf(request.resource)
 	const descriptor =
@@ -1209,13 +1252,13 @@ export const explain: {
 		// Each run of the Effect needs its own trace, so the trace is made inside
 		// the Effect.
 		Effect.gen(function* () {
-			const trace = yield* Ref.make<ReadonlyArray<Step>>([])
+			const trace = yield* Ref.make(Chunk.empty<Step>())
 			const context = makeContext(policy.domain, request, trace)
 			if (context === undefined) {
 				return { decision: Decision.NotApplicable, steps: [] }
 			}
 			const decision = yield* decideNode(nodeOf(policy), context, [])
-			return { decision, steps: yield* Ref.get(trace) }
+			return { decision, steps: Chunk.toReadonlyArray(yield* Ref.get(trace)) }
 		}),
 ) as never
 
