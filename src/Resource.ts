@@ -333,8 +333,11 @@ const resolves = (
 			if (property !== undefined) {
 				return resolves(property.type, names, index + 1, new Set())
 			}
-			return ast.indexSignatures.some((signature) =>
-				resolves(signature.type, names, index + 1, new Set()),
+			// A key of a record must fit the Schema of the keys.
+			return ast.indexSignatures.some(
+				(signature) =>
+					Schema.is(Schema.make(signature.parameter))(name) &&
+					resolves(signature.type, names, index + 1, new Set()),
 			)
 		}
 		case "Union":

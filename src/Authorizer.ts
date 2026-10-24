@@ -187,10 +187,15 @@ export interface Authorizer<D extends Domain.Any, E, R> {
 	 * Gives the condition on resource values that the principal may act on.
 	 * Change it into a query with `Condition.fold`.
 	 */
-	readonly filter: (
-		target: Policy.KindTarget<D>,
+	readonly filter: <const T extends Policy.KindTarget<D>>(
+		target: T,
 	) => Effect.Effect<
-		Condition.Condition<E, never, Condition.Opaque>,
+		Condition.Condition<
+			E,
+			never,
+			Condition.Opaque,
+			Policy.ResidualReads<D, T["kind"]>
+		>,
 		PolicyUnavailable | E,
 		R
 	>
@@ -239,10 +244,15 @@ export interface ServiceClass<
 		E2 | Forbidden | Pending | PolicyUnavailable | E,
 		R | Self
 	>
-	readonly filter: (
-		target: Policy.KindTarget<D>,
+	readonly filter: <const T extends Policy.KindTarget<D>>(
+		target: T,
 	) => Effect.Effect<
-		Condition.Condition<E, never, Condition.Opaque>,
+		Condition.Condition<
+			E,
+			never,
+			Condition.Opaque,
+			Policy.ResidualReads<D, T["kind"]>
+		>,
 		PolicyUnavailable | E,
 		R | Self
 	>
@@ -481,7 +491,8 @@ const keyText = (value: unknown, seen: Set<object>): string | undefined => {
 			Schema.isSchema((prototype as object).constructor)) &&
 		own.every((key) => typeof key === "string" && isPlainField(value, key))
 	) {
-		const keys = (own as Array<string>).slice().sort()
+		// The keys keep their order, because a loader may read the first one.
+		const keys = own as Array<string>
 		const items = all(
 			keys.map((key) => (value as Record<string, unknown>)[key]),
 		)

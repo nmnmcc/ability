@@ -29,17 +29,22 @@ import * as Resource from "./Resource.ts"
  * A rule. `E`, `R` and `O` come from its condition. See
  * `Condition.Condition`. `D` is the domain of the rule. A predicate reads the
  * values and the principal of its domain, so a rule may go only into a policy
- * of its own domain. A rule from {@link make} has the domain `any`.
+ * of its own domain. A rule from {@link make} has the domain `any`. `I` is
+ * what the predicates of its condition read. See `Condition.Reads`.
  *
  * @stability stable
  * @category models
  * @since 0.3.0
  */
-export interface Rule<E = never, R = never, O = never, D = any>
-	extends Shape<E, R, O>, Pipeable.Pipeable {
+export interface Rule<E = never, R = never, O = never, D = any, I = unknown>
+	extends Shape<E, R, O, I>, Pipeable.Pipeable {
 	readonly "~Rule"?: Condition.Variance<E, R, O>
 	readonly "~Domain"?: (domain: D) => D
-	[Symbol.iterator](): Generator<Rule<E, R, O, D>, Rule<E, R, O, D>, unknown>
+	[Symbol.iterator](): Generator<
+		Rule<E, R, O, D, I>,
+		Rule<E, R, O, D, I>,
+		unknown
+	>
 }
 
 /**
@@ -49,11 +54,11 @@ export interface Rule<E = never, R = never, O = never, D = any>
  * @category models
  * @since 0.4.0
  */
-export interface Shape<E = never, R = never, O = never> {
+export interface Shape<E = never, R = never, O = never, I = unknown> {
 	readonly _tag: "Allow" | "Deny"
 	readonly actions: ReadonlyArray<string>
 	readonly resources: ReadonlyArray<string>
-	readonly when?: Condition.Condition<E, R, O>
+	readonly when?: Condition.Condition<E, R, O, I>
 	readonly fields?: ReadonlyArray<string>
 	readonly reason?: string
 	readonly id?: string
@@ -67,7 +72,7 @@ export interface Shape<E = never, R = never, O = never> {
  * @category models
  * @since 0.3.0
  */
-export type Any = Rule<any, any, any, any>
+export type Any = Rule<any, any, any, any, any>
 
 /**
  * The error type of a rule.
@@ -226,7 +231,13 @@ export interface Builder<D> {
 		action: SingleOrArray<A>,
 		resource: SingleOrArray<T>,
 		options?: Options<D, KindOf<T>, C>,
-	) => Rule<Condition.Error<C>, Condition.Services<C>, Condition.OpaqueOf<C>, D>
+	) => Rule<
+		Condition.Error<C>,
+		Condition.Services<C>,
+		Condition.OpaqueOf<C>,
+		D,
+		Condition.ReadsOf<C>
+	>
 	readonly deny: <
 		const T extends Target<D>,
 		const A extends ActionFor<D, KindOf<T>>,
@@ -235,14 +246,20 @@ export interface Builder<D> {
 		action: SingleOrArray<A>,
 		resource: SingleOrArray<T>,
 		options?: Options<D, KindOf<T>, C>,
-	) => Rule<Condition.Error<C>, Condition.Services<C>, Condition.OpaqueOf<C>, D>
+	) => Rule<
+		Condition.Error<C>,
+		Condition.Services<C>,
+		Condition.OpaqueOf<C>,
+		D,
+		Condition.ReadsOf<C>
+	>
 }
 
 /**
  * The class of every rule value. A rule works in a generator: it gives
  * itself, so `yield* _.allow(...)` gives the rule to `Policy.define`.
  */
-class RuleData extends Data.Class<Shape<unknown, unknown, unknown>> {
+class RuleData extends Data.Class<Shape<unknown, unknown, unknown, any>> {
 	*[Symbol.iterator](): Generator<this, this, unknown> {
 		yield this
 		return this
@@ -258,11 +275,13 @@ class RuleData extends Data.Class<Shape<unknown, unknown, unknown>> {
  * @category constructors
  * @since 0.4.0
  */
-export const make = <E = never, R = never, O = never>(
-	data: Shape<E, R, O>,
-): Rule<E, R, O> => {
+export const make = <E = never, R = never, O = never, I = unknown>(
+	data: Shape<E, R, O, I>,
+): Rule<E, R, O, any, I> => {
 	// A missing option is left out, so two rules with the same data are equal.
-	const shape: { -readonly [K in keyof Shape<E, R, O>]: Shape<E, R, O>[K] } = {
+	const shape: {
+		-readonly [K in keyof Shape<E, R, O, I>]: Shape<E, R, O, I>[K]
+	} = {
 		_tag: data._tag,
 		actions: [...data.actions],
 		resources: [...data.resources],

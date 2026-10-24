@@ -686,4 +686,44 @@ describe("Authorizer", () => {
 			assert.strictEqual(failureTag(exit), "PolicyUnavailable")
 		}),
 	)
+
+	it.effect("does not give one cached policy to two orders of a record", () =>
+		Effect.gen(function* () {
+			class Holder extends Principal.Class<Holder>("Holder")({
+				roles: Schema.Record(Schema.String, Schema.String),
+			}) {}
+			const Holders = Domain.make({ principal: Holder, resources: [Bot] })
+			class CurrentHolder extends Context.Service<CurrentHolder, Holder>()(
+				"@nmnmcc/ability/tests/Authorizer.test/CurrentHolder",
+			) {}
+			class HolderAuth extends Authorizer.Service<
+				HolderAuth,
+				{ requires: CurrentHolder }
+			>()("test/HolderAuth", Holders) {}
+			const layer = Authorizer.layer(HolderAuth, {
+				principal: CurrentHolder,
+				policy: (user) =>
+					Effect.succeed(
+						Policy.define(Holders)(function* (_) {
+							if (Object.values(user.roles)[0] === "admin") {
+								yield* _.allow("read", Bot)
+							}
+						}),
+					),
+			})
+			const exit = yield* Effect.gen(function* () {
+				yield* Effect.provideService(
+					HolderAuth.check({ action: "read", resource: aliceBot }),
+					CurrentHolder,
+					Holder.make({ roles: { a: "admin", b: "guest" } }),
+				)
+				yield* Effect.provideService(
+					HolderAuth.check({ action: "read", resource: aliceBot }),
+					CurrentHolder,
+					Holder.make({ roles: { b: "guest", a: "admin" } }),
+				)
+			}).pipe(Effect.provide(layer), Effect.exit)
+			assert.strictEqual(failureTag(exit), "Forbidden")
+		}),
+	)
 })

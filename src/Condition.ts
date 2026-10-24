@@ -948,7 +948,9 @@ const evaluateAst = (
  */
 type ReadsInput<I> =
 	I extends Reads<infer V, infer P>
-		? { readonly value: V; readonly principal: P }
+		? { readonly value: V } & (unknown extends P
+				? unknown
+				: { readonly principal: P })
 		: unknown
 
 /** `unknown` when `In` gives what `I` reads, and `never` when it does not. */
@@ -983,8 +985,9 @@ export const evaluate: {
  * @since 0.3.0
  */
 export const evaluateSync: {
-	(input: Input): (condition: Condition) => boolean
-	(condition: Condition, input: Input): boolean
+	// A condition with no predicate reads nothing, so `I` does not matter.
+	(input: Input): (condition: Condition<never, never, never, any>) => boolean
+	(condition: Condition<never, never, never, any>, input: Input): boolean
 } = dual(2, evaluateSyncAst)
 
 // The nodes are Effect data, so a hash set finds an equal node at once. A
@@ -1237,6 +1240,29 @@ const bind = (
 	}
 }
 
+interface PartialInput {
+	readonly principal?: object | undefined
+	readonly path?: ReadonlyArray<Resource.PathSegment> | undefined
+}
+
+/**
+ * The principal that {@link partial} must get for the predicates of a
+ * condition. A predicate keeps the principal that it gets, so the principal
+ * must have the type that the predicate reads.
+ */
+type PrincipalInput<I> =
+	I extends Reads<infer _V, infer P>
+		? unknown extends P
+			? unknown
+			: { readonly principal: P }
+		: unknown
+
+/** `unknown` when `In` gives what `I` reads, and `never` when it does not. */
+type PrincipalFrom<I, In> = In extends PrincipalInput<I> ? unknown : never
+
+/** What a condition reads after {@link partial}: the value, and no principal. */
+type Bound<I> = I extends Reads<infer V, infer _P> ? Reads<V, unknown> : I
+
 /**
  * Puts the principal into a condition and expands `Under` with the path of the
  * resource. The result is simplified. It has no principal fields and no
@@ -1248,17 +1274,15 @@ const bind = (
  * @since 0.3.0
  */
 export const partial: {
-	(input: {
-		readonly principal?: object | undefined
-		readonly path?: ReadonlyArray<Resource.PathSegment> | undefined
-	}): <E, R, O, I>(condition: Condition<E, R, O, I>) => Condition<E, R, O, I>
+	<In extends PartialInput>(
+		input: In,
+	): <E, R, O, I>(
+		condition: Condition<E, R, O, I> & PrincipalFrom<I, In>,
+	) => Condition<E, R, O, Bound<I>>
 	<E, R, O, I>(
 		condition: Condition<E, R, O, I>,
-		input: {
-			readonly principal?: object | undefined
-			readonly path?: ReadonlyArray<Resource.PathSegment> | undefined
-		},
-	): Condition<E, R, O, I>
+		input: PartialInput & PrincipalInput<I>,
+	): Condition<E, R, O, Bound<I>>
 } = dual(
 	2,
 	(

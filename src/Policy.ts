@@ -381,7 +381,7 @@ const fromNode = (domain: Domain.Any, node: Node): any =>
  */
 export const rules: <
 	D extends Domain.Any,
-	Rules extends Rule.Rule<any, any, any, D>,
+	Rules extends Rule.Rule<any, any, any, D, any>,
 >(
 	domain: D,
 	rules: Iterable<Rules>,
@@ -427,7 +427,7 @@ export const rules: <
  */
 export const define =
 	<D extends Domain.Any>(domain: D, options?: Options) =>
-	<Rules extends Rule.Rule<any, any, any, D>, A>(
+	<Rules extends Rule.Rule<any, any, any, D, any>, A>(
 		body: (builder: Rule.Builder<D>) => Generator<Rules, A, unknown>,
 	): Policy<
 		D,
@@ -951,12 +951,25 @@ type Ast = Condition.Ast
  * @category models
  * @since 0.4.0
  */
-export interface Residuals<E = never, R = never, O = never> {
+export interface Residuals<E = never, R = never, O = never, I = unknown> {
 	/** The condition on resource values for which the policy allows. */
-	readonly allow: Condition.Condition<E, R, O>
+	readonly allow: Condition.Condition<E, R, O, I>
 	/** The condition on resource values for which the policy denies. */
-	readonly deny: Condition.Condition<E, R, O>
+	readonly deny: Condition.Condition<E, R, O, I>
 }
+
+/**
+ * What a residual condition reads: a value of the kind `K`. The principal is
+ * already in it.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 0.4.0
+ */
+export type ResidualReads<D, K> = Condition.Reads<
+	Domain.ValueOf<D, K & string>,
+	unknown
+>
 
 const always: Ast = Condition.always
 const never: Ast = Condition.never
@@ -1259,13 +1272,18 @@ const residualsAny = (
  * @since 0.3.0
  */
 export const residual: {
-	<D extends Domain.Any = never>(
-		request: KindRequest<D>,
-	): <E, R, O>(policy: Policy<D, E, R, O>) => Condition.Condition<E, R, O>
-	<D extends Domain.Any, E, R, O>(
+	<
+		D extends Domain.Any = never,
+		const Req extends KindRequest<D> = KindRequest<D>,
+	>(
+		request: Req,
+	): <E, R, O>(
 		policy: Policy<D, E, R, O>,
-		request: KindRequest<NoInfer<D>>,
-	): Condition.Condition<E, R, O>
+	) => Condition.Condition<E, R, O, ResidualReads<D, Req["kind"]>>
+	<D extends Domain.Any, E, R, O, const Req extends KindRequest<NoInfer<D>>>(
+		policy: Policy<D, E, R, O>,
+		request: Req,
+	): Condition.Condition<E, R, O, ResidualReads<D, Req["kind"]>>
 } = dual(
 	2,
 	(policy: Any, request: KindRequest<Domain.Any>): Ast =>
@@ -1282,13 +1300,18 @@ export const residual: {
  * @since 0.4.0
  */
 export const residuals: {
-	<D extends Domain.Any = never>(
-		request: KindRequest<D>,
-	): <E, R, O>(policy: Policy<D, E, R, O>) => Residuals<E, R, O>
-	<D extends Domain.Any, E, R, O>(
+	<
+		D extends Domain.Any = never,
+		const Req extends KindRequest<D> = KindRequest<D>,
+	>(
+		request: Req,
+	): <E, R, O>(
 		policy: Policy<D, E, R, O>,
-		request: KindRequest<NoInfer<D>>,
-	): Residuals<E, R, O>
+	) => Residuals<E, R, O, ResidualReads<D, Req["kind"]>>
+	<D extends Domain.Any, E, R, O, const Req extends KindRequest<NoInfer<D>>>(
+		policy: Policy<D, E, R, O>,
+		request: Req,
+	): Residuals<E, R, O, ResidualReads<D, Req["kind"]>>
 } = dual(2, residualsAny) as never
 
 // Schema

@@ -97,7 +97,13 @@ describe("Rule", () => {
 			when: ($) => $.predicate("quota", () => Effect.fail("no quota" as const)),
 		})
 		expect(rule).type.toBe<
-			Rule.Rule<"no quota", never, Condition.Opaque, App>
+			Rule.Rule<
+				"no quota",
+				never,
+				Condition.Opaque,
+				App,
+				Condition.Reads<Bot, Caller>
+			>
 		>()
 		expect(_.allow("read", Bot)).type.toBe<
 			Rule.Rule<never, never, never, App>
@@ -188,6 +194,48 @@ describe("Policy", () => {
 		})
 	})
 
+	it("keeps what the condition of a rule reads", () => {
+		const _ = Rule.builder(App)
+		const rule = _.allow("read", Bot, {
+			when: ($) => $.predicate("level", (bot) => bot.level !== 0),
+		})
+		expect(_.allow).type.not.toBeCallableWith("read", Trigger, {
+			when: () => rule.when ?? Condition.never,
+		})
+	})
+
+	it("needs the principal that a predicate reads in partial", () => {
+		const named = Condition.builder<unknown, Bot, Caller>().predicate(
+			"named",
+			(_, user) => user.userId.length > 0,
+		)
+		expect(Condition.partial).type.toBeCallableWith(named, {
+			principal: alice,
+		})
+		expect(Condition.partial).type.not.toBeCallableWith(named, {
+			principal: {},
+		})
+	})
+
+	it("keeps the kind of a residual", () => {
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot, {
+				when: ($) => $.predicate("level", (bot) => bot.level !== 0),
+			})
+		})
+		const residual = Policy.residual(policy, {
+			principal: alice,
+			action: "read",
+			kind: "Bot",
+		})
+		expect(Condition.evaluate).type.toBeCallableWith(residual, {
+			value: aliceBot,
+		})
+		expect(Condition.evaluate).type.not.toBeCallableWith(residual, {
+			value: aliceTrigger,
+		})
+	})
+
 	it("gives a predicate what it reads", () => {
 		const leveled = Condition.builder<unknown, Bot, Caller>().predicate(
 			"leveled",
@@ -235,7 +283,13 @@ describe("Policy", () => {
 			when: ($) => $.predicate("quota", () => Effect.fail("empty" as const)),
 		})
 		expect(rule.when).type.toBe<
-			Condition.Condition<"empty", never, Condition.Opaque> | undefined
+			| Condition.Condition<
+					"empty",
+					never,
+					Condition.Opaque,
+					Condition.Reads<Bot & { readonly _tag: "Bot" }, Caller>
+			  >
+			| undefined
 		>()
 		expect(policy).type.toBe<Policy.Policy<App>>()
 		expect(effectful).type.toBe<

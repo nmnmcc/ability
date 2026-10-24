@@ -1020,6 +1020,21 @@ describe("Policy", () => {
 		)
 	})
 
+	it("checks a key of a record against the Schema of the keys", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: {
+				settings: Schema.Record(
+					Schema.TemplateLiteral(["public-", Schema.String]),
+					Schema.String,
+				),
+			},
+		})
+		const schema = Resource.descriptor(Note).schema
+		assert.isTrue(Resource.hasPath(schema, "settings.public-mode"))
+		assert.isFalse(Resource.hasPath(schema, "settings.private-mode"))
+	})
+
 	it("takes a deep path in a recursive Schema", () => {
 		interface Tree {
 			readonly name: string
