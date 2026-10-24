@@ -607,6 +607,49 @@ const resolves = (
 }
 
 /**
+ * Tests if a Schema has no value at all: a required field of it, at some
+ * depth, has no value, as `Schema.Never` has none. A required field that
+ * holds the struct itself again, with no way to stop, has no finite value
+ * either. Other checks, such as a minimum and a maximum that do not meet, are
+ * not seen, so a "no" does not prove that the Schema has a value.
+ *
+ * @stability stable
+ * @category predicates
+ * @since 0.5.0
+ */
+export const hasNoValue = (schema: Schema.Top): boolean =>
+	isEmptyType(schema.ast, new Set())
+
+const isEmptyType = (
+	ast: SchemaAST.AST,
+	open: ReadonlySet<SchemaAST.AST>,
+): boolean => {
+	switch (ast._tag) {
+		case "Never":
+			return true
+		case "Objects":
+			return Arr.some(
+				ast.propertySignatures,
+				(property) =>
+					!SchemaAST.isOptional(property.type) &&
+					isEmptyType(property.type, open),
+			)
+		case "Union":
+			return Arr.every(ast.types, (type) => isEmptyType(type, open))
+		case "Suspend":
+			// A walk that comes back to a suspend node on required fields only
+			// never stops, so such a value can not be made.
+			return open.has(ast) || isEmptyType(ast.thunk(), new Set([...open, ast]))
+		case "Declaration": {
+			const inner = classStruct(ast)
+			return inner !== undefined && isEmptyType(inner, open)
+		}
+		default:
+			return false
+	}
+}
+
+/**
  * The values that one field of a resource may hold, as a condition sees them.
  * A missing field and `undefined` are `null`. The domain may be larger than
  * the real set of values: Schema checks other than finite and integer checks

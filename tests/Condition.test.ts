@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Effect, Exit, pipe, Schema } from "effect"
-import { Condition, type Resource } from "../src/index.ts"
+import { Condition, Resource } from "../src/index.ts"
 import { alice, aliceBot, Bot, Caller, sharedBot } from "./fixtures.ts"
 
 const $ = Condition.builder<Resource.Data<typeof Bot>, Bot, Caller>()
@@ -311,7 +311,8 @@ describe("Condition", () => {
 			note: Schema.optionalKey(Schema.String),
 			box: Schema.NullOr(Schema.Struct({ label: Schema.String })),
 			when: Schema.Date,
-			nothing: Schema.Never,
+			// A required field with no value would make the whole Schema empty.
+			nothing: Schema.optionalKey(Schema.Never),
 		})
 		type Data = typeof Shape.Type
 		const _ = Condition.builder<Data, Data, never>()
@@ -431,6 +432,31 @@ describe("Condition", () => {
 			assert.strictEqual(reasonOf(_.exists("box.label")), "schema")
 			assert.strictEqual(reasonOf(loose.ne("when", "x")), "schema")
 			assert.strictEqual(reasonOf(_.exists("nothing")), "schema")
+		})
+
+		it("knows that a Schema with a required field of no value is empty", () => {
+			const Empty = Schema.Struct({
+				name: Schema.String,
+				missing: Schema.Never,
+			})
+			assert.strictEqual(
+				Condition.satisfiable(Condition.always, { schema: Empty })._tag,
+				"Unsatisfiable",
+			)
+			interface Loop {
+				readonly next: Loop
+			}
+			const Loop: Schema.Codec<Loop> = Schema.Struct({
+				next: Schema.suspend((): Schema.Codec<Loop> => Loop),
+			})
+			assert.isTrue(Resource.hasNoValue(Loop))
+			interface List {
+				readonly next: List | null
+			}
+			const List: Schema.Codec<List> = Schema.Struct({
+				next: Schema.NullOr(Schema.suspend((): Schema.Codec<List> => List)),
+			})
+			assert.isFalse(Resource.hasNoValue(List))
 			// A plain field next to them is still exact.
 			assert.strictEqual(tagOf(_.eq("name", "a")), "Satisfiable")
 		})

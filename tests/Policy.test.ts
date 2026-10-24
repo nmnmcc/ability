@@ -1780,6 +1780,22 @@ describe("Policy", () => {
 		)
 	})
 
+	it("does not take a test with a principal field of another type", () => {
+		assert.throws(
+			() =>
+				Policy.define(App)(function* (_) {
+					yield* _.allow("read", Bot)
+					yield* _.deny("read", Bot, {
+						when: ($) => ({
+							...$.eq("level", 3),
+							value: { _tag: "Principal", path: "userId" } as const,
+						}),
+					})
+				}),
+			/can not hold a value of the principal field "userId"/,
+		)
+	})
+
 	it("makes the residual of a very wide condition", () => {
 		const policy = Schema.decodeUnknownSync(PolicySchemaOfApp)({
 			_tag: "Rules",

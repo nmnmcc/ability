@@ -2423,6 +2423,10 @@ const satisfiableAst = (
 	}
 	const schema = options.schema
 	const tested = fields(ast)
+	// A Schema with no value has no value that the condition is true for.
+	if (schema !== undefined && Resource.hasNoValue(schema)) {
+		return satisfiability.Unsatisfiable()
+	}
 	// The model of the values of a field is exact only for a plain scalar
 	// field. For another field, a value may have data that the Schema does not
 	// show, so the search can not say.

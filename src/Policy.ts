@@ -2226,6 +2226,71 @@ const literalTestsIn = (
 		}
 	})
 
+/** A test of a field with a field of the principal, as in `eq("ownerId", $.principal("id"))`. */
+type PrincipalTest = readonly [field: string, ref: string]
+
+const principalTests = (node: ConditionNode): ReadonlyArray<PrincipalTest> =>
+	Arr.map(
+		Array.from(principalTestsIn(node, new Map())),
+		(text) => JSON.parse(text) as PrincipalTest,
+	)
+
+/**
+ * The tests of fields with principal fields in a node, each as the JSON text
+ * of a {@link PrincipalTest}. See {@link literalTestsIn}.
+ */
+const principalTestsIn = (
+	node: ConditionNode,
+	memo: Map<ConditionNode, HashSet.HashSet<string>>,
+): HashSet.HashSet<string> =>
+	remember(memo, node, () => {
+		const tests = (
+			field: string,
+			operands: ReadonlyArray<Condition.Operand>,
+		): HashSet.HashSet<string> =>
+			HashSet.fromIterable(
+				Arr.flatMap(operands, (operand) =>
+					operand._tag === "Principal"
+						? [JSON.stringify([field, operand.path])]
+						: [],
+				),
+			)
+		switch (node._tag) {
+			case "Compare":
+				return tests(node.field, [node.value])
+			case "In":
+				return tests(node.field, node.values)
+			case "And":
+			case "Or":
+				return Arr.reduce(
+					node.conditions as ReadonlyArray<ConditionNode>,
+					HashSet.empty<string>(),
+					(all, child) => HashSet.union(all, principalTestsIn(child, memo)),
+				)
+			case "Not":
+				return principalTestsIn(node.condition, memo)
+			default:
+				return HashSet.empty()
+		}
+	})
+
+/**
+ * Tests if two fields may hold one value: a value of one type, or a single
+ * value that the other field may hold.
+ */
+const domainsMeet = (
+	left: Resource.FieldDomain,
+	right: Resource.FieldDomain,
+): boolean =>
+	left.object ||
+	right.object ||
+	(left.null && right.null) ||
+	(left.string && right.string) ||
+	(left.boolean && right.boolean) ||
+	(left.number !== "none" && right.number !== "none") ||
+	Arr.some(left.literals, (value) => fitsDomain(right, value)) ||
+	Arr.some(right.literals, (value) => fitsDomain(left, value))
+
 /**
  * Tests if a field with this domain may hold a value of the type of `value`.
  * `null` always fits: a test with `null` is a test that the field is missing.
@@ -2345,6 +2410,24 @@ const validate = (
 				([field, literal]): Issue => ({
 					path: [...at, "when"],
 					issue: `The field "${field}" can not hold the value ${JSON.stringify(literal)}`,
+				}),
+			),
+			...Arr.map(
+				Arr.filter(
+					value.when === undefined ? [] : principalTests(value.when),
+					([field, ref]) =>
+						Arr.some(
+							descriptors,
+							(descriptor) =>
+								!domainsMeet(
+									Resource.domainOf(descriptor.schema, field),
+									Resource.domainOf(domain.principal, ref),
+								),
+						),
+				),
+				([field, ref]): Issue => ({
+					path: [...at, "when"],
+					issue: `The field "${field}" can not hold a value of the principal field "${ref}"`,
 				}),
 			),
 		]
