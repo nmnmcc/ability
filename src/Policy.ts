@@ -136,7 +136,10 @@ export type TypedNode<E = never, R = never, O = never, D = any> = (
 	| {
 			readonly _tag: "Rules"
 			readonly algorithm: Algorithm
-			readonly rules: ReadonlyArray<Rule.Rule<E, R, O, D, any>>
+			// The rules may read different values, so a node keeps no one type of
+			// what they read. With `never`, a condition taken from a node fits no
+			// rule that reads a value or a principal.
+			readonly rules: ReadonlyArray<Rule.Rule<E, R, O, D, never>>
 	  }
 	| {
 			readonly _tag: "All" | "Any" | "FirstOf"
@@ -398,6 +401,9 @@ class PolicyData extends Data.Class<{
 	}
 }
 
+/** The node of a policy, with no types, for the code below. */
+const nodeOf = (policy: Any): Node => policy.node as Node
+
 const fromNode = (domain: Domain.Any, node: Node): any =>
 	new PolicyData({ domain, node })
 
@@ -410,7 +416,7 @@ const fromNode = (domain: Domain.Any, node: Node): any =>
  */
 export const rules: <
 	D extends Domain.Any,
-	Rules extends Rule.Rule<any, any, any, D, any>,
+	Rules extends Rule.Rule<any, any, any, D, never>,
 >(
 	domain: D,
 	rules: Iterable<Rules>,
@@ -456,7 +462,7 @@ export const rules: <
  */
 export const define =
 	<D extends Domain.Any>(domain: D, options?: Options) =>
-	<Rules extends Rule.Rule<any, any, any, D, any>, A>(
+	<Rules extends Rule.Rule<any, any, any, D, never>, A>(
 		body: (builder: Rule.Builder<D>) => Generator<Rules, A, unknown>,
 	): Policy<
 		D,
@@ -508,7 +514,7 @@ const combine =
 	(policies: ReadonlyArray<Any>): any =>
 		fromNode(
 			sameDomain(policies),
-			nodes[tag]({ policies: policies.map((policy) => policy.node) }),
+			nodes[tag]({ policies: policies.map(nodeOf) }),
 		)
 
 /**
@@ -570,7 +576,7 @@ export const ceiling: {
 } = dual(2, (policy: Any, cap: Any): any =>
 	fromNode(
 		sameDomain([policy, cap]),
-		nodes.Ceiling({ cap: cap.node, policy: policy.node }),
+		nodes.Ceiling({ cap: nodeOf(cap), policy: nodeOf(policy) }),
 	),
 )
 
@@ -646,7 +652,7 @@ export const provideContext: {
 		context: Context.Context<R>,
 	): Policy<D, E, never, O>
 } = dual(2, (policy: Any, context: Context.Context<never>): any =>
-	fromNode(policy.domain, provideNode(policy.node, context)),
+	fromNode(policy.domain, provideNode(nodeOf(policy), context)),
 )
 
 // Decisions
@@ -676,7 +682,9 @@ const ruleApplies = (
 	const test =
 		value.when === undefined
 			? Effect.succeed(true)
-			: Condition.evaluate(value.when, context.input)
+			: // A rule of a node keeps no type of what it reads. The decision gives
+				// it the value and the principal of the request.
+				Condition.evaluate(value.when as Condition.Any, context.input)
 	return context.trace === undefined
 		? test
 		: Effect.tap(test, (applies) =>
@@ -845,12 +853,15 @@ const makeContext = (
 const decideAny = (
 	policy: Any,
 	request: AnyRequest,
-): Effect.Effect<Decision.Decision, unknown, unknown> => {
-	const context = makeContext(policy.domain, request, undefined)
-	return context === undefined
-		? Effect.succeed(Decision.NotApplicable)
-		: decideNode(policy.node, context, [])
-}
+): Effect.Effect<Decision.Decision, unknown, unknown> =>
+	// Each run of the Effect needs its own store of decisions, because the
+	// resource value may change between two runs.
+	Effect.suspend(() => {
+		const context = makeContext(policy.domain, request, undefined)
+		return context === undefined
+			? Effect.succeed(Decision.NotApplicable)
+			: decideNode(nodeOf(policy), context, [])
+	})
 
 /**
  * Gives the decision of a policy for a request.
@@ -924,10 +935,13 @@ export const explain: {
 			if (context === undefined) {
 				return Effect.succeed({ decision: Decision.NotApplicable, steps: [] })
 			}
-			return Effect.map(decideNode(policy.node, context, []), (decision) => ({
-				decision,
-				steps: trace,
-			}))
+			return Effect.map(
+				decideNode(nodeOf(policy), context, []),
+				(decision) => ({
+					decision,
+					steps: trace,
+				}),
+			)
 		}),
 ) as never
 
@@ -1160,7 +1174,7 @@ const ruleCondition = (value: Rule.Any, context: ResidualContext): Ast =>
 		? never
 		: value.when === undefined
 			? always
-			: Condition.partial(value.when, context.input)
+			: Condition.partial(value.when as Condition.Any, context.input)
 
 /**
  * Gives the conditions for "the first rule that applies is an allow rule" and
@@ -1371,9 +1385,9 @@ const residualsAny = (
 		pairs: new Map(),
 		predicates: new Map(),
 	}
-	if (!usesPredicate(policy.node, context)) {
+	if (!usesPredicate(nodeOf(policy), context)) {
 		try {
-			return residualNode(policy.node, context)
+			return residualNode(nodeOf(policy), context)
 		} catch (error) {
 			// The type of the residual of a plain policy says that it has no
 			// predicate, so it can not be the predicate below. The policy is too

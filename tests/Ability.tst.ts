@@ -254,6 +254,33 @@ describe("Policy", () => {
 		})
 	})
 
+	it("does not let a condition from a node go into another rule", () => {
+		const _ = Rule.builder(App)
+		const node = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot, {
+				when: ($) => $.predicate("level", (bot) => bot.level !== 0),
+			})
+		}).node
+		if (node._tag === "Rules") {
+			const when = node.rules[0]!.when!
+			expect(_.allow).type.not.toBeCallableWith("read", "Trigger", {
+				when: () => when,
+			})
+		}
+	})
+
+	it("keeps the principal of a test with a principal field", () => {
+		class Numbered extends Schema.Class<Numbered>("Numbered")({
+			userId: Schema.Finite,
+		}) {}
+		const Other = Domain.make({ principal: Numbered, resources: [Bot] })
+		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
+		const owned = $.eq("ownerUserId", $.principal("userId"))
+		expect(Rule.builder(Other).deny).type.not.toBeCallableWith("read", Bot, {
+			when: () => owned,
+		})
+	})
+
 	it("keeps the domain of the rules of a node", () => {
 		const Other = Domain.make({ principal: Caller, resources: [Bot] })
 		const node = Policy.define(App)(function* (_) {

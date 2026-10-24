@@ -489,7 +489,7 @@ describe("Policy", () => {
 		type BotBuilder = Condition.Builder<Rule.DataFor<App, "Bot">, Bot, Caller>
 		const conditions: Record<
 			Exclude<(typeof Spec.Type)["when"], "none">,
-			($: BotBuilder) => Condition.Test<Bot>
+			($: BotBuilder) => Condition.Test<Bot, Caller>
 		> = {
 			owner: ($) => $.eq("ownerUserId", $.principal("userId")),
 			shared: ($) => $.eq("ownerUserId", null),
@@ -511,7 +511,7 @@ describe("Policy", () => {
 		const toRule = (
 			_: Rule.Builder<App>,
 			spec: typeof Spec.Type,
-		): Rule.Rule<never, never, never, App, Condition.Reads<Bot, unknown>> => {
+		): Rule.Rule<never, never, never, App, Condition.Reads<Bot, Caller>> => {
 			const make = spec.tag === "Allow" ? _.allow : _.deny
 			return make(spec.action, Bot, {
 				...(spec.fields ? { fields: ["name"] } : {}),
@@ -1005,6 +1005,30 @@ describe("Policy", () => {
 			})._tag,
 			"Allow",
 		)
+	})
+
+	it("decides again each time the Effect runs", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { owner: Schema.mutableKey(Schema.String) },
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.all([
+			Policy.define(Notes)(function* (_) {
+				yield* _.allow("read", Note, {
+					when: ($) => $.eq("owner", $.principal("userId")),
+				})
+			}),
+		])
+		const note = Note.make({ owner: "alice" })
+		const decide = Policy.decide(policy, {
+			principal: alice,
+			action: "read",
+			resource: note,
+		})
+		assert.strictEqual(Effect.runSync(decide)._tag, "Allow")
+		note.owner = "bob"
+		assert.strictEqual(Effect.runSync(decide)._tag, "NotApplicable")
 	})
 
 	it("does not let a rule for no fields cover a request", () => {

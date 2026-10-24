@@ -489,13 +489,27 @@ type OrderedPath<T> = {
 /**
  * A test made by a {@link Builder}. It runs no code, but it keeps the value
  * type of its resource, so a test on the fields of one resource can not go
- * into a rule for another resource.
+ * into a rule for another resource. A test with a field of the principal
+ * keeps the principal type `P` too.
  *
  * @stability stable
  * @category models
  * @since 0.4.0
  */
-export type Test<Value> = Condition<never, never, never, Reads<Value, unknown>>
+export type Test<Value, P = unknown> = Condition<
+	never,
+	never,
+	never,
+	Reads<Value, P>
+>
+
+/**
+ * The principal type that a test reads: `P` when one of the values `V` is a
+ * field of the principal, and `unknown` when none is.
+ */
+type PrincipalOf<V, P> = [Extract<V, PrincipalRef>] extends [never]
+	? unknown
+	: P
 
 /**
  * Makes conditions for a resource with the data type `Data` and the value type
@@ -507,42 +521,65 @@ export type Test<Value> = Condition<never, never, never, Reads<Value, unknown>>
  */
 export interface Builder<Data, Value, P> {
 	/** The field is equal to the value. */
-	readonly eq: <const F extends FieldPath<Data>>(
+	readonly eq: <
+		const F extends FieldPath<Data>,
+		const V extends OperandOf<PathValue<Data, F>>,
+	>(
 		field: F,
-		value: OperandOf<PathValue<Data, F>>,
-	) => Test<Value>
+		value: V,
+	) => Test<Value, PrincipalOf<V, P>>
 	/** The field is not equal to the value. */
-	readonly ne: <const F extends FieldPath<Data>>(
+	readonly ne: <
+		const F extends FieldPath<Data>,
+		const V extends OperandOf<PathValue<Data, F>>,
+	>(
 		field: F,
-		value: OperandOf<PathValue<Data, F>>,
-	) => Test<Value>
-	readonly lt: <const F extends OrderedPath<Data>>(
+		value: V,
+	) => Test<Value, PrincipalOf<V, P>>
+	readonly lt: <
+		const F extends OrderedPath<Data>,
+		const V extends OperandOf<Exclude<PathValue<Data, F>, null>>,
+	>(
 		field: F,
-		value: OperandOf<Exclude<PathValue<Data, F>, null>>,
-	) => Test<Value>
-	readonly lte: <const F extends OrderedPath<Data>>(
+		value: V,
+	) => Test<Value, PrincipalOf<V, P>>
+	readonly lte: <
+		const F extends OrderedPath<Data>,
+		const V extends OperandOf<Exclude<PathValue<Data, F>, null>>,
+	>(
 		field: F,
-		value: OperandOf<Exclude<PathValue<Data, F>, null>>,
-	) => Test<Value>
-	readonly gt: <const F extends OrderedPath<Data>>(
+		value: V,
+	) => Test<Value, PrincipalOf<V, P>>
+	readonly gt: <
+		const F extends OrderedPath<Data>,
+		const V extends OperandOf<Exclude<PathValue<Data, F>, null>>,
+	>(
 		field: F,
-		value: OperandOf<Exclude<PathValue<Data, F>, null>>,
-	) => Test<Value>
-	readonly gte: <const F extends OrderedPath<Data>>(
+		value: V,
+	) => Test<Value, PrincipalOf<V, P>>
+	readonly gte: <
+		const F extends OrderedPath<Data>,
+		const V extends OperandOf<Exclude<PathValue<Data, F>, null>>,
+	>(
 		field: F,
-		value: OperandOf<Exclude<PathValue<Data, F>, null>>,
-	) => Test<Value>
+		value: V,
+	) => Test<Value, PrincipalOf<V, P>>
 	/** The field is equal to one of the values. */
-	readonly in: <const F extends FieldPath<Data>>(
+	readonly in: <
+		const F extends FieldPath<Data>,
+		const Vs extends ReadonlyArray<OperandOf<PathValue<Data, F>>>,
+	>(
 		field: F,
-		values: ReadonlyArray<OperandOf<PathValue<Data, F>>>,
-	) => Test<Value>
+		values: Vs,
+	) => Test<Value, PrincipalOf<Vs[number], P>>
 	/** The field has a value that is not `null`. */
 	readonly exists: <const F extends FieldPath<Data>>(field: F) => Test<Value>
 	/** The path of the resource starts with these parts. */
-	readonly under: (
-		...prefix: ReadonlyArray<string | null | Ref<string | null>>
-	) => Test<Value>
+	readonly under: <
+		const Ps extends ReadonlyArray<string | null | Ref<string | null>>,
+	>(
+		...prefix: Ps
+	) => Test<Value, PrincipalOf<Ps[number], P>>
 	/**
 	 * A field of the principal, to use as a value. The field must have a
 	 * {@link Scalar} type.

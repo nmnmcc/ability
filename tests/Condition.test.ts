@@ -14,8 +14,10 @@ const path = [
 	{ _tag: "Field", field: "id" },
 ] as const
 
-const test = (condition: Condition.Test<Bot>, value: object = aliceBot) =>
-	Condition.evaluateSync(condition, { value, principal: alice, path })
+const test = (
+	condition: Condition.Test<Bot, Caller>,
+	value: object = aliceBot,
+) => Condition.evaluateSync(condition, { value, principal: alice, path })
 
 const toSql = Condition.fold<string>({
 	true: () => "TRUE",

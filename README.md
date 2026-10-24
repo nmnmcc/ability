@@ -353,6 +353,10 @@ const AuthLive = Authorizer.layer(Auth, {
 })
 ```
 
+Two principals with the same data get one policy from the cache. So the loader
+must decide by the data of the principal only. When it tests that an object of
+the principal is a given object, as `role === admin` does, give `cache: false`.
+
 Use it in a handler:
 
 ```ts

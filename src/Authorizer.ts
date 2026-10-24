@@ -350,6 +350,12 @@ export interface Options<D extends Domain.Any, E, R, EL, RL, RP> {
 	/**
 	 * How the policies are kept. The default keeps 1000 policies for 30 seconds.
 	 * Give `false` to load the policy for each check.
+	 *
+	 * Two principals with the same data get one policy from the cache. So the
+	 * loader must decide by the data of the principal only. When it tests that
+	 * an object of the principal is a given object, as `role === admin` does,
+	 * give `false`. A principal with objects in an array, a set or the keys of
+	 * a map is not kept, because such tests are usual there.
 	 */
 	readonly cache?:
 		| {
@@ -490,7 +496,10 @@ const keyText = (value: unknown, seen: Set<object>): string | undefined => {
 	} else if (
 		prototype === Array.prototype &&
 		own.length === (value as Array<unknown>).length + 1 &&
-		hasEveryIndex(value as Array<unknown>)
+		hasEveryIndex(value as Array<unknown>) &&
+		// An array finds an object by the object itself, as in
+		// `roles.includes(admin)`.
+		!(value as Array<unknown>).some(isObjectLike)
 	) {
 		const items = all(value as Array<unknown>)
 		text = items === undefined ? undefined : `[${items.join(",")}]`

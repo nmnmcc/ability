@@ -844,4 +844,46 @@ describe("Authorizer", () => {
 			assert.strictEqual(failureTag(exit), "Forbidden")
 		}),
 	)
+
+	it.effect("does not cache a principal with objects in an array", () =>
+		Effect.gen(function* () {
+			class Role extends Schema.Class<Role>("Role")({ name: Schema.String }) {}
+			const admin = Role.make({ name: "admin" })
+			class Staff extends Principal.Class<Staff>("Staff")({
+				roles: Schema.Array(Role),
+			}) {}
+			const Staffs = Domain.make({ principal: Staff, resources: [Bot] })
+			class CurrentStaff extends Context.Service<CurrentStaff, Staff>()(
+				"@nmnmcc/ability/tests/Authorizer.test/CurrentStaff",
+			) {}
+			class StaffAuth extends Authorizer.Service<
+				StaffAuth,
+				{ requires: CurrentStaff }
+			>()("test/StaffAuth", Staffs) {}
+			const layer = Authorizer.layer(StaffAuth, {
+				principal: CurrentStaff,
+				policy: (user) =>
+					Effect.succeed(
+						Policy.define(Staffs)(function* (_) {
+							if (user.roles.includes(admin)) {
+								yield* _.allow("read", Bot)
+							}
+						}),
+					),
+			})
+			const exit = yield* Effect.gen(function* () {
+				yield* Effect.provideService(
+					StaffAuth.check({ action: "read", resource: aliceBot }),
+					CurrentStaff,
+					Staff.make({ roles: [admin] }),
+				)
+				yield* Effect.provideService(
+					StaffAuth.check({ action: "read", resource: aliceBot }),
+					CurrentStaff,
+					Staff.make({ roles: [Role.make({ name: "admin" })] }),
+				)
+			}).pipe(Effect.provide(layer), Effect.exit)
+			assert.strictEqual(failureTag(exit), "Forbidden")
+		}),
+	)
 })

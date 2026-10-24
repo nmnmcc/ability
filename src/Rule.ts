@@ -72,7 +72,9 @@ export interface Shape<E = never, R = never, O = never, I = unknown> {
  * @category models
  * @since 0.3.0
  */
-export type Any = Rule<any, any, any, any, any>
+// Every rule fits `never` as what it reads, and a condition taken from such a
+// rule fits no rule that reads a value or a principal.
+export type Any = Rule<any, any, any, any, never>
 
 /**
  * The error type of a rule.
