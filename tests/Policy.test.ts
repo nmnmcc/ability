@@ -1689,6 +1689,70 @@ describe("Policy", () => {
 		)
 	})
 
+	it("does not take a path that goes past a getter", () => {
+		class Owner extends Schema.Class<Owner>("Owner")({
+			id: Schema.String,
+		}) {
+			get label() {
+				return this.id
+			}
+		}
+		const Team = Resource.make("Team", {
+			actions: ["read"],
+			fields: { owner: Owner },
+		})
+		const Teams = Domain.make({ principal: Caller, resources: [Team] })
+		const PolicySchema = Policy.schema(Teams)
+		const policy = (field: string) => ({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Team"],
+					when: {
+						_tag: "Compare",
+						op: "eq",
+						field,
+						value: { _tag: "Literal", value: null },
+					},
+				},
+			],
+		})
+		assert.isTrue(
+			Exit.isSuccess(
+				Schema.decodeUnknownExit(PolicySchema)(policy("owner.label")),
+			),
+		)
+		assert.isTrue(
+			Exit.isFailure(
+				Schema.decodeUnknownExit(PolicySchema)(policy("owner.label.nothing")),
+			),
+		)
+	})
+
+	it("does not make a residual that would fill the stack", () => {
+		const Rules = Arr.map(Arr.range(0, 1999), (index) =>
+			Rule.make({
+				_tag: index % 2 === 0 ? "Allow" : "Deny",
+				actions: ["read"],
+				resources: ["Bot"],
+				when: Condition.builder<{ readonly id: string }, unknown, unknown>().eq(
+					"id",
+					String(index),
+				) as Condition.Condition,
+			}),
+		)
+		const policy = Policy.rules(App, Rules, { algorithm: "firstApplicable" })
+		const request = { principal: alice, action: "read", kind: "Bot" } as const
+		assert.throws(() => Policy.residual(policy, request), /500 levels/)
+		const short = Policy.rules(App, Arr.take(Rules, 400), {
+			algorithm: "firstApplicable",
+		})
+		assert.strictEqual(Policy.coverage(short, request)._tag, "Some")
+	})
+
 	it("does not make a policy tree that would fill the stack", () => {
 		const one = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot)

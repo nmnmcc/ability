@@ -258,6 +258,33 @@ const MixedServerLive = Layer.mergeAll(BotsLive, AdminLive).pipe(
 	Layer.provideMerge(PlatformLive),
 )
 
+// The coverage of this policy is `Unknown`, because it has a predicate. It
+// allows no value: the deny rule wins for each one.
+const UnknownServerLive = Layer.mergeAll(BotsLive, AdminLive).pipe(
+	Layer.provideMerge(
+		Layer.mergeAll(
+			AuthenticationLive,
+			Authorization.layer(Authorize, Auth),
+		).pipe(
+			Layer.provide(
+				Authorizer.layer(Auth, {
+					principal: Identity,
+					policy: () =>
+						Effect.succeed(
+							Policy.define(App)(function* (_) {
+								yield* _.deny("read", Bot)
+								yield* _.allow("read", Bot, {
+									when: ($) => $.predicate("never", () => false),
+								})
+							}),
+						),
+				}),
+			),
+		),
+	),
+	Layer.provideMerge(PlatformLive),
+)
+
 describe("HttpApi", () => {
 	it.effect("checks a loaded resource for an endpoint", () =>
 		Effect.gen(function* () {
@@ -350,6 +377,19 @@ describe("HttpApi", () => {
 				Option.some(Authorizer.Forbidden.make({ action: "read", kind: "Bot" })),
 			)
 		}).pipe(Effect.scoped, Effect.provide(ServerLive)),
+	)
+
+	it.effect("does not let a list through when its coverage is unknown", () =>
+		Effect.gen(function* () {
+			const client = yield* HttpApiTest.groups(Api, ["bots", "admin"])
+			const strict = yield* Effect.exit(
+				client.bots.strictList({ params: { org: "acme" } }),
+			)
+			assert.deepStrictEqual(
+				Exit.findErrorOption(strict),
+				Option.some(Authorizer.Forbidden.make({ action: "read", kind: "Bot" })),
+			)
+		}).pipe(Effect.scoped, Effect.provide(UnknownServerLive)),
 	)
 
 	it.effect("does not check a loaded value of another kind", () =>

@@ -224,7 +224,10 @@ const getterAt = (schema: unknown, names: ReadonlyArray<string>): boolean => {
 		return false
 	}
 	return Arr.some(innerSchemas(schema), (inner) => {
+		// A path ends at a getter. The library can not see the type of the
+		// value of a getter, so it can not check a path that goes past it.
 		if (
+			rest.length === 0 &&
 			Arr.some(
 				prototypesOf(inner),
 				(prototype) =>

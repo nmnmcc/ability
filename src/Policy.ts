@@ -1335,7 +1335,19 @@ const never: Ast = Condition.never
  */
 const maxResidualSize = 10_000
 
-/** A residual condition is too large. See {@link maxResidualSize}. */
+/**
+ * The most levels that a residual condition may have. The rules of an ordered
+ * algorithm, such as `firstApplicable`, give one level for each run of rules
+ * with one tag. A walk over a condition calls itself for each level, so a much
+ * deeper condition could fill the stack. Past this depth, `residual` throws an
+ * error.
+ */
+const maxResidualDepth = 500
+
+/**
+ * A residual condition is too large. See {@link maxResidualSize} and
+ * {@link maxResidualDepth}.
+ */
 class TooLarge {}
 
 /**
@@ -1369,8 +1381,30 @@ const makeBuild = (): Build => {
 					return 1
 			}
 		})
+	const depths = new Map<Ast, number>()
+	/**
+	 * Gives the number of levels in a condition. Each child went through
+	 * `limit`, so this walk is not deeper than `maxResidualDepth`.
+	 */
+	const depthOf = (ast: Ast): number =>
+		remember(depths, ast, () => {
+			switch (ast._tag) {
+				case "And":
+				case "Or":
+					return (
+						1 +
+						Arr.reduce(ast.conditions, 0, (top, child) =>
+							Math.max(top, depthOf(child)),
+						)
+					)
+				case "Not":
+					return 1 + depthOf(ast.condition)
+				default:
+					return 1
+			}
+		})
 	const limit = (ast: Ast): Ast => {
-		if (sizeOf(ast) > maxResidualSize) {
+		if (sizeOf(ast) > maxResidualSize || depthOf(ast) > maxResidualDepth) {
 			throw new TooLarge()
 		}
 		return ast
@@ -1702,7 +1736,7 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 			// large for a residual, and that is a defect.
 			if (error instanceof TooLarge) {
 				throw new globalThis.Error(
-					`The residual condition of this request would have more than ${String(maxResidualSize)} nodes`,
+					`The residual condition of this request would have more than ${String(maxResidualSize)} nodes or ${String(maxResidualDepth)} levels`,
 				)
 			}
 			throw error
@@ -1762,7 +1796,8 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
  *
  * A policy tree may use the condition of a child two times, so a small policy
  * may give a very large condition. When the condition would have more than
- * 10000 nodes, this function throws an error. In an `Authorizer`, the error is
+ * 10000 nodes or 500 levels, this function throws an error. In an
+ * `Authorizer`, the error is
  * a defect, so the check fails.
  *
  * @stability stable

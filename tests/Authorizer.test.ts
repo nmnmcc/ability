@@ -768,6 +768,21 @@ describe("Authorizer", () => {
 					failureTag(yield* run(below("admin"), below("guest"))),
 					"Forbidden",
 				)
+				// The value below may have its own `constructor` key.
+				const disguised = (role: string): object =>
+					Object.create(
+						Object.defineProperty(
+							Person.make({ role, roles: [] }),
+							"constructor",
+							{
+								value: Person,
+							},
+						),
+					) as object
+				assert.strictEqual(
+					failureTag(yield* run(disguised("admin"), disguised("guest"))),
+					"Forbidden",
+				)
 			}),
 		)
 

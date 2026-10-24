@@ -154,7 +154,9 @@ export const requires: <
  *
  * When the principal may act on no value, the list is empty: that is not an
  * error, so a client does not learn that hidden values are there. With
- * `nonEmpty: true`, the middleware fails with `Forbidden` in that case.
+ * `nonEmpty: true`, the middleware fails with `Forbidden` in that case. It
+ * also fails when the coverage is `Unknown`, because then it can not say that
+ * the list has a value.
  *
  * @stability unstable
  * @category constructors
@@ -295,12 +297,15 @@ const makeLayer = (
 							return Effect.flatMap(target, (value) => service.check(value))
 						}
 						// A list endpoint may give an empty list, unless it must not.
+						// Only `All` and `Some` say that the list has a value. `Unknown`
+						// is not a "yes".
 						return list.nonEmpty
 							? target.pipe(
 									Effect.flatMap((value) => service.coverage(value)),
 									Effect.filterOrElse(
 										(covered) =>
-											(covered as { readonly _tag: string })._tag !== "None",
+											(covered as { readonly _tag: string })._tag === "All" ||
+											(covered as { readonly _tag: string })._tag === "Some",
 										() =>
 											Effect.fail(Authorizer.Forbidden.make({ action, kind })),
 									),

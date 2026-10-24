@@ -579,9 +579,11 @@ const keyText = (
 			prototype === Object.prototype ||
 			// The prototype must be the prototype of the class itself. A value
 			// made with `Object.create(user)` has `user` as its prototype, and
-			// the data of `user` is not in the own keys.
-			(Object.hasOwn(prototype as object, "constructor") &&
-				Schema.isSchema((prototype as object).constructor))) &&
+			// the data of `user` is not in the own keys. Such a prototype may
+			// have its own `constructor` key, so the test compares the
+			// prototype with the `prototype` of the class.
+			(Schema.isSchema((prototype as object).constructor) &&
+				(prototype as object).constructor.prototype === prototype)) &&
 		Arr.every(own, (key) => typeof key === "string" && isPlainField(value, key))
 	) {
 		// The keys keep their order, because a loader may read the first one.

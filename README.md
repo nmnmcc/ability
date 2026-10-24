@@ -530,7 +530,8 @@ const AuthorizationLive = AbilityHttpApi.layer(Authorization, Auth)
 An act on a part of a kind takes a scope from the path parameters. A list takes
 `lists`: the middleware does not check every value, because the handler gets its
 query with `Auth.filter`, with the same scope. An empty list is not an error,
-unless you give `nonEmpty: true`:
+unless you give `nonEmpty: true`. Then the middleware needs a coverage of `All`
+or `Some`, so `Unknown` fails too:
 
 ```ts
 const create = HttpApiEndpoint.post("create", "/users/:user/posts", {
