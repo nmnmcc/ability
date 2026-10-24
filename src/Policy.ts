@@ -42,9 +42,12 @@
 // @effect-diagnostics anyUnknownInErrorContext:off
 import type * as Context from "effect/Context"
 import * as Data from "effect/Data"
+import * as Arr from "effect/Array"
 import * as Effect from "effect/Effect"
 import { dual } from "effect/Function"
+import * as Option from "effect/Option"
 import type * as Pipeable from "effect/Pipeable"
+import * as Ref from "effect/Ref"
 import * as Schema from "effect/Schema"
 import * as SchemaTransformation from "effect/SchemaTransformation"
 import * as Condition from "./Condition.ts"
@@ -373,7 +376,10 @@ const encodeNode = (node: Node): EncodedNode => {
 			return {
 				_tag: "Rules",
 				algorithm: node.algorithm,
-				rules: node.rules.map((value) => ({ ...value }) as EncodedRule),
+				// The domain of a rule is not in its JSON form.
+				rules: node.rules.map(
+					({ domain: _domain, ...value }) => ({ ...value }) as EncodedRule,
+				),
 			}
 		case "All":
 		case "Any":
@@ -434,13 +440,15 @@ export const rules: <
 	// A rule from a builder of another domain is a mistake in the code, so it
 	// is a defect. Two domains may have the same types, so the types do not
 	// find it.
-	for (const value of node.rules) {
-		const origin = Rule.domainOf(value)
-		if (origin !== undefined && origin !== domain) {
-			throw new globalThis.Error(
-				"A rule comes from the builder of another domain",
-			)
-		}
+	if (
+		Arr.some(node.rules, (value) => {
+			const origin = Rule.domainOf(value)
+			return origin !== undefined && origin !== domain
+		})
+	) {
+		throw new globalThis.Error(
+			"A rule comes from the builder of another domain",
+		)
 	}
 	// A rule from `Rule.make` keeps no domain, so its names are checked here.
 	const issues = validate(domain, encodeNode(node))
@@ -480,13 +488,13 @@ export const define =
 		Rule.Services<Rules>,
 		Rule.OpaqueOf<Rules>
 	> => {
-		const collected: Array<Rules> = []
 		const iterator = body(Rule.builder(domain))
-		let state = iterator.next()
-		while (state.done !== true) {
-			collected.push(state.value)
-			state = iterator.next(state.value)
-		}
+		// Each rule goes back into the generator, as `yield*` gives it.
+		const collected = Arr.unfold(iterator.next(), (state) =>
+			state.done === true
+				? Option.none()
+				: Option.some([state.value, iterator.next(state.value)] as const),
+		)
 		return rules(domain, collected, options)
 	}
 
@@ -509,12 +517,10 @@ type Combined<D extends Domain.Any, Ps extends ReadonlyArray<Any>> = Policy<
 
 const sameDomain = (policies: ReadonlyArray<Any>): Domain.Any => {
 	const domain = policies[0]!.domain
-	for (const policy of policies) {
-		if (policy.domain !== domain) {
-			throw new globalThis.Error(
-				"Policies from two domains can not be put together",
-			)
-		}
+	if (!Arr.every(policies, (policy) => policy.domain === domain)) {
+		throw new globalThis.Error(
+			"Policies from two domains can not be put together",
+		)
 	}
 	return domain
 }
@@ -590,29 +596,43 @@ export const ceiling: {
 	),
 )
 
-const provideNode = (
-	node: Node,
-	context: Context.Context<never>,
-	done: Map<Node, Node> = new Map(),
-): Node => {
-	// A node with no predicate needs no services, and it stays the same node.
-	// One node may be a child of many nodes, and it gives one new node.
-	if (!nodeHasPredicate(node)) {
-		return node
-	}
-	const cached = done.get(node)
+/**
+ * Gives the answer for a key from a memo, or works it out and keeps it. One
+ * node may be a child of many nodes, so each walk over a tree keeps its work
+ * on a node in a memo that the walk makes for itself. No memo lives longer
+ * than one call.
+ */
+const remember = <K, A>(memo: Map<K, A>, key: K, work: () => A): A => {
+	const cached = memo.get(key)
 	if (cached !== undefined) {
 		return cached
 	}
-	const result = provideOnce(node, context, done)
-	done.set(node, result)
+	const result = work()
+	memo.set(key, result)
 	return result
 }
+
+/** The memos of one walk over a policy tree. */
+interface TreeMemo {
+	readonly done: Map<Node, Node>
+	readonly predicates: Map<Node, boolean>
+}
+
+const provideNode = (
+	node: Node,
+	context: Context.Context<never>,
+	memo: TreeMemo = { done: new Map(), predicates: new Map() },
+): Node =>
+	// A node with no predicate needs no services, and it stays the same node.
+	// One node may be a child of many nodes, and it gives one new node.
+	!nodeHasPredicate(node, memo.predicates)
+		? node
+		: remember(memo.done, node, () => provideOnce(node, context, memo))
 
 const provideOnce = (
 	node: Node,
 	context: Context.Context<never>,
-	done: Map<Node, Node>,
+	memo: TreeMemo,
 ): Node => {
 	switch (node._tag) {
 		case "Rules":
@@ -631,14 +651,14 @@ const provideOnce = (
 		case "Any":
 		case "FirstOf":
 			return nodes[node._tag]({
-				policies: node.policies.map((child) =>
-					provideNode(child, context, done),
+				policies: Arr.map(node.policies, (child) =>
+					provideNode(child, context, memo),
 				),
 			})
 		case "Ceiling":
 			return nodes.Ceiling({
-				cap: provideNode(node.cap, context, done),
-				policy: provideNode(node.policy, context, done),
+				cap: provideNode(node.cap, context, memo),
+				policy: provideNode(node.policy, context, memo),
 			})
 	}
 }
@@ -672,7 +692,9 @@ interface DecideContext {
 	readonly kind: string
 	readonly field: string | undefined
 	readonly input: Condition.Input
-	readonly trace: Array<Step> | undefined
+	/** The rules that were tested, for {@link explain}. */
+	readonly trace: Ref.Ref<ReadonlyArray<Step>> | undefined
+	readonly predicates: Map<Node, boolean>
 	/**
 	 * The decisions of nodes with no predicates. One node may be a child of
 	 * many nodes, and its decision is the same each time, so it is made only
@@ -695,12 +717,11 @@ const ruleApplies = (
 			: // A rule of a node keeps no type of what it reads. The decision gives
 				// it the value and the principal of the request.
 				Condition.evaluate(value.when as Condition.Any, context.input)
-	return context.trace === undefined
+	const trace = context.trace
+	return trace === undefined
 		? test
 		: Effect.tap(test, (applies) =>
-				Effect.sync(() => {
-					context.trace!.push({ path, rule: value, applies })
-				}),
+				Ref.update(trace, Arr.append({ path, rule: value, applies })),
 			)
 }
 
@@ -711,48 +732,53 @@ const fromRule = (value: Rule.Any): Decision.Decision =>
 			? Decision.Deny({ rule: value })
 			: Decision.Deny({ rule: value, reason: value.reason })
 
-const firstApplying = Effect.fnUntraced(function* (
+/** Gives the first rule that applies, in order. */
+const firstApplying = (
 	candidates: ReadonlyArray<readonly [Rule.Any, number]>,
 	context: DecideContext,
 	path: ReadonlyArray<number>,
-): Effect.fn.Return<Rule.Any | undefined, unknown, unknown> {
-	for (const [value, index] of candidates) {
-		if (yield* ruleApplies(value, context, [...path, index])) {
-			return value
-		}
-	}
-	return undefined
-})
+): Effect.Effect<Option.Option<Rule.Any>, unknown, unknown> =>
+	Effect.map(
+		Effect.findFirst(candidates, ([value, index]) =>
+			ruleApplies(value, context, [...path, index]),
+		),
+		Option.map(([value]) => value),
+	)
 
-const decideRules = Effect.fnUntraced(function* (
+/** Gives the first result that is found, and tests `next` only when none is. */
+const orElse = <A, E, R>(
+	first: Effect.Effect<Option.Option<A>, E, R>,
+	next: () => Effect.Effect<Option.Option<A>, E, R>,
+): Effect.Effect<Option.Option<A>, E, R> =>
+	Effect.filterOrElse(first, Option.isSome, next)
+
+const decideRules = (
 	node: RulesNode,
 	context: DecideContext,
 	path: ReadonlyArray<number>,
-): Effect.fn.Return<Decision.Decision, unknown, unknown> {
-	const indexed = node.rules.map((value, index) => [value, index] as const)
-	const denies = indexed.filter(([value]) => value._tag === "Deny")
-	const allows = indexed.filter(([value]) => value._tag === "Allow")
-	let found: Rule.Any | undefined
-	switch (node.algorithm) {
-		case "denyOverrides":
-			found =
-				(yield* firstApplying(denies, context, path)) ??
-				(yield* firstApplying(allows, context, path))
-			break
-		case "permitOverrides":
-			found =
-				(yield* firstApplying(allows, context, path)) ??
-				(yield* firstApplying(denies, context, path))
-			break
-		case "firstApplicable":
-			found = yield* firstApplying(indexed, context, path)
-			break
-		case "lastApplicable":
-			found = yield* firstApplying(indexed.slice().reverse(), context, path)
-			break
-	}
-	return found === undefined ? Decision.NotApplicable : fromRule(found)
-})
+): Effect.Effect<Decision.Decision, unknown, unknown> => {
+	const indexed = Arr.map(node.rules, (value, index) => [value, index] as const)
+	const denies = Arr.filter(indexed, ([value]) => value._tag === "Deny")
+	const allows = Arr.filter(indexed, ([value]) => value._tag === "Allow")
+	const first = (candidates: ReadonlyArray<readonly [Rule.Any, number]>) =>
+		firstApplying(candidates, context, path)
+	const found = (() => {
+		switch (node.algorithm) {
+			case "denyOverrides":
+				return orElse(first(denies), () => first(allows))
+			case "permitOverrides":
+				return orElse(first(allows), () => first(denies))
+			case "firstApplicable":
+				return first(indexed)
+			case "lastApplicable":
+				return first(Arr.reverse(indexed))
+		}
+	})()
+	return Effect.map(
+		found,
+		Option.match({ onNone: () => Decision.NotApplicable, onSome: fromRule }),
+	)
+}
 
 const decideNode = (
 	node: Node,
@@ -760,19 +786,63 @@ const decideNode = (
 	path: ReadonlyArray<number>,
 ): Effect.Effect<Decision.Decision, unknown, unknown> => {
 	// A predicate must run each time, and a trace must have each step.
-	if (context.trace !== undefined || nodeHasPredicate(node)) {
+	if (
+		context.trace !== undefined ||
+		nodeHasPredicate(node, context.predicates)
+	) {
 		return decideOnce(node, context, path)
 	}
 	const cached = context.decisions.get(node)
-	if (cached !== undefined) {
-		return Effect.succeed(cached)
-	}
-	return Effect.tap(decideOnce(node, context, path), (decision) =>
-		Effect.sync(() => {
-			context.decisions.set(node, decision)
-		}),
-	)
+	return cached !== undefined
+		? Effect.succeed(cached)
+		: Effect.tap(decideOnce(node, context, path), (decision) =>
+				Effect.sync(() => context.decisions.set(node, decision)),
+			)
 }
+
+/** The next step of a walk over children: stop with a decision, or go on. */
+type WalkStep<S> =
+	| { readonly _tag: "Stop"; readonly decision: Decision.Decision }
+	| { readonly _tag: "Next"; readonly state: S }
+
+/**
+ * Decides the children in order. After each child, `step` stops with a
+ * decision, or gives the state for the next child. After the last child,
+ * `end` gives the decision. A child after a stop is not decided, so its
+ * predicates do not run.
+ */
+const walkChildren = <S>(
+	children: ReadonlyArray<Node>,
+	context: DecideContext,
+	path: ReadonlyArray<number>,
+	start: S,
+	step: (state: S, decision: Decision.Decision) => WalkStep<S>,
+	end: (state: S) => Decision.Decision,
+): Effect.Effect<Decision.Decision, unknown, unknown> => {
+	const go = (
+		index: number,
+		state: S,
+	): Effect.Effect<Decision.Decision, unknown, unknown> =>
+		index === children.length
+			? Effect.succeed(end(state))
+			: Effect.flatMap(
+					decideNode(children[index]!, context, [...path, index]),
+					(decision) => {
+						const next = step(state, decision)
+						return next._tag === "Stop"
+							? Effect.succeed(next.decision)
+							: go(index + 1, next.state)
+					},
+				)
+	return go(0, start)
+}
+
+const stop = (decision: Decision.Decision): WalkStep<never> => ({
+	_tag: "Stop",
+	decision,
+})
+
+const next = <S>(state: S): WalkStep<S> => ({ _tag: "Next", state })
 
 const decideOnce = (
 	node: Node,
@@ -783,56 +853,68 @@ const decideOnce = (
 		case "Rules":
 			return decideRules(node, context, path)
 		case "All":
-			return Effect.gen(function* () {
-				let firstAllow: Decision.Decision | undefined
-				let allAllow = node.policies.length > 0
-				for (const [index, child] of node.policies.entries()) {
-					const result = yield* decideNode(child, context, [...path, index])
-					if (result._tag === "Deny") {
-						return result
-					}
-					if (result._tag === "Allow") {
-						firstAllow ??= result
-					} else {
-						allAllow = false
-					}
-				}
-				return allAllow && firstAllow !== undefined
-					? firstAllow
-					: Decision.NotApplicable
-			})
+			// One deny is enough to deny. Every child must allow.
+			return walkChildren(
+				node.policies,
+				context,
+				path,
+				{
+					firstAllow: Option.none<Decision.Decision>(),
+					allAllow: node.policies.length > 0,
+				},
+				(state, decision) =>
+					decision._tag === "Deny"
+						? stop(decision)
+						: next({
+								firstAllow: Option.orElse(state.firstAllow, () =>
+									decision._tag === "Allow"
+										? Option.some(decision)
+										: Option.none(),
+								),
+								allAllow: state.allAllow && decision._tag === "Allow",
+							}),
+				(state) =>
+					state.allAllow
+						? Option.getOrElse(state.firstAllow, () => Decision.NotApplicable)
+						: Decision.NotApplicable,
+			)
 		case "Any":
-			return Effect.gen(function* () {
-				let firstDeny: Decision.Decision | undefined
-				for (const [index, child] of node.policies.entries()) {
-					const result = yield* decideNode(child, context, [...path, index])
-					if (result._tag === "Allow") {
-						return result
-					}
-					if (result._tag === "Deny") {
-						firstDeny ??= result
-					}
-				}
-				return firstDeny ?? Decision.NotApplicable
-			})
+			// One allow is enough. Without one, the first deny denies.
+			return walkChildren(
+				node.policies,
+				context,
+				path,
+				Option.none<Decision.Decision>(),
+				(firstDeny, decision) =>
+					decision._tag === "Allow"
+						? stop(decision)
+						: next(
+								Option.orElse(firstDeny, () =>
+									decision._tag === "Deny"
+										? Option.some(decision)
+										: Option.none(),
+								),
+							),
+				(firstDeny) =>
+					Option.getOrElse(firstDeny, () => Decision.NotApplicable),
+			)
 		case "FirstOf":
-			return Effect.gen(function* () {
-				for (const [index, child] of node.policies.entries()) {
-					const result = yield* decideNode(child, context, [...path, index])
-					if (result._tag !== "NotApplicable") {
-						return result
-					}
-				}
-				return Decision.NotApplicable
-			})
+			return walkChildren(
+				node.policies,
+				context,
+				path,
+				undefined,
+				(_, decision) =>
+					decision._tag === "NotApplicable" ? next(undefined) : stop(decision),
+				() => Decision.NotApplicable,
+			)
 		case "Ceiling":
-			return Effect.gen(function* () {
-				const capped = yield* decideNode(node.cap, context, [...path, 0])
-				if (capped._tag === "Deny") {
-					return capped
-				}
-				return yield* decideNode(node.policy, context, [...path, 1])
-			})
+			// A deny of the cap wins. Else the policy decides.
+			return Effect.filterOrElse(
+				decideNode(node.cap, context, [...path, 0]),
+				(capped) => capped._tag === "Deny",
+				() => decideNode(node.policy, context, [...path, 1]),
+			)
 	}
 }
 
@@ -859,7 +941,7 @@ export const fitsKind = (
 const makeContext = (
 	domain: Domain.Any,
 	request: AnyRequest,
-	trace: Array<Step> | undefined,
+	trace: Ref.Ref<ReadonlyArray<Step>> | undefined,
 ): DecideContext | undefined => {
 	const kind = Resource.kindOf(request.resource)
 	const descriptor = kind === undefined ? undefined : domain.resources.get(kind)
@@ -880,6 +962,7 @@ const makeContext = (
 			path: descriptor.path,
 		},
 		trace,
+		predicates: new Map(),
 		decisions: new Map(),
 	}
 }
@@ -963,19 +1046,14 @@ export const explain: {
 	): Effect.Effect<Explanation, unknown, unknown> =>
 		// Each run of the Effect needs its own trace, so the trace is made inside
 		// the Effect.
-		Effect.suspend(() => {
-			const trace: Array<Step> = []
+		Effect.gen(function* () {
+			const trace = yield* Ref.make<ReadonlyArray<Step>>([])
 			const context = makeContext(policy.domain, request, trace)
 			if (context === undefined) {
-				return Effect.succeed({ decision: Decision.NotApplicable, steps: [] })
+				return { decision: Decision.NotApplicable, steps: [] }
 			}
-			return Effect.map(
-				decideNode(nodeOf(policy), context, []),
-				(decision) => ({
-					decision,
-					steps: trace,
-				}),
-			)
+			const decision = yield* decideNode(nodeOf(policy), context, [])
+			return { decision, steps: yield* Ref.get(trace) }
 		}),
 ) as never
 
@@ -1043,38 +1121,32 @@ export const permittedFields: {
 	): Effect.Effect<ReadonlyArray<string>, E, R>
 } = dual(
 	2,
-	Effect.fnUntraced(function* (
+	(
 		policy: Any,
 		request: Omit<AnyRequest, "field">,
-	): Effect.fn.Return<ReadonlyArray<string>, unknown, unknown> {
+	): Effect.Effect<ReadonlyArray<string>, unknown, unknown> => {
 		const kind = Resource.kindOf(request.resource)
 		const descriptor: Resource.Descriptor | undefined =
 			kind === undefined ? undefined : policy.domain.resources.get(kind)
 		if (descriptor === undefined) {
-			return []
+			return Effect.succeed([])
 		}
-		const output: Array<string> = []
-		for (const field of descriptor.fieldPaths) {
-			const result: Decision.Decision = yield* decideAny(policy, {
-				...request,
-				field,
-			})
-			if (
-				result._tag === "Allow" &&
-				!(
-					descriptor.openPaths.includes(field) &&
-					deniesInside(
-						policy.node,
-						{ ...request, kind: descriptor.kind },
-						field,
-					)
-				)
-			) {
-				output.push(field)
-			}
-		}
-		return output
-	}),
+		return Effect.filter(descriptor.fieldPaths, (field) =>
+			Effect.map(
+				decideAny(policy, { ...request, field }),
+				(result) =>
+					result._tag === "Allow" &&
+					!(
+						descriptor.openPaths.includes(field) &&
+						deniesInside(
+							nodeOf(policy),
+							{ ...request, kind: descriptor.kind },
+							field,
+						)
+					),
+			),
+		)
+	},
 ) as never
 
 // Residual conditions
@@ -1150,43 +1222,53 @@ const maxResidualSize = 10_000
 /** A residual condition is too large. See {@link maxResidualSize}. */
 class TooLarge {}
 
-const sizes = new WeakMap<Ast, number>()
-
-/** Gives the number of nodes in a condition, as JSON would have them. */
-const sizeOf = (ast: Ast): number => {
-	const cached = sizes.get(ast)
-	if (cached !== undefined) {
-		return cached
-	}
-	let size = 1
-	switch (ast._tag) {
-		case "And":
-		case "Or":
-			for (const child of ast.conditions) size = size + sizeOf(child)
-			break
-		case "Not":
-			size = size + sizeOf(ast.condition)
-			break
-	}
-	sizes.set(ast, size)
-	return size
+/**
+ * Makes conditions for one residual, with no types. Each step simplifies the
+ * condition, and it stops the work when the condition is too large. The
+ * steps keep their work for the parts they have seen, for this residual only.
+ */
+interface Build {
+	readonly and: (...values: ReadonlyArray<Ast>) => Ast
+	readonly or: (...values: ReadonlyArray<Ast>) => Ast
+	readonly not: (value: Ast) => Ast
 }
 
-const limit = (ast: Ast): Ast => {
-	if (sizeOf(ast) > maxResidualSize) {
-		throw new TooLarge()
+const makeBuild = (): Build => {
+	const simplify = Condition.simplifier()
+	const sizes = new Map<Ast, number>()
+	/** Gives the number of nodes in a condition, as JSON would have them. */
+	const sizeOf = (ast: Ast): number =>
+		remember(sizes, ast, () => {
+			switch (ast._tag) {
+				case "And":
+				case "Or":
+					return Arr.reduce(
+						ast.conditions,
+						1,
+						(size, child) => size + sizeOf(child),
+					)
+				case "Not":
+					return 1 + sizeOf(ast.condition)
+				default:
+					return 1
+			}
+		})
+	const limit = (ast: Ast): Ast => {
+		if (sizeOf(ast) > maxResidualSize) {
+			throw new TooLarge()
+		}
+		return ast
 	}
-	return ast
+	// These steps work on nodes with no types, so they leave out the type
+	// field of a condition.
+	return {
+		and: (...values) =>
+			limit(simplify(Condition.and(...(values as ReadonlyArray<never>)))),
+		or: (...values) =>
+			limit(simplify(Condition.or(...(values as ReadonlyArray<never>)))),
+		not: (value) => limit(simplify(Condition.not(value as never))),
+	}
 }
-
-// These helpers work on nodes with no types, so they leave out the type field
-// of a condition. Each one stops the work when the condition is too large.
-const and = (...values: ReadonlyArray<Ast>): Ast =>
-	limit(Condition.simplify(Condition.and(...(values as ReadonlyArray<never>))))
-const or = (...values: ReadonlyArray<Ast>): Ast =>
-	limit(Condition.simplify(Condition.or(...(values as ReadonlyArray<never>))))
-const not = (value: Ast): Ast =>
-	limit(Condition.simplify(Condition.not(value as never)))
 
 /** The two residual conditions of a node, with no types. */
 interface Pair {
@@ -1208,6 +1290,7 @@ interface ResidualContext {
 	 */
 	readonly pairs: Map<Node, Pair>
 	readonly predicates: Map<Node, boolean>
+	readonly build: Build
 }
 
 const ruleCondition = (value: Rule.Any, context: ResidualContext): Ast =>
@@ -1225,44 +1308,32 @@ const firstApplicableResidual = (
 	values: ReadonlyArray<Rule.Any>,
 	context: ResidualContext,
 ): Pair => {
+	const { and, not, or } = context.build
 	// The rules go in runs of one tag, from the last run to the first. The
 	// conditions of a run go into one node at once. With one node for each
 	// rule, each step would flatten the whole condition again.
-	let allow: Ast = never
-	let deny: Ast = never
-	let end = values.length
-	while (end > 0) {
-		const tag = values[end - 1]!._tag
-		let start = end - 1
-		while (start > 0 && values[start - 1]!._tag === tag) {
-			start = start - 1
-		}
-		const run = or(
-			...values.slice(start, end).map((value) => ruleCondition(value, context)),
-		)
-		if (tag === "Allow") {
-			allow = or(run, allow)
-			deny = and(not(run), deny)
-		} else {
-			deny = or(run, deny)
-			allow = and(not(run), allow)
-		}
-		end = start
-	}
-	return { allow, deny }
+	const runs = Arr.isReadonlyArrayNonEmpty(values)
+		? Arr.groupWith(values, (a, b) => a._tag === b._tag)
+		: []
+	return Arr.reduceRight(
+		runs,
+		{ allow: never, deny: never },
+		(rest: Pair, run): Pair => {
+			const applies = or(
+				...Arr.map(run, (value) => ruleCondition(value, context)),
+			)
+			return run[0]._tag === "Allow"
+				? { allow: or(applies, rest.allow), deny: and(not(applies), rest.deny) }
+				: { allow: and(not(applies), rest.allow), deny: or(applies, rest.deny) }
+		},
+	)
 }
 
-const residualNode = (node: Node, context: ResidualContext): Pair => {
-	const cached = context.pairs.get(node)
-	if (cached !== undefined) {
-		return cached
-	}
-	const pair = residualOnce(node, context)
-	context.pairs.set(node, pair)
-	return pair
-}
+const residualNode = (node: Node, context: ResidualContext): Pair =>
+	remember(context.pairs, node, () => residualOnce(node, context))
 
 const residualOnce = (node: Node, context: ResidualContext): Pair => {
+	const { and, not, or } = context.build
 	switch (node._tag) {
 		case "Rules": {
 			switch (node.algorithm) {
@@ -1321,15 +1392,18 @@ const residualOnce = (node: Node, context: ResidualContext): Pair => {
 			return { allow, deny }
 		}
 		case "FirstOf": {
-			let allow: Ast = never
-			let deny: Ast = never
-			for (const child of node.policies.slice().reverse()) {
-				const pair = residualNode(child, context)
-				const nextAllow = or(pair.allow, and(not(pair.deny), allow))
-				deny = or(pair.deny, and(not(pair.allow), deny))
-				allow = nextAllow
-			}
-			return { allow, deny }
+			// The first child that gives an answer wins.
+			return Arr.reduceRight(
+				node.policies,
+				{ allow: never, deny: never },
+				(rest: Pair, child): Pair => {
+					const pair = residualNode(child, context)
+					return {
+						allow: or(pair.allow, and(not(pair.deny), rest.allow)),
+						deny: or(pair.deny, and(not(pair.allow), rest.deny)),
+					}
+				},
+			)
 		}
 		case "Ceiling": {
 			const cap = residualNode(node.cap, context)
@@ -1345,45 +1419,32 @@ const residualOnce = (node: Node, context: ResidualContext): Pair => {
 /** The name of the predicate of a residual condition that runs `decide`. */
 const policyPredicate = "policy"
 
-const predicateNodes = new WeakMap<Node, boolean>()
-
 /** Tests if a rule of a policy tree has a predicate. */
-const nodeHasPredicate = (node: Node): boolean => {
-	const cached = predicateNodes.get(node)
-	if (cached !== undefined) {
-		return cached
-	}
-	const result = nodeHasPredicateOnce(node)
-	predicateNodes.set(node, result)
-	return result
-}
-
-const nodeHasPredicateOnce = (node: Node): boolean => {
-	switch (node._tag) {
-		case "Rules":
-			return node.rules.some(
-				(value) =>
-					value.when !== undefined && Condition.hasPredicate(value.when),
-			)
-		case "All":
-		case "Any":
-		case "FirstOf":
-			return node.policies.some(nodeHasPredicate)
-		case "Ceiling":
-			return nodeHasPredicate(node.cap) || nodeHasPredicate(node.policy)
-	}
-}
+const nodeHasPredicate = (
+	node: Node,
+	memo: Map<Node, boolean> = new Map(),
+): boolean =>
+	remember(memo, node, () => {
+		const test = (child: Node) => nodeHasPredicate(child, memo)
+		switch (node._tag) {
+			case "Rules":
+				return Arr.some(
+					node.rules,
+					(value) =>
+						value.when !== undefined && Condition.hasPredicate(value.when),
+				)
+			case "All":
+			case "Any":
+			case "FirstOf":
+				return Arr.some(node.policies, test)
+			case "Ceiling":
+				return test(node.cap) || test(node.policy)
+		}
+	})
 
 /** Tests if a rule that the request may use has a predicate. */
-const usesPredicate = (node: Node, context: ResidualContext): boolean => {
-	const cached = context.predicates.get(node)
-	if (cached !== undefined) {
-		return cached
-	}
-	const result = usesPredicateOnce(node, context)
-	context.predicates.set(node, result)
-	return result
-}
+const usesPredicate = (node: Node, context: ResidualContext): boolean =>
+	remember(context.predicates, node, () => usesPredicateOnce(node, context))
 
 const usesPredicateOnce = (node: Node, context: ResidualContext): boolean => {
 	switch (node._tag) {
@@ -1425,6 +1486,7 @@ const residualsAny = (
 		input: { principal: request.principal, path: descriptor.path },
 		pairs: new Map(),
 		predicates: new Map(),
+		build: makeBuild(),
 	}
 	if (!usesPredicate(nodeOf(policy), context)) {
 		try {
@@ -1458,6 +1520,7 @@ const residualsAny = (
 					path: descriptor.path,
 				},
 				trace: undefined,
+				predicates: new Map(),
 				decisions: new Map(),
 			},
 			[],
@@ -1620,42 +1683,44 @@ const encodedNodeSchema = (
 	return self
 }
 
-const principalRefs = (ast: Condition.Encoded | Ast): ReadonlyArray<string> => {
-	const output: Array<string> = []
-	const visitOperand = (operand: Condition.Operand) => {
-		if (operand._tag === "Principal") output.push(operand.path)
-	}
-	const seen = new Set<Condition.Encoded | Ast>()
-	const visit = (node: Condition.Encoded | Ast): void => {
-		// One node may be a child of many nodes. It is visited one time.
-		if (seen.has(node)) {
-			return
-		}
-		seen.add(node)
+type ConditionNode = Condition.Encoded | Ast
+
+const principalRefs = (ast: ConditionNode): ReadonlyArray<string> =>
+	Array.from(refsIn(ast, new Map()))
+
+/** The principal fields of a node. A shared node is visited one time. */
+const refsIn = (
+	node: ConditionNode,
+	memo: Map<ConditionNode, ReadonlySet<string>>,
+): ReadonlySet<string> =>
+	remember(memo, node, () => {
+		const refs = (operands: ReadonlyArray<Condition.Operand>) =>
+			new Set(
+				Arr.flatMap(operands, (operand) =>
+					operand._tag === "Principal" ? [operand.path] : [],
+				),
+			)
 		switch (node._tag) {
 			case "Compare":
-				visitOperand(node.value)
-				return
+				return refs([node.value])
 			case "In":
-				node.values.forEach(visitOperand)
-				return
+				return refs(node.values)
 			case "Under":
-				node.prefix.forEach(visitOperand)
-				return
+				return refs(node.prefix)
 			case "And":
 			case "Or":
-				;(node.conditions as ReadonlyArray<Ast>).forEach(visit)
-				return
+				return new Set(
+					Arr.flatMap(
+						node.conditions as ReadonlyArray<ConditionNode>,
+						(child) => Array.from(refsIn(child, memo)),
+					),
+				)
 			case "Not":
-				visit(node.condition)
-				return
+				return refsIn(node.condition, memo)
 			default:
-				return
+				return new Set()
 		}
-	}
-	visit(ast)
-	return output
-}
+	})
 
 interface Issue {
 	readonly path: ReadonlyArray<PropertyKey>
@@ -1670,115 +1735,126 @@ const validate = (
 	domain: Domain.Any,
 	root: EncodedNode,
 ): ReadonlyArray<Issue> => {
-	const issues: Array<Issue> = []
 	const principalPaths = new Set(Resource.fieldPaths(domain.principal))
-	const visit = (node: EncodedNode, path: ReadonlyArray<PropertyKey>) => {
+	const ruleIssues = (
+		value: EncodedRule,
+		at: ReadonlyArray<PropertyKey>,
+	): ReadonlyArray<Issue> => {
+		const all = value.resources.includes("*")
+		const named = Arr.filter(value.resources, (kind) => kind !== "*")
+		const descriptors = Arr.flatMap(named, (kind) => {
+			const descriptor = domain.resources.get(kind)
+			return descriptor === undefined ? [] : [descriptor]
+		})
+		const known = all ? Array.from(domain.resources.values()) : descriptors
+		const usedFields = [
+			...Arr.filter(value.fields ?? [], (field) => !field.includes("*")),
+			...(value.when === undefined ? [] : Condition.fields(value.when as Ast)),
+		]
+		return [
+			...Arr.map(
+				Arr.filter(named, (kind) => !domain.resources.has(kind)),
+				(kind): Issue => ({
+					path: [...at, "resources"],
+					issue: `There is no resource with the kind "${kind}"`,
+				}),
+			),
+			...Arr.map(
+				Arr.filter(
+					value.actions,
+					(action) =>
+						action !== "*" &&
+						!Arr.some(known, (descriptor) =>
+							descriptor.actions.includes(action),
+						),
+				),
+				(action): Issue => ({
+					path: [...at, "actions"],
+					issue: `The action "${action}" is not an action of these resources`,
+				}),
+			),
+			...Arr.map(
+				Arr.filter(
+					usedFields,
+					(field) =>
+						all ||
+						descriptors.length === 0 ||
+						!Arr.every(
+							descriptors,
+							(descriptor) =>
+								descriptor.fieldPaths.includes(field) ||
+								// A key of a record, or a field deep in a recursive
+								// Schema.
+								Resource.hasPath(descriptor.schema, field),
+						),
+				),
+				(field): Issue => ({
+					path: at,
+					issue: `The field "${field}" is not a field of every resource of the rule`,
+				}),
+			),
+			...Arr.map(
+				Arr.filter(
+					value.when === undefined ? [] : principalRefs(value.when),
+					(ref) =>
+						!principalPaths.has(ref) &&
+						!Resource.hasPath(domain.principal, ref),
+				),
+				(ref): Issue => ({
+					path: [...at, "when"],
+					issue: `The principal has no field "${ref}"`,
+				}),
+			),
+		]
+	}
+	const issuesOf = (
+		node: EncodedNode,
+		path: ReadonlyArray<PropertyKey>,
+	): ReadonlyArray<Issue> => {
 		switch (node._tag) {
 			case "Rules":
-				node.rules.forEach((value, index) => {
-					const at = [...path, "rules", index]
-					const kinds = value.resources.includes("*")
-						? undefined
-						: value.resources
-					const descriptors = []
-					for (const kind of value.resources) {
-						if (kind === "*") continue
-						const descriptor = domain.resources.get(kind)
-						if (descriptor === undefined) {
-							issues.push({
-								path: [...at, "resources"],
-								issue: `There is no resource with the kind "${kind}"`,
-							})
-						} else {
-							descriptors.push(descriptor)
-						}
-					}
-					const known =
-						kinds === undefined
-							? Array.from(domain.resources.values())
-							: descriptors
-					for (const action of value.actions) {
-						if (action === "*") continue
-						if (
-							!known.some((descriptor) => descriptor.actions.includes(action))
-						) {
-							issues.push({
-								path: [...at, "actions"],
-								issue: `The action "${action}" is not an action of these resources`,
-							})
-						}
-					}
-					const usedFields = [
-						...(value.fields ?? []).filter((field) => !field.includes("*")),
-						...(value.when === undefined
-							? []
-							: Condition.fields(value.when as Ast)),
-					]
-					for (const field of usedFields) {
-						const everywhere =
-							kinds !== undefined &&
-							descriptors.length > 0 &&
-							descriptors.every(
-								(descriptor) =>
-									descriptor.fieldPaths.includes(field) ||
-									// A key of a record, or a field deep in a recursive
-									// Schema.
-									Resource.hasPath(descriptor.schema, field),
-							)
-						if (!everywhere) {
-							issues.push({
-								path: at,
-								issue: `The field "${field}" is not a field of every resource of the rule`,
-							})
-						}
-					}
-					if (value.when !== undefined) {
-						for (const ref of principalRefs(value.when)) {
-							if (
-								!principalPaths.has(ref) &&
-								!Resource.hasPath(domain.principal, ref)
-							) {
-								issues.push({
-									path: [...at, "when"],
-									issue: `The principal has no field "${ref}"`,
-								})
-							}
-						}
-					}
-				})
-				return
+				return Arr.flatMap(node.rules, (value, index) =>
+					ruleIssues(value, [...path, "rules", index]),
+				)
 			case "All":
 			case "Any":
 			case "FirstOf":
-				node.policies.forEach((child, index) =>
-					visit(child, [...path, "policies", index]),
+				return Arr.flatMap(node.policies, (child, index) =>
+					issuesOf(child, [...path, "policies", index]),
 				)
-				return
 			case "Ceiling":
-				visit(node.cap, [...path, "cap"])
-				visit(node.policy, [...path, "policy"])
-				return
+				return [
+					...issuesOf(node.cap, [...path, "cap"]),
+					...issuesOf(node.policy, [...path, "policy"]),
+				]
 		}
 	}
-	visit(root, [])
-	return issues
+	return issuesOf(root, [])
 }
 
-const decodeNode = (node: EncodedNode): Node => {
+/**
+ * Makes a policy tree from its JSON form. Each rule gets the domain of the
+ * Schema, as a rule from the builder of the domain has it.
+ */
+const decodeNode = (node: EncodedNode, domain: Domain.Any): Node => {
 	switch (node._tag) {
 		case "Rules":
 			return nodes.Rules({
 				algorithm: node.algorithm,
-				rules: node.rules.map((value) => Rule.make(value as Rule.Shape)),
+				rules: node.rules.map((value) =>
+					Rule.make({ ...(value as Rule.Shape), domain }),
+				),
 			})
 		case "All":
 		case "Any":
 		case "FirstOf":
-			return nodes[node._tag]({ policies: node.policies.map(decodeNode) })
+			return nodes[node._tag]({
+				policies: node.policies.map((child) => decodeNode(child, domain)),
+			})
 		case "Ceiling":
 			return nodes.Ceiling({
-				cap: decodeNode(node.cap),
-				policy: decodeNode(node.policy),
+				cap: decodeNode(node.cap, domain),
+				policy: decodeNode(node.policy, domain),
 			})
 	}
 }
@@ -1814,7 +1890,8 @@ export const schema = <D extends Domain.Any>(
 					isPolicy(u) && u.domain === domain && !nodeHasPredicate(u.node),
 			),
 			SchemaTransformation.transform({
-				decode: (node: EncodedNode) => fromNode(domain, decodeNode(node)),
+				decode: (node: EncodedNode) =>
+					fromNode(domain, decodeNode(node, domain)),
 				encode: (policy: Policy<D>) => encodeNode(policy.node),
 			}),
 		),

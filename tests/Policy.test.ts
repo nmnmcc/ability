@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Equal, Exit, Schema } from "effect"
+import { Array as Arr, Effect, Equal, Exit, Schema } from "effect"
 import {
 	Condition,
 	Decision,
@@ -45,7 +45,7 @@ describe("Policy", () => {
 		it("gives each algorithm its own winner", () => {
 			const make = (algorithm: Policy.Algorithm) =>
 				Policy.define(App, { algorithm })(function* (_) {
-					for (const rule of rules(_)) yield* rule
+					yield* rules(_)
 				})
 			const decide = (algorithm: Policy.Algorithm) =>
 				Policy.decideSync(make(algorithm), {
@@ -430,9 +430,9 @@ describe("Policy", () => {
 					value: { _tag: "Principal", path: "tenant" },
 				},
 			})
-			for (const part of ["Ghost", "fly", "level", "tenant"]) {
-				assert.include(message, part)
-			}
+			Arr.map(["Ghost", "fly", "level", "tenant"], (part) =>
+				assert.include(message, part),
+			)
 		})
 
 		it("checks the extra data of a rule with the Schema of the domain", () => {
@@ -526,7 +526,7 @@ describe("Policy", () => {
 			const half = Math.floor(specs.length / 2)
 			const withAlgorithm = (part: ReadonlyArray<typeof Spec.Type>) =>
 				Policy.define(App, { algorithm: request.algorithm })(function* (_) {
-					for (const spec of part) yield* toRule(_, spec)
+					yield* Arr.map(part, (spec) => toRule(_, spec))
 				})
 			const left = withAlgorithm(specs.slice(0, half))
 			const right = withAlgorithm(specs.slice(half))
@@ -610,7 +610,7 @@ describe("Policy", () => {
 				})
 				const _ = Policy.define(App)
 				const policy = _(function* (builder) {
-					for (const spec of specs) yield* toRule(builder, spec)
+					yield* Arr.map(specs, (spec) => toRule(builder, spec))
 				})
 				const node = policy.node as Policy.RulesNode
 				// A node keeps no types. These rules have no predicates.
@@ -914,13 +914,15 @@ describe("Policy", () => {
 	})
 
 	it("stops in a short time when a residual is too large", () => {
-		let policy: Policy.Policy<App> = Policy.define(App)(function* (_) {
-			yield* _.allow("read", Bot, { when: ($) => $.eq("level", 1) })
-			yield* _.deny("read", Bot, { when: ($) => $.eq("name", "Team") })
-		})
-		for (let depth = 0; depth < 24; depth++) {
-			policy = depth % 2 === 0 ? Policy.any([policy]) : Policy.all([policy])
-		}
+		const policy = Arr.reduce(
+			Arr.range(0, 23),
+			Policy.define(App)(function* (_) {
+				yield* _.allow("read", Bot, { when: ($) => $.eq("level", 1) })
+				yield* _.deny("read", Bot, { when: ($) => $.eq("name", "Team") })
+			}) as Policy.Policy<App>,
+			(inner, depth) =>
+				depth % 2 === 0 ? Policy.any([inner]) : Policy.all([inner]),
+		)
 		const start = Date.now()
 		assert.throws(() =>
 			Policy.residual(policy, {
@@ -933,14 +935,15 @@ describe("Policy", () => {
 	})
 
 	it("does the work on a shared child only one time", () => {
-		let any: Policy.Policy<App> = Policy.define(App)(function* (_) {
+		const base: Policy.Policy<App> = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot)
 		})
-		let all = any
-		for (let depth = 0; depth < 24; depth++) {
-			any = Policy.any([any, any])
-			all = Policy.all([all, all])
-		}
+		const any = Arr.reduce(Arr.range(0, 23), base, (inner) =>
+			Policy.any([inner, inner]),
+		)
+		const all = Arr.reduce(Arr.range(0, 23), base, (inner) =>
+			Policy.all([inner, inner]),
+		)
 		const request = { principal: alice, action: "read", kind: "Bot" } as const
 		const start = Date.now()
 		assert.deepStrictEqual(Policy.residual(any, request), Condition.always)
@@ -957,14 +960,14 @@ describe("Policy", () => {
 	})
 
 	it("does the work on a shared part of a condition only one time", () => {
-		let shared = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>().eq(
-			"level",
-			2,
+		const condition = Arr.reduce(
+			Arr.range(0, 23),
+			Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>().eq(
+				"level",
+				2,
+			) as Condition.Test<Bot>,
+			(inner) => Condition.and(inner, inner),
 		)
-		for (let depth = 0; depth < 24; depth++) {
-			shared = Condition.and(shared, shared)
-		}
-		const condition = shared
 		const policy = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot, { when: () => condition })
 		})
@@ -1095,18 +1098,18 @@ describe("Policy", () => {
 
 	it("simplifies a condition with many shared parts in a short time", () => {
 		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
-		const build = (seed: number) => {
-			let c: Condition.Test<Bot, Caller> = $.eq("level", 0)
-			for (let level = 0; level < 22; level++) {
-				const a = $.eq("name", `${String(seed)}-${String(level)}-a`)
-				const b = $.eq("name", `${String(seed)}-${String(level)}-b`)
-				c =
-					level % 2 === 0
+		const build = (seed: number) =>
+			Arr.reduce(
+				Arr.range(0, 21),
+				$.eq("level", 0) as Condition.Test<Bot, Caller>,
+				(c, level) => {
+					const a = $.eq("name", `${String(seed)}-${String(level)}-a`)
+					const b = $.eq("name", `${String(seed)}-${String(level)}-b`)
+					return level % 2 === 0
 						? $.and($.or(c, a), $.or(c, b))
 						: $.or($.and(c, a), $.and(c, b))
-			}
-			return c
-		}
+				},
+			)
 		const condition = $.or(build(1), build(2))
 		const policy = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot, { when: () => condition })
@@ -1216,14 +1219,13 @@ describe("Policy", () => {
 			},
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
-		let policy: Policy.Policy<typeof Notes> = Policy.define(Notes)(
-			function* (_) {
+		const policy = Arr.reduce(
+			Arr.range(0, 29),
+			Policy.define(Notes)(function* (_) {
 				yield* _.allow("read", Note)
-			},
+			}) as Policy.Policy<typeof Notes>,
+			(inner) => Policy.all([inner, inner]),
 		)
-		for (let depth = 0; depth < 30; depth++) {
-			policy = Policy.all([policy, policy])
-		}
 		const start = Date.now()
 		const fields = Effect.runSync(
 			Policy.permittedFields(policy, {
@@ -1240,9 +1242,9 @@ describe("Policy", () => {
 		const ids = Array.from({ length: 4000 }, (_, index) => `b${String(index)}`)
 		const policy = Policy.define(App, { algorithm: "firstApplicable" })(
 			function* (_) {
-				for (const id of ids) {
-					yield* _.allow("read", Bot, { when: ($) => $.eq("id", id) })
-				}
+				yield* Arr.map(ids, (id) =>
+					_.allow("read", Bot, { when: ($) => $.eq("id", id) }),
+				)
 			},
 		)
 		const start = Date.now()

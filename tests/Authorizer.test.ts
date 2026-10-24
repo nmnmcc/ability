@@ -1,7 +1,7 @@
 // Each test gives its own layer, so it uses Effect.provide.
 // @effect-diagnostics strictEffectProvide:off
 import { assert, describe, it } from "@effect/vitest"
-import { Context, Effect, Exit, Layer, Ref, Schema } from "effect"
+import { Array as Arr, Context, Effect, Exit, Layer, Ref, Schema } from "effect"
 import {
 	Authorizer,
 	Condition,
@@ -588,13 +588,15 @@ describe("Authorizer", () => {
 				"test/Deep",
 				App,
 			) {}
-			let policy: Policy.Policy<typeof App> = Policy.define(App)(function* (_) {
-				yield* _.allow("read", Bot, { when: ($) => $.eq("level", 1) })
-				yield* _.deny("read", Bot, { when: ($) => $.eq("name", "Team") })
-			})
-			for (let depth = 0; depth < 24; depth++) {
-				policy = depth % 2 === 0 ? Policy.any([policy]) : Policy.all([policy])
-			}
+			const policy = Arr.reduce(
+				Arr.range(0, 23),
+				Policy.define(App)(function* (_) {
+					yield* _.allow("read", Bot, { when: ($) => $.eq("level", 1) })
+					yield* _.deny("read", Bot, { when: ($) => $.eq("name", "Team") })
+				}) as Policy.Policy<typeof App>,
+				(inner, depth) =>
+					depth % 2 === 0 ? Policy.any([inner]) : Policy.all([inner]),
+			)
 			const layer = Authorizer.layer(Deep, {
 				principal: Identity,
 				policy: () => Effect.succeed(policy),
@@ -779,12 +781,13 @@ describe("Authorizer", () => {
 				"test/Wide",
 				App,
 			) {}
-			let policy: Policy.Policy<typeof App> = Policy.define(App)(function* (_) {
-				yield* _.allow("read", Bot)
-			})
-			for (let depth = 0; depth < 24; depth++) {
-				policy = Policy.all([policy, policy])
-			}
+			const policy = Arr.reduce(
+				Arr.range(0, 23),
+				Policy.define(App)(function* (_) {
+					yield* _.allow("read", Bot)
+				}) as Policy.Policy<typeof App>,
+				(inner) => Policy.all([inner, inner]),
+			)
 			const layer = Authorizer.layer(Wide, {
 				principal: Identity,
 				policy: () => Effect.succeed(policy),

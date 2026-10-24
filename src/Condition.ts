@@ -25,10 +25,11 @@
 // code below works on the nodes with no types, where they are `unknown`, so
 // the language service check for `unknown` in an Effect is off here.
 // @effect-diagnostics anyUnknownInErrorContext:off
+import * as Arr from "effect/Array"
 import type * as Context from "effect/Context"
 import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
-import type * as Option from "effect/Option"
+import * as Option from "effect/Option"
 import { dual } from "effect/Function"
 import { hasProperty, isObject } from "effect/Predicate"
 import * as Schema from "effect/Schema"
@@ -801,16 +802,20 @@ export interface Input {
  * Gets a field of an object by a path with dots. A missing field, or a field
  * under a value that is not an object, gives `null`.
  */
-const getField = (value: unknown, path: string): unknown => {
-	let cursor: unknown = value
-	for (const key of path.split(".")) {
-		if (!isObject(cursor) || !Object.hasOwn(cursor, key)) {
-			return null
-		}
-		cursor = (cursor as Record<string, unknown>)[key]
-	}
-	return cursor === undefined ? null : cursor
-}
+const getField = (value: unknown, path: string): unknown =>
+	Option.match(
+		Arr.reduce(path.split("."), Option.some(value), (cursor, key) =>
+			Option.flatMap(cursor, (current) =>
+				isObject(current) && Object.hasOwn(current, key)
+					? Option.some((current as Record<string, unknown>)[key])
+					: Option.none(),
+			),
+		),
+		{
+			onNone: () => null,
+			onSome: (field) => (field === undefined ? null : field),
+		},
+	)
 
 const isScalar = (value: unknown): value is Scalar =>
 	typeof value === "string" ||
@@ -897,73 +902,66 @@ const testUnder = (prefix: ReadonlyArray<Operand>, input: Input): boolean => {
  * @category predicates
  * @since 0.4.0
  */
-export const hasPredicate = (condition: Ast): boolean => {
-	const cached = predicateNodes.get(condition)
+export const hasPredicate = (condition: Ast): boolean =>
+	hasPredicateIn(condition, new Map())
+
+// One node may be a child of many nodes. Each walk below keeps its work on a
+// node in a memo that the walk makes for itself, so a condition with shared
+// children takes time for its nodes, not for its paths. No memo lives longer
+// than one call.
+
+/** Gives the answer for a key from the memo, or works it out and keeps it. */
+const remember = <K, A>(memo: Map<K, A>, key: K, work: () => A): A => {
+	const cached = memo.get(key)
 	if (cached !== undefined) {
 		return cached
 	}
-	const result = hasPredicateOnce(condition)
-	predicateNodes.set(condition, result)
+	const result = work()
+	memo.set(key, result)
 	return result
 }
 
-// One node may be a child of many nodes. Each walk below keeps its work on a
-// node, so a condition with shared children takes time for its nodes, not
-// for its paths.
-
-const predicateNodes = new WeakMap<Ast, boolean>()
-
-const hasPredicateOnce: (condition: Ast) => boolean = nodes.$match({
-	Predicate: () => true,
-	And: (node) => node.conditions.some(hasPredicate),
-	Or: (node) => node.conditions.some(hasPredicate),
-	Not: (node) => hasPredicate(node.condition),
-	True: () => false,
-	False: () => false,
-	Compare: () => false,
-	In: () => false,
-	Exists: () => false,
-	Under: () => false,
-})
+const hasPredicateIn = (ast: Ast, memo: Map<Ast, boolean>): boolean =>
+	remember(memo, ast, () => {
+		switch (ast._tag) {
+			case "Predicate":
+				return true
+			case "And":
+			case "Or":
+				return Arr.some(ast.conditions, (child) => hasPredicateIn(child, memo))
+			case "Not":
+				return hasPredicateIn(ast.condition, memo)
+			default:
+				return false
+		}
+	})
 
 const provideAst = (
 	ast: Ast,
 	context: Context.Context<never>,
 	done: Map<Ast, Ast> = new Map(),
-): Ast => {
-	if (!hasPredicate(ast)) {
-		return ast
-	}
-	const cached = done.get(ast)
-	if (cached !== undefined) {
-		return cached
-	}
-	let result: Ast
-	switch (ast._tag) {
-		case "Predicate":
-			result = makePredicate(ast.name, (value, principal) =>
-				Effect.provideContext(ast.run(value, principal), context),
-			)
-			break
-		case "And":
-			result = makeAnd(
-				...ast.conditions.map((child) => provideAst(child, context, done)),
-			)
-			break
-		case "Or":
-			result = makeOr(
-				...ast.conditions.map((child) => provideAst(child, context, done)),
-			)
-			break
-		case "Not":
-			result = makeNot(provideAst(ast.condition, context, done))
-			break
-		default:
-			result = ast
-	}
-	done.set(ast, result)
-	return result
-}
+	predicates: Map<Ast, boolean> = new Map(),
+): Ast =>
+	!hasPredicateIn(ast, predicates)
+		? ast
+		: remember(done, ast, () => {
+				const provide = (child: Ast) =>
+					provideAst(child, context, done, predicates)
+				switch (ast._tag) {
+					case "Predicate":
+						return makePredicate(ast.name, (value, principal) =>
+							Effect.provideContext(ast.run(value, principal), context),
+						)
+					case "And":
+						return makeAnd(...Arr.map(ast.conditions, provide))
+					case "Or":
+						return makeOr(...Arr.map(ast.conditions, provide))
+					case "Not":
+						return makeNot(provide(ast.condition))
+					default:
+						return ast
+				}
+			})
 
 /**
  * Gives the services in `context` to every predicate of a condition, so the
@@ -990,15 +988,7 @@ const evaluateSyncNode = (
 	ast: Ast,
 	input: Input,
 	done: Map<Ast, boolean>,
-): boolean => {
-	const cached = done.get(ast)
-	if (cached !== undefined) {
-		return cached
-	}
-	const result = evaluateSyncOnce(ast, input, done)
-	done.set(ast, result)
-	return result
-}
+): boolean => remember(done, ast, () => evaluateSyncOnce(ast, input, done))
 
 const evaluateSyncOnce = (
 	ast: Ast,
@@ -1027,11 +1017,11 @@ const evaluateSyncOnce = (
 		case "Under":
 			return testUnder(ast.prefix, input)
 		case "And":
-			return ast.conditions.every((child) =>
+			return Arr.every(ast.conditions, (child) =>
 				evaluateSyncNode(child, input, done),
 			)
 		case "Or":
-			return ast.conditions.some((child) =>
+			return Arr.some(ast.conditions, (child) =>
 				evaluateSyncNode(child, input, done),
 			)
 		case "Not":
@@ -1047,33 +1037,31 @@ const evaluateSyncOnce = (
 const evaluateAst = (
 	ast: Ast,
 	input: Input,
+	predicates: Map<Ast, boolean> = new Map(),
 ): Effect.Effect<boolean, unknown, unknown> => {
-	if (!hasPredicate(ast)) {
+	if (!hasPredicateIn(ast, predicates)) {
 		return Effect.sync(() => evaluateSyncAst(ast, input))
 	}
+	const evaluate = (child: Ast) => evaluateAst(child, input, predicates)
 	switch (ast._tag) {
 		case "Predicate":
 			return ast.run(input.value, input.principal)
 		case "Not":
-			return Effect.map(evaluateAst(ast.condition, input), (value) => !value)
+			return Effect.map(evaluate(ast.condition), (value) => !value)
 		case "And":
-			return Effect.gen(function* () {
-				for (const child of ast.conditions) {
-					if (!(yield* evaluateAst(child, input))) {
-						return false
-					}
-				}
-				return true
-			})
+			// The children run in order, until one is false.
+			return Effect.map(
+				Effect.findFirst(ast.conditions, (child) =>
+					Effect.map(evaluate(child), (value) => !value),
+				),
+				Option.isNone,
+			)
 		case "Or":
-			return Effect.gen(function* () {
-				for (const child of ast.conditions) {
-					if (yield* evaluateAst(child, input)) {
-						return true
-					}
-				}
-				return false
-			})
+			// The children run in order, until one is true.
+			return Effect.map(
+				Effect.findFirst(ast.conditions, evaluate),
+				Option.isSome,
+			)
 		default:
 			return Effect.sync(() => evaluateSyncAst(ast, input))
 	}
@@ -1130,25 +1118,26 @@ export const evaluateSync: {
 	(condition: Condition<never, never, never, any>, input: Input): boolean
 } = dual(2, evaluateSyncAst)
 
-// Two nodes with the same structure get the same number, so a set of numbers
-// finds an equal node at once. The number of a node is kept, so a node that
-// is a child of many nodes gets its number one time. The hash of Effect data
-// would walk a shared child again for each path to it.
-
-const structureIds = new WeakMap<Ast, number>()
-// The table of structures is made empty when it is full, so it does not grow
-// without end. A structure that comes again then gets a new number. Two equal
-// nodes may so get two numbers, and then the simplification does a little
-// less. Two nodes that are not equal never get one number.
-const maxStructures = 100_000
-let structures = new Map<string, number>()
-let nextId = 0
-
-const newId = (): number => {
-	const id = nextId
-	nextId = nextId + 1
-	return id
+/**
+ * The memo of one simplification. One node may be a child of many nodes, so
+ * the work on each node is done one time. The memo lives only as long as the
+ * work that made it.
+ */
+interface Memo {
+	/** The simple form of each node. */
+	readonly simple: Map<Ast, Ast>
+	readonly predicates: Map<Ast, boolean>
+	/** A number for each node. Two nodes with one structure get one number. */
+	readonly ids: Map<Ast, number>
+	readonly structures: Map<string, number>
 }
+
+const makeMemo = (): Memo => ({
+	simple: new Map(),
+	predicates: new Map(),
+	ids: new Map(),
+	structures: new Map(),
+})
 
 const literalText = (value: Scalar): string =>
 	// JSON gives `null` for `Infinity`, `-Infinity` and `NaN`, so a number is
@@ -1162,7 +1151,8 @@ const operandText = (operand: Operand): string =>
 		? `L${literalText(operand.value)}`
 		: `R${JSON.stringify(operand.path)}`
 
-const structureText = (ast: Ast): string | undefined => {
+const structureText = (ast: Ast, memo: Memo): string | undefined => {
+	const id = (child: Ast) => structureId(child, memo)
 	switch (ast._tag) {
 		case "True":
 		case "False":
@@ -1170,53 +1160,48 @@ const structureText = (ast: Ast): string | undefined => {
 		case "Compare":
 			return `C${ast.op}:${JSON.stringify(ast.field)}:${operandText(ast.value)}`
 		case "In":
-			return `I${JSON.stringify(ast.field)}:${ast.values.map(operandText).join(",")}`
+			return `I${JSON.stringify(ast.field)}:${Arr.map(ast.values, operandText).join(",")}`
 		case "Exists":
 			return `E${JSON.stringify(ast.field)}`
 		case "Under":
-			return `U${ast.prefix.map(operandText).join(",")}`
+			return `U${Arr.map(ast.prefix, operandText).join(",")}`
 		case "And":
 		case "Or":
-			return `${ast._tag}:${ast.conditions.map(structureId).join(",")}`
+			return `${ast._tag}:${Arr.map(ast.conditions, id).join(",")}`
 		case "Not":
-			return `N${String(structureId(ast.condition))}`
+			return `N${String(id(ast.condition))}`
 		case "Predicate":
 			// A predicate is equal only to itself.
 			return undefined
 	}
 }
 
-const structureId = (ast: Ast): number => {
-	const cached = structureIds.get(ast)
-	if (cached !== undefined) {
-		return cached
-	}
-	const text = structureText(ast)
-	let id = text === undefined ? undefined : structures.get(text)
-	if (id === undefined) {
-		id = newId()
-		if (text !== undefined) {
-			if (structures.size >= maxStructures) {
-				structures = new Map()
-			}
-			structures.set(text, id)
-		}
-	}
-	structureIds.set(ast, id)
-	return id
-}
+/**
+ * Gives the number of the structure of a node. Two nodes with the same
+ * structure get the same number, so a set of numbers finds an equal node at
+ * once. The hash of Effect data would walk a shared child again for each path
+ * to it. A new number is the count of the numbered nodes, so it is new.
+ */
+const structureId = (ast: Ast, memo: Memo): number =>
+	remember(memo.ids, ast, () => {
+		const text = structureText(ast, memo)
+		const fresh = memo.ids.size
+		return text === undefined
+			? fresh
+			: remember(memo.structures, text, () => fresh)
+	})
 
-const dedupe = (conditions: ReadonlyArray<Ast>): ReadonlyArray<Ast> => {
-	const seen = new Set<number>()
-	const output: Array<Ast> = []
-	for (const condition of conditions) {
-		const id = structureId(condition)
-		if (!seen.has(id)) {
-			seen.add(id)
-			output.push(condition)
-		}
-	}
-	return output
+const dedupe = (
+	conditions: ReadonlyArray<Ast>,
+	memo: Memo,
+): ReadonlyArray<Ast> => {
+	const ids = Arr.map(conditions, (condition) => structureId(condition, memo))
+	// The first place of each number. The entries go in from the end, so the
+	// first place is the one that stays.
+	const first = new Map(
+		Arr.reverse(Arr.map(ids, (id, index) => [id, index] as const)),
+	)
+	return Arr.filter(conditions, (_, index) => first.get(ids[index]!) === index)
 }
 
 /**
@@ -1227,12 +1212,18 @@ const dedupe = (conditions: ReadonlyArray<Ast>): ReadonlyArray<Ast> => {
 const absorb = (
 	inner: "And" | "Or",
 	conditions: ReadonlyArray<Ast>,
+	memo: Memo,
 ): ReadonlyArray<Ast> => {
-	const all = new Set(conditions.map(structureId))
-	return conditions.filter(
+	const all = new Set(
+		Arr.map(conditions, (condition) => structureId(condition, memo)),
+	)
+	return Arr.filter(
+		conditions,
 		(condition) =>
 			condition._tag !== inner ||
-			!condition.conditions.some((part) => all.has(structureId(part))),
+			!Arr.some(condition.conditions, (part) =>
+				all.has(structureId(part, memo)),
+			),
 	)
 }
 
@@ -1244,15 +1235,21 @@ const absorb = (
 const reduce = (
 	inner: "And" | "Or",
 	conditions: ReadonlyArray<Ast>,
+	memo: Memo,
 ): ReadonlyArray<Ast> =>
-	conditions.some(hasPredicate) ? conditions : absorb(inner, dedupe(conditions))
+	Arr.some(conditions, (condition) =>
+		hasPredicateIn(condition, memo.predicates),
+	)
+		? conditions
+		: absorb(inner, dedupe(conditions, memo), memo)
 
 const flatten = (
 	tag: "And" | "Or",
 	conditions: ReadonlyArray<Ast>,
+	memo: Memo,
 ): ReadonlyArray<Ast> =>
-	conditions.flatMap((child) => {
-		const simple = simplifyAst(child)
+	Arr.flatMap(conditions, (child) => {
+		const simple = simplifyIn(child, memo)
 		return simple._tag === tag ? simple.conditions : [simple]
 	})
 
@@ -1267,13 +1264,15 @@ const shortCircuit = (
 	tag: "And" | "Or",
 	children: ReadonlyArray<Ast>,
 	index: number,
+	memo: Memo,
 ): Ast => {
 	const constant = tag === "And" ? never : always
 	const neutral = tag === "And" ? "True" : "False"
-	const before = children
-		.slice(0, index)
-		.filter((child) => child._tag !== neutral)
-	if (!before.some(hasPredicate)) {
+	const before = Arr.filter(
+		Arr.take(children, index),
+		(child) => child._tag !== neutral,
+	)
+	if (!Arr.some(before, (child) => hasPredicateIn(child, memo.predicates))) {
 		return constant
 	}
 	return tag === "And"
@@ -1281,53 +1280,53 @@ const shortCircuit = (
 		: makeOr(...before, constant)
 }
 
-/**
- * The nodes that are already simple. A residual condition is made of simple
- * parts, so the work on each part is done only one time.
- */
-const simple = new WeakMap<Ast, Ast>()
+const simplifyIn = (ast: Ast, memo: Memo): Ast =>
+	remember(memo.simple, ast, () => {
+		const result = simplifyNode(ast, memo)
+		// The simple form of a simple node is the node itself.
+		memo.simple.set(result, result)
+		return result
+	})
 
-const simplifyAst = (ast: Ast): Ast => {
-	const cached = simple.get(ast)
-	if (cached !== undefined) {
-		return cached
-	}
-	const result = simplifyNode(ast)
-	simple.set(ast, result)
-	simple.set(result, result)
-	return result
+const simplifyJunction = (
+	tag: "And" | "Or",
+	conditions: ReadonlyArray<Ast>,
+	memo: Memo,
+): Ast => {
+	const constant = tag === "And" ? "False" : "True"
+	const neutral = tag === "And" ? "True" : "False"
+	const flat = flatten(tag, conditions, memo)
+	return Option.match(
+		Arr.findFirstIndex(flat, (child) => child._tag === constant),
+		{
+			onSome: (stop) => shortCircuit(tag, flat, stop, memo),
+			onNone: () => {
+				const unique = reduce(
+					tag === "And" ? "Or" : "And",
+					Arr.filter(flat, (child) => child._tag !== neutral),
+					memo,
+				)
+				return unique.length === 0
+					? tag === "And"
+						? always
+						: never
+					: unique.length === 1
+						? unique[0]!
+						: tag === "And"
+							? makeAnd(...unique)
+							: makeOr(...unique)
+			},
+		},
+	)
 }
 
-const simplifyNode = (ast: Ast): Ast => {
+const simplifyNode = (ast: Ast, memo: Memo): Ast => {
 	switch (ast._tag) {
-		case "And": {
-			const flat = flatten("And", ast.conditions)
-			const stop = flat.findIndex((child) => child._tag === "False")
-			if (stop !== -1) {
-				return shortCircuit("And", flat, stop)
-			}
-			const children = flat.filter((child) => child._tag !== "True")
-			const unique = reduce("Or", children)
-			if (unique.length === 0) {
-				return always
-			}
-			return unique.length === 1 ? unique[0]! : makeAnd(...unique)
-		}
-		case "Or": {
-			const flat = flatten("Or", ast.conditions)
-			const stop = flat.findIndex((child) => child._tag === "True")
-			if (stop !== -1) {
-				return shortCircuit("Or", flat, stop)
-			}
-			const children = flat.filter((child) => child._tag !== "False")
-			const unique = reduce("And", children)
-			if (unique.length === 0) {
-				return never
-			}
-			return unique.length === 1 ? unique[0]! : makeOr(...unique)
-		}
+		case "And":
+		case "Or":
+			return simplifyJunction(ast._tag, ast.conditions, memo)
 		case "Not": {
-			const child = simplifyAst(ast.condition)
+			const child = simplifyIn(ast.condition, memo)
 			switch (child._tag) {
 				case "True":
 					return never
@@ -1360,6 +1359,8 @@ const simplifyNode = (ast: Ast): Ast => {
 	}
 }
 
+const simplifyAst = (ast: Ast): Ast => simplifyIn(ast, makeMemo())
+
 /**
  * Makes a condition smaller without a change to its meaning. It removes `True`
  * and `False` from `And` and `Or`, joins nested `And` and `Or` nodes, and
@@ -1372,6 +1373,23 @@ const simplifyNode = (ast: Ast): Ast => {
 export const simplify: <E, R, O, I>(
 	condition: Condition<E, R, O, I>,
 ) => Condition<E, R, O, I> = simplifyAst as never
+
+/**
+ * Makes a {@link simplify} function that keeps its work for the parts it has
+ * seen. Use one for many calls on conditions that share parts, such as the
+ * steps of one residual condition. Do not keep it for long: it keeps every
+ * part that it has seen.
+ *
+ * @stability stable
+ * @category evaluation
+ * @since 0.4.0
+ */
+export const simplifier = (): (<E, R, O, I>(
+	condition: Condition<E, R, O, I>,
+) => Condition<E, R, O, I>) => {
+	const memo = makeMemo()
+	return ((ast: Ast) => simplifyIn(ast, memo)) as never
+}
 
 /**
  * Puts the value of the principal into an operand. It gives `undefined` for a
@@ -1396,23 +1414,20 @@ const expandUnder = (
 	if (path === undefined || prefix.length > path.length) {
 		return never
 	}
-	const parts: Array<Ast> = []
-	prefix.forEach((operand, index) => {
+	const parts = Arr.map(prefix, (operand, index): Ast => {
 		const value = resolve(operand, principal)
 		const segment = path[index]!
-		if (value === undefined) {
-			parts.push(never)
-		} else if (typeof segment === "string") {
-			parts.push(segment === value ? always : never)
-		} else {
-			parts.push(
-				nodes.Compare({
-					op: "eq",
-					field: segment.field,
-					value: literal(value as Scalar),
-				}),
-			)
-		}
+		return value === undefined
+			? never
+			: typeof segment === "string"
+				? segment === value
+					? always
+					: never
+				: nodes.Compare({
+						op: "eq",
+						field: segment.field,
+						value: literal(value as Scalar),
+					})
 	})
 	return makeAnd(...parts)
 }
@@ -1422,15 +1437,7 @@ const bind = (
 	principal: unknown,
 	path: ReadonlyArray<Resource.PathSegment> | undefined,
 	done: Map<Ast, Ast> = new Map(),
-): Ast => {
-	const cached = done.get(ast)
-	if (cached !== undefined) {
-		return cached
-	}
-	const result = bindOnce(ast, principal, path, done)
-	done.set(ast, result)
-	return result
-}
+): Ast => remember(done, ast, () => bindOnce(ast, principal, path, done))
 
 const bindOnce = (
 	ast: Ast,
@@ -1652,34 +1659,32 @@ export const fold: {
  * @category getters
  * @since 0.3.0
  */
-export const fields = (condition: Ast): ReadonlyArray<string> => {
-	const output = new Set<string>()
-	const seen = new Set<Ast>()
-	const visit = (node: Ast): void => {
-		if (seen.has(node)) {
-			return
-		}
-		seen.add(node)
-		switch (node._tag) {
+export const fields = (condition: Ast): ReadonlyArray<string> =>
+	Array.from(fieldsIn(condition, new Map()))
+
+const fieldsIn = (
+	ast: Ast,
+	memo: Map<Ast, ReadonlySet<string>>,
+): ReadonlySet<string> =>
+	remember(memo, ast, () => {
+		switch (ast._tag) {
 			case "Compare":
 			case "In":
 			case "Exists":
-				output.add(node.field)
-				return
+				return new Set([ast.field])
 			case "And":
 			case "Or":
-				node.conditions.forEach(visit)
-				return
+				return new Set(
+					Arr.flatMap(ast.conditions, (child) =>
+						Array.from(fieldsIn(child, memo)),
+					),
+				)
 			case "Not":
-				visit(node.condition)
-				return
+				return fieldsIn(ast.condition, memo)
 			default:
-				return
+				return new Set()
 		}
-	}
-	visit(condition)
-	return Array.from(output)
-}
+	})
 
 /**
  * The JSON form of a condition with no predicate.

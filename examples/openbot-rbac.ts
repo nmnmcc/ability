@@ -108,16 +108,19 @@ const toSql = Condition.fold<Query>({
 					},
 	in: (field, values) => {
 		const known = values.filter((value) => value !== null)
-		const parts: Array<Query> = []
-		if (known.length > 0) {
-			parts.push({
-				sql: `COALESCE(${field} IN (${known.map(() => "?").join(", ")}), FALSE)`,
-				params: known,
-			})
-		}
-		if (known.length < values.length) {
-			parts.push({ sql: `${field} IS NULL`, params: [] })
-		}
+		const parts: ReadonlyArray<Query> = [
+			...(known.length > 0
+				? [
+						{
+							sql: `COALESCE(${field} IN (${known.map(() => "?").join(", ")}), FALSE)`,
+							params: known,
+						},
+					]
+				: []),
+			...(known.length < values.length
+				? [{ sql: `${field} IS NULL`, params: [] }]
+				: []),
+		]
 		return parts.length === 0
 			? { sql: "FALSE", params: [] }
 			: join(parts, " OR ")

@@ -84,6 +84,18 @@ material. Do not change it unless the user asks.
     `instanceof`.
   - Use the tools that Effect gives to its users, such as `Function.dual`,
     `Effect.fn`, `Context.Service`, `Layer`, `Cache` and `Schema`.
+- Do not keep state for the whole program. A module may not have a `Map`, a
+  `Set`, a `WeakMap`, a cache or a `let` at its top level. When a walk needs a
+  memo, the walk makes it, and the memo goes away when the walk ends. State that
+  must live longer belongs to a value, such as a layer.
+- Change as little state as you can. Use `const` and values that do not change.
+  Make a new value in place of a change to an old one. A memo `Map` inside one
+  call is the usual exception.
+- Do not write `for` or `while` loops. Use the tools of Effect: `Array` from
+  `effect` (`map`, `flatMap`, `filter`, `reduce`, `reduceRight`, `some`,
+  `every`, `findFirst`, `groupWith`, `unfold`) for values, and `Effect.forEach`,
+  `Effect.filter` and `Effect.findFirst` for Effects. A walk that must stop
+  early may call itself with the next index.
 - A public function gives its full types. When the code under it works on nodes
   with no types, give it a short private function, and give the public type in
   the `export const` line. Such a file may turn off the

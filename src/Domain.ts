@@ -14,7 +14,9 @@
  * @stability stable
  * @since 0.3.0
  */
+import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
+import * as Option from "effect/Option"
 import type * as Schema from "effect/Schema"
 import type * as PrincipalSchema from "./Principal.ts"
 import * as Resource from "./Resource.ts"
@@ -189,19 +191,26 @@ export const make: <
 	readonly resources: Resources
 	readonly meta?: M
 }) => Domain<P["Type"], Resources[number], M["Type"]> = (options) => {
-	const resources = new Map<string, Resource.Descriptor>()
-	for (const resource of options.resources) {
-		const value = Resource.descriptor(resource)
-		if (resources.has(value.kind)) {
-			// Two resources with one kind name is a mistake in the code, not in the
-			// data, so it is a defect.
-			throw new Error(`Two resources have the kind name "${value.kind}"`)
-		}
-		if (value.kind === "*") {
-			throw new Error(`A resource may not have the kind name "*"`)
-		}
-		resources.set(value.kind, value)
+	const descriptors = Arr.map(options.resources, Resource.descriptor)
+	const kinds = Arr.map(descriptors, (descriptor) => descriptor.kind)
+	// Two resources with one kind name is a mistake in the code, not in the
+	// data, so it is a defect.
+	const twice = Arr.findFirst(
+		kinds,
+		(kind, index) => kinds.indexOf(kind) !== index,
+	)
+	if (Option.isSome(twice)) {
+		throw new Error(`Two resources have the kind name "${twice.value}"`)
 	}
+	if (kinds.includes("*")) {
+		throw new Error(`A resource may not have the kind name "*"`)
+	}
+	const resources = new Map(
+		Arr.map(
+			descriptors,
+			(descriptor) => [descriptor.kind, descriptor] as const,
+		),
+	)
 	// This checks the field names of the principal. See `Resource.fieldPaths`.
 	Resource.fieldPaths(options.principal)
 	return new DomainData({

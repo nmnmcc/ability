@@ -38,6 +38,7 @@
 // principals and deciders to `unknown`. The public types keep them, so the
 // language service check for `unknown` in an Effect is off here.
 // @effect-diagnostics anyUnknownInErrorContext:off
+import * as Arr from "effect/Array"
 import * as Cache from "effect/Cache"
 import * as Context from "effect/Context"
 import type * as Duration from "effect/Duration"
@@ -45,6 +46,7 @@ import * as Effect from "effect/Effect"
 import * as Equal from "effect/Equal"
 import * as Hash from "effect/Hash"
 import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import * as Condition from "./Condition.ts"
 import * as Decision from "./Decision.ts"
@@ -391,14 +393,11 @@ class PrincipalKey implements Equal.Equal {
  * Tests if an array has a plain field at each index below its length. With
  * one more own key for `length`, it then has no other own keys.
  */
-const hasEveryIndex = (value: Array<unknown>): boolean => {
-	for (let index = 0; index < value.length; index++) {
-		if (!isPlainField(value, String(index))) {
-			return false
-		}
-	}
-	return true
-}
+const hasEveryIndex = (value: Array<unknown>): boolean =>
+	Arr.every(
+		Array.from({ length: value.length }, (_, index) => index),
+		(index) => isPlainField(value, String(index)),
+	)
 
 /**
  * Tests if an own key of an object holds plain data that the text shows: it
@@ -416,19 +415,58 @@ const isPlainField = (value: object, key: string): boolean => {
 const isObjectLike = (value: unknown): boolean =>
 	(typeof value === "object" && value !== null) || typeof value === "function"
 
-const classIds = new WeakMap<object, number>()
-let nextClassId = 0
+/**
+ * The number of each class that a key has seen. Each layer has its own, so
+ * no state is kept for the whole program.
+ */
+type ClassIds = Map<object, number>
 
-/** Gives a number that is only for this class. */
-const classId = (constructor: object): string => {
-	let id = classIds.get(constructor)
-	if (id === undefined) {
-		id = nextClassId
-		nextClassId = nextClassId + 1
-		classIds.set(constructor, id)
+/** Gives a number that is only for this class, in this layer. */
+const classId = (classes: ClassIds, constructor: object): string => {
+	const known = classes.get(constructor)
+	const id = known ?? classes.size
+	if (known === undefined) {
+		classes.set(constructor, id)
 	}
 	return `#${String(id)}`
 }
+
+/** A text for a value, and the objects that the walk has seen up to now. */
+interface Keyed {
+	readonly text: string
+	readonly seen: ReadonlySet<object>
+}
+
+/**
+ * Gives the texts of some values in order, or `undefined` when one of them
+ * has no text. The objects that one value has seen go on to the next.
+ */
+const keyTexts = (
+	values: ReadonlyArray<unknown>,
+	seen: ReadonlySet<object>,
+	classes: ClassIds,
+):
+	| {
+			readonly texts: ReadonlyArray<string>
+			readonly seen: ReadonlySet<object>
+	  }
+	| undefined =>
+	Option.getOrUndefined(
+		Arr.reduce(
+			values,
+			Option.some({ texts: Arr.empty<string>(), seen }),
+			(state, value) =>
+				Option.flatMap(state, (done) => {
+					const keyed = keyText(value, done.seen, classes)
+					return keyed === undefined
+						? Option.none()
+						: Option.some({
+								texts: Arr.append(done.texts, keyed.text),
+								seen: keyed.seen,
+							})
+				}),
+		),
+	)
 
 /**
  * Gives a text that names a principal value. Two values get one text only when
@@ -447,42 +485,44 @@ const classId = (constructor: object): string => {
  * The private fields (`#name`) of a class can not be seen, so a principal
  * class must not keep its data in them.
  */
-const keyText = (value: unknown, seen: Set<object>): string | undefined => {
+const keyText = (
+	value: unknown,
+	seen: ReadonlySet<object>,
+	classes: ClassIds,
+): Keyed | undefined => {
+	const plain = (text: string): Keyed => ({ text, seen })
 	switch (typeof value) {
 		case "string":
-			return `s${JSON.stringify(value)}`
+			return plain(`s${JSON.stringify(value)}`)
 		case "number":
-			return Object.is(value, -0) ? "n-0" : `n${String(value)}`
+			return plain(Object.is(value, -0) ? "n-0" : `n${String(value)}`)
 		case "bigint":
-			return `b${String(value)}`
+			return plain(`b${String(value)}`)
 		case "boolean":
-			return value ? "true" : "false"
+			return plain(value ? "true" : "false")
 		case "undefined":
-			return "undefined"
+			return plain("undefined")
 		case "object":
 			break
 		default:
 			return undefined
 	}
 	if (value === null) {
-		return "null"
+		return plain("null")
 	}
 	if (seen.has(value)) {
 		return undefined
 	}
-	seen.add(value)
-	const all = (items: Iterable<unknown>): Array<string> | undefined => {
-		const output: Array<string> = []
-		for (const item of items) {
-			const text = keyText(item, seen)
-			if (text === undefined) {
-				return undefined
-			}
-			output.push(text)
-		}
-		return output
+	const inner = new Set([...seen, value])
+	const list = (
+		items: ReadonlyArray<unknown>,
+		wrap: (texts: ReadonlyArray<string>) => string,
+	): Keyed | undefined => {
+		const result = keyTexts(items, inner, classes)
+		return result === undefined
+			? undefined
+			: { text: wrap(result.texts), seen: result.seen }
 	}
-	let text: string | undefined
 	const prototype: unknown = Object.getPrototypeOf(value)
 	// The own keys of the value. A built-in value keeps its data inside, so it
 	// may have no own keys, and the elements of an array are its own keys. An
@@ -491,62 +531,68 @@ const keyText = (value: unknown, seen: Set<object>): string | undefined => {
 	// The entries of a map or a set keep their order, because a loader may read
 	// the first one.
 	if (prototype === Date.prototype && own.length === 0) {
-		text = `d${String((value as Date).getTime())}`
-	} else if (prototype === URL.prototype && own.length === 0) {
-		text = `u${JSON.stringify((value as URL).href)}`
-	} else if (
+		return { text: `d${String((value as Date).getTime())}`, seen: inner }
+	}
+	if (prototype === URL.prototype && own.length === 0) {
+		return { text: `u${JSON.stringify((value as URL).href)}`, seen: inner }
+	}
+	if (
 		prototype === Array.prototype &&
 		own.length === (value as Array<unknown>).length + 1 &&
 		hasEveryIndex(value as Array<unknown>) &&
 		// An array finds an object by the object itself, as in
 		// `roles.includes(admin)`.
-		!(value as Array<unknown>).some(isObjectLike)
+		!Arr.some(value as Array<unknown>, isObjectLike)
 	) {
-		const items = all(value as Array<unknown>)
-		text = items === undefined ? undefined : `[${items.join(",")}]`
-	} else if (
+		return list(value as Array<unknown>, (texts) => `[${texts.join(",")}]`)
+	}
+	if (
 		prototype === Map.prototype &&
 		own.length === 0 &&
 		// A map finds an object key by the object itself, not by its data, as
 		// in `map.get(role)`. The text can not show which object it is.
-		!Array.from((value as Map<unknown, unknown>).keys()).some(isObjectLike)
+		!Arr.some(Array.from((value as Map<unknown, unknown>).keys()), isObjectLike)
 	) {
 		// The keys and the values go in one list, so a value that is an object
 		// does not go through the test of the elements of an array.
-		const parts = all(
-			Array.from(value as Map<unknown, unknown>).flatMap(([key, item]) => [
+		return list(
+			Arr.flatMap(Array.from(value as Map<unknown, unknown>), ([key, item]) => [
 				key,
 				item,
 			]),
+			(texts) => `Map{${texts.join(",")}}`,
 		)
-		text = parts === undefined ? undefined : `Map{${parts.join(",")}}`
-	} else if (
+	}
+	if (
 		prototype === Set.prototype &&
 		own.length === 0 &&
 		// A set finds an object by the object itself, as in `set.has(role)`.
-		!Array.from(value as Set<unknown>).some(isObjectLike)
+		!Arr.some(Array.from(value as Set<unknown>), isObjectLike)
 	) {
-		const items = all(value as Set<unknown>)
-		text = items === undefined ? undefined : `Set{${items.join(",")}}`
-	} else if (
+		return list(
+			Array.from(value as Set<unknown>),
+			(texts) => `Set{${texts.join(",")}}`,
+		)
+	}
+	if (
 		(prototype === null ||
 			prototype === Object.prototype ||
 			Schema.isSchema((prototype as object).constructor)) &&
-		own.every((key) => typeof key === "string" && isPlainField(value, key))
+		Arr.every(own, (key) => typeof key === "string" && isPlainField(value, key))
 	) {
 		// The keys keep their order, because a loader may read the first one.
-		const keys = own as Array<string>
-		const items = all(
-			keys.map((key) => (value as Record<string, unknown>)[key]),
-		)
+		const keys = own as ReadonlyArray<string>
 		const name =
-			prototype === null ? "" : classId((prototype as object).constructor)
-		text =
-			items === undefined
-				? undefined
-				: `${name}{${keys.map((key, index) => `${JSON.stringify(key)}:${items[index]!}`).join(",")}}`
+			prototype === null
+				? ""
+				: classId(classes, (prototype as object).constructor)
+		return list(
+			Arr.map(keys, (key) => (value as Record<string, unknown>)[key]),
+			(texts) =>
+				`${name}{${Arr.map(keys, (key, index) => `${JSON.stringify(key)}:${texts[index]!}`).join(",")}}`,
+		)
 	}
-	return text
+	return undefined
 }
 
 const forbidden = (
@@ -579,9 +625,12 @@ const makeLayer = (
 	const domain: Domain.Any = service.domain
 	// It gives `undefined` when the principal has no key. Such a principal does
 	// not use the cache.
+	const classes: ClassIds = new Map()
 	const keyOf = (principal: object): PrincipalKey | undefined => {
-		const text = keyText(principal, new Set())
-		return text === undefined ? undefined : new PrincipalKey(principal, text)
+		const keyed = keyText(principal, new Set(), classes)
+		return keyed === undefined
+			? undefined
+			: new PrincipalKey(principal, keyed.text)
 	}
 	return Layer.effect(
 		service,
@@ -683,18 +732,17 @@ const makeLayer = (
 				if (descriptor === undefined || !Policy.fitsKind(descriptor, target)) {
 					return yield* forbidden(target, kind, undefined)
 				}
-				let decision: Decision.Decision =
+				const fromPolicy: Decision.Decision =
 					target.resource === undefined
 						? kindDecision(value, principal, target)
 						: yield* withServices(
 								Policy.decide(value, { ...target, principal } as never),
 							)
-				if (
-					decision._tag === "NotApplicable" &&
-					options.decider !== undefined
-				) {
-					decision = yield* options.decider({ ...target, principal })
-				}
+				// When no rule gives an answer, the decider gives it.
+				const decision: Decision.Decision =
+					fromPolicy._tag === "NotApplicable" && options.decider !== undefined
+						? yield* options.decider({ ...target, principal })
+						: fromPolicy
 				if (decision._tag !== "Allow") {
 					return yield* forbidden(target, kind, Decision.reason(decision))
 				}

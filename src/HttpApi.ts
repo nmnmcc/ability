@@ -197,34 +197,39 @@ const makeLayer = (
 						),
 					)
 				}
-				for (const requirement of requirements.value) {
-					if (requirement.load === undefined) {
-						yield* service.check({
-							action: requirement.action,
-							kind: requirement.kind,
-						} as never)
-					} else {
-						const params = yield* HttpRouter.params
-						const value = yield* Effect.provideContext(
-							requirement.load(params),
-							services,
-						)
-						// The check is for the kind of the requirement. A value of
-						// another kind is a mistake in `load`, and the check must not
-						// pass with the rules of that other kind.
-						if (Resource.kindOf(value) !== requirement.kind) {
-							return yield* Effect.die(
-								new Error(
-									`The load function of ${options.group.identifier}.${options.endpoint.name} gave a value that is not a ${requirement.kind}`,
+				const endpoint = `${options.group.identifier}.${options.endpoint.name}`
+				// The requirements are checked in order. The first one that fails
+				// stops the request.
+				yield* Effect.forEach(
+					requirements.value,
+					({ action, kind, load }) =>
+						load === undefined
+							? service.check({
+									action,
+									kind,
+								} as never)
+							: HttpRouter.params.pipe(
+									Effect.flatMap((params) =>
+										Effect.provideContext(load(params), services),
+									),
+									// The check is for the kind of the requirement. A value of
+									// another kind is a mistake in `load`, and the check must
+									// not pass with the rules of that other kind.
+									Effect.filterOrElse(
+										(value) => Resource.kindOf(value) === kind,
+										() =>
+											Effect.die(
+												new Error(
+													`The load function of ${endpoint} gave a value that is not a ${kind}`,
+												),
+											),
+									),
+									Effect.flatMap((value) =>
+										service.check({ action, resource: value } as never),
+									),
 								),
-							)
-						}
-						yield* service.check({
-							action: requirement.action,
-							resource: value,
-						} as never)
-					}
-				}
+					{ discard: true },
+				)
 				return yield* httpEffect
 			})
 		}),

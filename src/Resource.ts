@@ -21,6 +21,7 @@
  * @stability stable
  * @since 0.3.0
  */
+import * as Arr from "effect/Array"
 import { Class as DataClass } from "effect/Data"
 import { hasProperty } from "effect/Predicate"
 import * as Schema from "effect/Schema"
@@ -288,43 +289,52 @@ const holdsValue = (
 	}
 }
 
+/** One field that {@link walkFields} finds. */
+interface FieldVisit {
+	readonly path: string
+	/**
+	 * `true` for a field that holds a value that is not a struct, and `false`
+	 * for a field that holds a struct.
+	 */
+	readonly leaf: boolean
+	readonly type: SchemaAST.AST
+}
+
 /**
- * Visits the path of every field of a Schema, with a dot between the names of
- * nested fields. `leaf` is `true` for a field that holds a value that is not a
- * struct, and `false` for a field that holds a struct. A field of a union may
- * be visited two times, one time as each.
+ * Gives the path of every field of a Schema, with a dot between the names of
+ * nested fields. A field of a union may come two times: one time as a field
+ * that holds a value, and one time as a field that holds a struct.
  */
 const walkFields = (
 	ast: SchemaAST.AST,
-	visit: (path: string, leaf: boolean, type: SchemaAST.AST) => void,
 	prefix = "",
 	open: ReadonlySet<SchemaAST.AST> = new Set(),
-): void => {
-	for (const [struct, inner] of structsOf(ast, open)) {
-		for (const property of struct.propertySignatures) {
-			if (typeof property.name !== "string") continue
+): ReadonlyArray<FieldVisit> =>
+	Arr.flatMap(structsOf(ast, open), ([struct, inner]) =>
+		Arr.flatMap(struct.propertySignatures, (property): Array<FieldVisit> => {
+			const name = property.name
+			if (typeof name !== "string") {
+				return []
+			}
 			// A dot in a path is the step into a nested field. A field name with a
 			// dot would make two fields have one path, so it is a defect.
-			if (property.name.includes(".")) {
-				throw new Error(`A field name may not have a dot: "${property.name}"`)
+			if (name.includes(".")) {
+				throw new Error(`A field name may not have a dot: "${name}"`)
 			}
 			// An empty name would make an empty part in a path, such as `.secret`.
-			if (property.name === "") {
+			if (name === "") {
 				throw new Error("A field name may not be empty")
 			}
-			const path = prefix === "" ? property.name : `${prefix}.${property.name}`
-			// In a union, a field may hold a value in one branch and a struct in
-			// another. It is then visited as both.
-			if (holdsValue(property.type, inner)) {
-				visit(path, true, property.type)
-			}
-			if (structsOf(property.type, inner).length > 0) {
-				visit(path, false, property.type)
-				walkFields(property.type, visit, path, inner)
-			}
-		}
-	}
-}
+			const path = prefix === "" ? name : `${prefix}.${name}`
+			const type = property.type
+			return [
+				...(holdsValue(type, inner) ? [{ path, leaf: true, type }] : []),
+				...(structsOf(type, inner).length > 0
+					? [{ path, leaf: false, type }, ...walkFields(type, path, inner)]
+					: []),
+			]
+		}),
+	)
 
 /**
  * Gives the paths of all the fields of a Schema, with dots for nested fields.
@@ -336,13 +346,8 @@ const walkFields = (
  * @category getters
  * @since 0.4.0
  */
-export const fieldPaths = (schema: Schema.Top): ReadonlyArray<string> => {
-	const output = new Set<string>()
-	walkFields(schema.ast, (path) => {
-		output.add(path)
-	})
-	return Array.from(output)
-}
+export const fieldPaths = (schema: Schema.Top): ReadonlyArray<string> =>
+	Arr.dedupe(Arr.map(walkFields(schema.ast), (visit) => visit.path))
 
 /**
  * Tests if a path names a field of a Schema that holds a value with no named
@@ -410,32 +415,32 @@ const makeDescriptor = (
 	if (Object.hasOwn(options.fields, "_tag")) {
 		throw new Error(`The resource "${kind}" may not have a field "_tag"`)
 	}
-	const refs: Record<string, FieldRef<string>> = {}
-	for (const key of Object.keys(options.fields)) {
-		refs[key] = { _tag: "Field", field: key }
-	}
-	const paths = new Set<string>()
-	const open = new Set<string>()
+	const refs: Record<string, FieldRef<string>> = Object.fromEntries(
+		Arr.map(Object.keys(options.fields), (key) => [
+			key,
+			{ _tag: "Field", field: key },
+		]),
+	)
+	const visits = walkFields(Schema.Struct(options.fields).ast)
+	const leaves = Arr.filter(visits, (visit) => visit.leaf)
 	// In a union, one path may hold a scalar in one branch and a struct in
 	// another. Such a path holds more than one value, so it is open too.
-	const structs = new Set<string>()
-	walkFields(Schema.Struct(options.fields).ast, (path, leaf, type) => {
-		if (!leaf) {
-			structs.add(path)
-			return
-		}
-		paths.add(path)
-		if (shapeOf(type) !== "scalar") open.add(path)
-	})
-	for (const path of paths) {
-		if (structs.has(path)) open.add(path)
-	}
+	const structs = new Set(
+		Arr.map(
+			Arr.filter(visits, (visit) => !visit.leaf),
+			(visit) => visit.path,
+		),
+	)
+	const open = Arr.filter(
+		leaves,
+		(visit) => shapeOf(visit.type) !== "scalar" || structs.has(visit.path),
+	)
 	return new ResourceDescriptor({
 		kind,
 		actions: [...options.actions],
 		path: options.path === undefined ? undefined : [...options.path(refs)],
-		fieldPaths: Array.from(paths),
-		openPaths: Array.from(open),
+		fieldPaths: Arr.dedupe(Arr.map(leaves, (visit) => visit.path)),
+		openPaths: Arr.dedupe(Arr.map(open, (visit) => visit.path)),
 		schema,
 	})
 }
