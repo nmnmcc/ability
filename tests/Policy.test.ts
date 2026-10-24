@@ -2054,6 +2054,36 @@ describe("Policy", () => {
 		)
 	})
 
+	it("checks a path test of a rule for named kinds only on kinds of its actions", () => {
+		const Reader = Resource.make("Reader", {
+			actions: ["read"],
+			fields: { id: Schema.String },
+			path: () => ["org"],
+		})
+		const Writer = Resource.make("Writer", {
+			actions: ["write"],
+			fields: { id: Schema.String },
+			path: () => ["team"],
+		})
+		class Scoped extends Principal.Class<Scoped>("ScopedUser")({
+			scope: Schema.Literal("org"),
+		}) {}
+		const Both = Domain.make({ principal: Scoped, resources: [Reader, Writer] })
+		const policy = Policy.define(Both)(function* (_) {
+			yield* _.allow("read", [Reader, Writer], {
+				when: ($) => $.under($.principal("scope")),
+			})
+		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: Scoped.make({ scope: "org" }),
+				action: "read",
+				resource: Reader.make({ id: "r" }),
+			})._tag,
+			"Allow",
+		)
+	})
+
 	it("does not take a test with a principal field that is an object", () => {
 		class Timed extends Principal.Class<Timed>("Timed")({
 			until: Schema.Date,

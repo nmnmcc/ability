@@ -2616,6 +2616,16 @@ const validate = (
 		const known = all
 			? Array.from(HashMap.values(domain.resources))
 			: descriptors
+		// The kinds of the rule with one of its actions. The rule never runs on
+		// another kind, so the types of its tests are checked only on these.
+		const applicable = Arr.filter(
+			descriptors,
+			(descriptor) =>
+				value.actions.includes("*") ||
+				Arr.some(value.actions, (action) =>
+					descriptor.actions.includes(action),
+				),
+		)
 		const usedFields = [
 			...Arr.filter(value.fields ?? [], (field) => !field.includes("*")),
 			...(value.when === undefined ? [] : Condition.fields(value.when as Ast)),
@@ -2684,7 +2694,7 @@ const validate = (
 					value.when === undefined ? [] : literalTests(value.when),
 					([field, literal]) =>
 						Arr.some(
-							descriptors,
+							applicable,
 							(descriptor) =>
 								!fitsDomain(
 									Resource.domainOf(descriptor.schema, field),
@@ -2702,7 +2712,7 @@ const validate = (
 					value.when === undefined ? [] : principalTests(value.when),
 					([field, ref]) =>
 						Arr.some(
-							descriptors,
+							applicable,
 							(descriptor) =>
 								!domainsMeet(
 									Resource.domainOf(descriptor.schema, field),
@@ -2735,18 +2745,18 @@ const validate = (
 						// A rule for every resource may run on each of them that has a
 						// part of its path at this place.
 						Arr.some(
+							// The rule runs only on a kind with one of its actions.
 							all
 								? Arr.filter(
 										known,
 										(descriptor) =>
 											descriptor.path?.[index] !== undefined &&
-											// The rule runs only on a kind with one of its actions.
 											(value.actions.includes("*") ||
 												Arr.some(value.actions, (action) =>
 													descriptor.actions.includes(action),
 												)),
 									)
-								: descriptors,
+								: applicable,
 							(descriptor) =>
 								!fitsPathPart(
 									descriptor,
@@ -2769,7 +2779,7 @@ const validate = (
 						(operand._tag === "Literal" &&
 							operand.type !== "string" &&
 							operand.type !== "number") ||
-						Arr.some(descriptors, (descriptor) => {
+						Arr.some(applicable, (descriptor) => {
 							const fieldDomain = Resource.domainOf(descriptor.schema, field)
 							// A principal field must share an ordered type with the
 							// field: a string and a number never compare.
