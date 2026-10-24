@@ -176,41 +176,57 @@ export interface Options<
  */
 class ResourceDescriptor extends DataClass<Descriptor> {}
 
-/** The prototypes of a class, below `Object.prototype`. */
-const prototypesOf = (schema: unknown): ReadonlyArray<object> =>
-	Arr.unfold(
-		typeof schema === "function" ? (schema.prototype as unknown) : null,
-		(prototype) =>
-			typeof prototype === "object" &&
-			prototype !== null &&
-			prototype !== Object.prototype
-				? Option.some([prototype, Object.getPrototypeOf(prototype)] as const)
-				: Option.none(),
+/** The prototypes from `prototype` up, below `Object.prototype`. */
+const prototypesFrom = (prototype: unknown): ReadonlyArray<object> =>
+	Arr.unfold(prototype, (current) =>
+		typeof current === "object" &&
+		current !== null &&
+		current !== Object.prototype
+			? Option.some([current, Object.getPrototypeOf(current)] as const)
+			: Option.none(),
 	)
 
 /**
- * Gives the Schemas inside a field Schema: the Schema of an optional field,
- * the members of a union, such as `Schema.NullOr`, and the decoded Schema of
- * a codec, such as `Schema.fromJsonString`.
+ * Gives the prototype of the class of a class node, or `undefined`. The node
+ * does not keep the class: a class Schema with an annotation or a check, or
+ * one inside `Schema.suspend`, is a new Schema with the same node. So the
+ * walk asks the node to make a value with no check, and reads its prototype.
+ *
+ * This uses the `"~constructor"` annotation of Effect, which is not a public
+ * API: it gives a link whose decode makes a value of the class from its
+ * fields without a check. When that is not so, the walk gives `undefined`,
+ * and the check of a policy says no to the getter.
  */
-const innerSchemas = (schema: unknown): ReadonlyArray<unknown> =>
-	hasProperty(schema, "members") && Array.isArray(schema.members)
-		? Arr.flatMap(schema.members, innerSchemas)
-		: hasProperty(schema, "schema")
-			? innerSchemas(schema.schema)
-			: hasProperty(schema, "to") && Schema.isSchema(schema.to)
-				? innerSchemas(schema.to)
-				: [schema]
+const classPrototype = (ast: SchemaAST.Declaration): object | undefined => {
+	const make: unknown = ast.annotations?.["~constructor"]
+	if (typeof make !== "function") {
+		return undefined
+	}
+	try {
+		const made: unknown = make(ast.typeParameters)
+		const decode: unknown =
+			hasProperty(made, "link") &&
+			hasProperty(made.link, "transformation") &&
+			hasProperty(made.link.transformation, "decode")
+				? made.link.transformation.decode
+				: undefined
+		const value: unknown =
+			hasProperty(decode, "transform") && typeof decode.transform === "function"
+				? decode.transform({})
+				: undefined
+		return isObject(value) ? Object.getPrototypeOf(value) : undefined
+	} catch {
+		return undefined
+	}
+}
 
 /**
  * Tests if a path names a getter of a class Schema, such as a getter of a
  * `Schema.Class` or a `Principal.Class`, at its root or in a nested field. A
  * condition reads such a field, and the types of a condition take it, so the
- * check of a policy takes it too. It reads the Schema objects, because the
- * class with the getter is not in the Schema nodes. It goes into the fields of
- * a struct and the values of a record. It can not go into `Schema.suspend`: a
- * suspended Schema keeps only its node, so the class is lost, and the check
- * says no.
+ * check of a policy takes it too. It goes into the fields of a struct, the
+ * values of a record, the members of a union, `Schema.suspend`, and a class
+ * with an annotation or a check.
  *
  * @stability stable
  * @category predicates
@@ -218,7 +234,14 @@ const innerSchemas = (schema: unknown): ReadonlyArray<unknown> =>
  */
 export const hasGetter = (schema: unknown, path: string): boolean =>
 	!isTooLong(path) &&
-	getterAt(schema, path.split("."), (part, name) => part === name)
+	Schema.isSchema(schema) &&
+	getterAt(
+		schema.ast,
+		path.split("."),
+		0,
+		(part, name) => part === name,
+		new Map(),
+	)
 
 /**
  * The most parts that a field path may have. The walks below call themselves
@@ -247,61 +270,77 @@ export const hasMatchingGetter = (
 ): boolean =>
 	parts.length <= maxPathParts &&
 	!parts.includes("**") &&
-	getterAt(schema, parts, fits)
+	Schema.isSchema(schema) &&
+	getterAt(schema.ast, parts, 0, fits, new Map())
 
-/** The names of the getters of the prototypes of a class. */
-const getterNames = (schema: unknown): ReadonlyArray<string> =>
-	Arr.flatMap(prototypesOf(schema), (prototype) =>
+/** The names of the getters of a prototype and the prototypes above it. */
+const getterNames = (prototype: object | undefined): ReadonlyArray<string> =>
+	Arr.flatMap(prototypesFrom(prototype), (current) =>
 		Arr.filter(
-			Object.getOwnPropertyNames(prototype),
+			Object.getOwnPropertyNames(current),
 			(name) =>
-				Object.getOwnPropertyDescriptor(prototype, name)?.get !== undefined,
+				Object.getOwnPropertyDescriptor(current, name)?.get !== undefined,
 		),
 	)
 
 const getterAt = (
-	schema: unknown,
+	ast: SchemaAST.AST,
 	names: ReadonlyArray<string>,
+	index: number,
 	fits: (part: string, name: string) => boolean,
-): boolean => {
-	const [name, ...rest] = names
-	if (name === undefined) {
-		return false
-	}
-	return Arr.some(innerSchemas(schema), (inner) => {
-		// A path ends at a getter. The library can not see the type of the
-		// value of a getter, so it can not check a path that goes past it.
-		if (rest.length === 0) {
-			return Arr.some(getterNames(inner), (getter) => fits(name, getter))
+	memo: PathMemo<boolean>,
+): boolean =>
+	rememberAt(memo, ast, index, false, () => {
+		const name = names[index]
+		if (name === undefined) {
+			return false
 		}
-		// A record, such as `Schema.Record(Schema.String, Owner)`, keeps the
-		// Schema of its keys and of its values.
-		if (
-			hasProperty(inner, "key") &&
-			hasProperty(inner, "value") &&
-			Schema.isSchema(inner.key) &&
-			Schema.isSchema(inner.value) &&
-			Arr.some(
-				[name.replaceAll("*", ""), name.replaceAll("*", "a")],
-				(key) => fits(name, key) && keyFits((inner.key as Schema.Top).ast, key),
-			)
-		) {
-			return getterAt(inner.value, rest, fits)
+		const last = index === names.length - 1
+		const next = (type: SchemaAST.AST, at: number) =>
+			getterAt(type, names, at, fits, memo)
+		switch (ast._tag) {
+			case "Union":
+				return Arr.some(ast.types, (type) => next(type, index))
+			case "Suspend":
+				return next(ast.thunk(), index)
+			case "Declaration": {
+				const inner = classStruct(ast)
+				if (inner === undefined) {
+					return false
+				}
+				// A path ends at a getter. The library can not see the type of
+				// the value of a getter, so it can not check a path that goes
+				// past it.
+				return last
+					? Arr.some(getterNames(classPrototype(ast)), (getter) =>
+							fits(name, getter),
+						)
+					: next(inner, index)
+			}
+			case "Objects":
+				return (
+					!last &&
+					(Arr.some(
+						ast.propertySignatures,
+						(property) =>
+							typeof property.name === "string" &&
+							fits(name, property.name) &&
+							next(property.type, index + 1),
+					) ||
+						// A record keeps the Schema of its keys and of its values.
+						Arr.some(
+							ast.indexSignatures,
+							(signature) =>
+								Arr.some(
+									[name.replaceAll("*", ""), name.replaceAll("*", "a")],
+									(key) => fits(name, key) && keyFits(signature.parameter, key),
+								) && next(signature.type, index + 1),
+						))
+				)
+			default:
+				return false
 		}
-		const fields: unknown = hasProperty(inner, "fields")
-			? inner.fields
-			: undefined
-		return (
-			isObject(fields) &&
-			Arr.some(
-				Object.keys(fields as object),
-				(field) =>
-					fits(name, field) &&
-					getterAt((fields as Record<string, unknown>)[field], rest, fits),
-			)
-		)
 	})
-}
 
 /**
  * Tests if a record takes a key. A key of an object is a string, also a key

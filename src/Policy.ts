@@ -2485,6 +2485,63 @@ const hasBadLiteralIn = (
  * of the place in the prefix and the path of the field. See
  * {@link literalTestsIn}.
  */
+/**
+ * The fixed values in the prefixes of `Under` nodes, each as the JSON text of
+ * the place in the prefix, the value, and the fixed strings of the whole
+ * prefix. A number that JSON can not hold is left out: it fits no field
+ * that a path names. See {@link underRefsIn}.
+ */
+const underLiteralsIn = (
+	node: ConditionNode,
+	memo: Map<ConditionNode, HashSet.HashSet<string>>,
+): HashSet.HashSet<string> =>
+	remember(memo, node, () => {
+		switch (node._tag) {
+			case "Under": {
+				const strings = Arr.map(node.prefix, (operand) =>
+					operand._tag === "Literal" && typeof operand.value === "string"
+						? operand.value
+						: null,
+				)
+				return HashSet.fromIterable(
+					Arr.flatMap(node.prefix, (operand, index) =>
+						operand._tag === "Literal" &&
+						(operand.value === null ||
+							typeof operand.value === "string" ||
+							typeof operand.value === "boolean" ||
+							Number.isFinite(operand.value))
+							? [JSON.stringify([index, operand.value, strings])]
+							: [],
+					),
+				)
+			}
+			case "And":
+			case "Or":
+				return Arr.reduce(
+					node.conditions as ReadonlyArray<ConditionNode>,
+					HashSet.empty<string>(),
+					(all, child) => HashSet.union(all, underLiteralsIn(child, memo)),
+				)
+			case "Not":
+				return underLiteralsIn(node.condition, memo)
+			default:
+				return HashSet.empty()
+		}
+	})
+
+/** A fixed value in a path test. See {@link underLiteralsIn}. */
+type UnderLiteral = readonly [
+	index: number,
+	value: Condition.Scalar,
+	strings: ReadonlyArray<string | null>,
+]
+
+const underLiterals = (node: ConditionNode): ReadonlyArray<UnderLiteral> =>
+	Arr.map(
+		Array.from(underLiteralsIn(node, new Map())),
+		(text) => JSON.parse(text) as UnderLiteral,
+	)
+
 const underRefsIn = (
 	node: ConditionNode,
 	memo: Map<ConditionNode, HashSet.HashSet<string>>,
@@ -2880,6 +2937,44 @@ const validate = (
 				([, ref]): Issue => ({
 					path: [...at, "when"],
 					issue: `The principal field "${ref}" can not hold a part of the path of the resource`,
+				}),
+			),
+			// A fixed value in a path test at the place of a field of the path
+			// must be a value of that field. Else the test is always false.
+			...Arr.map(
+				Arr.filter(
+					value.when === undefined ? [] : underLiterals(value.when),
+					([index, literal, strings]) =>
+						Arr.some(
+							Arr.filter(
+								all
+									? Arr.filter(
+											known,
+											(descriptor) =>
+												value.actions.includes("*") ||
+												Arr.some(value.actions, (action) =>
+													descriptor.actions.includes(action),
+												),
+										)
+									: applicable,
+								(descriptor) => mayStartWith(descriptor, strings),
+							),
+							(descriptor) => {
+								const segment = descriptor.path?.[index]
+								return (
+									segment !== undefined &&
+									typeof segment !== "string" &&
+									!fitsDomain(
+										Resource.domainOf(descriptor.schema, segment.field),
+										literal,
+									)
+								)
+							},
+						),
+				),
+				([index, literal]): Issue => ({
+					path: [...at, "when"],
+					issue: `The path part ${String(index)} can not hold the value ${JSON.stringify(literal)}`,
 				}),
 			),
 			// An ordered test compares numbers with numbers and strings with

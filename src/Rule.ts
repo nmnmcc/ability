@@ -579,12 +579,18 @@ const fitsSomeField = (
 	descriptor: Resource.Descriptor,
 ): boolean =>
 	Arr.some(descriptor.fieldPaths, (field) => matchesField(pattern, field)) ||
-	Arr.some(
-		partLists(pattern),
-		(parts) =>
-			Resource.hasMatchingPath(descriptor.schema, parts, matchesField) ||
-			Resource.hasMatchingGetter(descriptor.schema, parts, matchesField),
-	)
+	// A pattern with more parts than a field path may have fits no other
+	// field, and it is not cut into lists of parts.
+	(pattern.split(".", maxPatternParts + 1).length <= maxPatternParts &&
+		Arr.some(
+			partLists(pattern),
+			(parts) =>
+				Resource.hasMatchingPath(descriptor.schema, parts, matchesField) ||
+				Resource.hasMatchingGetter(descriptor.schema, parts, matchesField),
+		))
+
+/** The most parts of a pattern that the walk of the Schema takes. */
+const maxPatternParts = 256
 
 /**
  * The lists of parts that a pattern may stand for. A part that is only stars

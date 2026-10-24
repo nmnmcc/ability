@@ -2431,6 +2431,96 @@ describe("Policy", () => {
 		assert.isTrue(Resource.hasPath(Resource.descriptor(Box).schema, "values.1"))
 	})
 
+	it("does not take a fixed value in a path test that the path can not hold", () => {
+		const Tenant = Resource.make("Tenant", {
+			actions: ["read"],
+			fields: { tenantId: Schema.String },
+			path: (f) => ["tenant", f.tenantId],
+		})
+		const Tenants = Domain.make({ principal: Caller, resources: [Tenant] })
+		const decode = (value: unknown) =>
+			Schema.decodeUnknownExit(Policy.schema(Tenants))({
+				_tag: "Rules",
+				algorithm: "denyOverrides",
+				rules: [
+					{
+						_tag: "Deny",
+						actions: ["read"],
+						resources: ["Tenant"],
+						when: {
+							_tag: "Under",
+							prefix: [
+								{ _tag: "Literal", value: "tenant" },
+								{ _tag: "Literal", value },
+							],
+						},
+					},
+				],
+			})
+		assert.isTrue(Exit.isFailure(decode(123)))
+		assert.isTrue(Exit.isSuccess(decode("123")))
+	})
+
+	it("checks a pattern with very many parts in a short time", () => {
+		const policy = Policy.rules(App, [
+			Rule.make({
+				_tag: "Allow",
+				actions: ["read"],
+				resources: ["Bot"],
+				fields: [`${"a**b.".repeat(8000)}*`],
+			}),
+		])
+		const start = Date.now()
+		Policy.decideSync(policy, {
+			principal: alice,
+			action: "read",
+			resource: aliceBot,
+		})
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
+	it("takes a getter of a class with an annotation, a check or a suspend", () => {
+		class Owner extends Schema.Class<Owner>("WrappedOwner")({
+			id: Schema.String,
+		}) {
+			get label() {
+				return this.id
+			}
+		}
+		const Note = Resource.make("WrappedNote", {
+			actions: ["read"],
+			fields: {
+				annotated: Owner.annotate({ description: "Owner" }),
+				checked: Owner.check(Schema.makeFilter(() => true)),
+				suspended: Schema.suspend(() => Owner),
+			},
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const owner = Owner.make({ id: "a" })
+		const policy = Policy.define(Notes)(function* (_) {
+			yield* _.allow("read", Note, {
+				when: ($) =>
+					$.and(
+						$.eq("annotated.label", "a"),
+						$.eq("checked.label", "a"),
+						$.eq("suspended.label", "a"),
+					),
+			})
+		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: Note.make({
+					annotated: owner,
+					checked: owner,
+					suspended: owner,
+				}),
+			})._tag,
+			"Allow",
+		)
+	})
+
 	it("does not take a condition with a node that is not known", () => {
 		assert.isFalse(Schema.is(Condition.schema)({ _tag: "Broken" }))
 		assert.isFalse(
