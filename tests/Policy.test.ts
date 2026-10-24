@@ -1407,6 +1407,33 @@ describe("Policy", () => {
 		assert.isFalse(Schema.is(Policy.schema(App))(policy))
 	})
 
+	it("matches long patterns in a short time", () => {
+		const start = Date.now()
+		// Two stars or more match any number of parts.
+		assert.isTrue(Rule.matchesField("*".repeat(10_000), "name.x"))
+		assert.isTrue(Rule.matchesField("*".repeat(10_000), "name"))
+		assert.isFalse(Rule.matchesField(`${"x".repeat(40_000)}*`, "name"))
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
+	it("keeps the getters of a resource class after a check of its paths", () => {
+		class Doc extends Resource.Class<Doc>()("Doc", {
+			actions: ["read"],
+			fields: { flags: Schema.Record(Schema.String, Schema.Boolean) },
+		}) {
+			get blocked() {
+				return this.flags["blocked"] === true
+			}
+		}
+		const Docs = Domain.make({ principal: Caller, resources: [Doc] })
+		Policy.define(Docs)(function* (_) {
+			yield* _.allow("read", Doc, { when: ($) => $.eq("flags.active", true) })
+		})
+		const doc = Doc.make({ flags: { blocked: true } })
+		assert.isTrue(doc instanceof Doc)
+		assert.isTrue(doc.blocked)
+	})
+
 	it("matches a pattern with many stars in a short time", () => {
 		const start = Date.now()
 		assert.isFalse(

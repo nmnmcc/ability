@@ -68,7 +68,12 @@ export interface Descriptor {
 	 * in `fieldPaths`, but a rule may name them.
 	 */
 	readonly openPaths: ReadonlyArray<string>
-	/** The Schema of the values, with the `_tag` field. */
+	/**
+	 * A struct Schema of the data of the values, with the `_tag` field. It is a
+	 * struct also for a `Resource.Class`. The class Schema must not be read
+	 * before the class is made, because Effect then binds the class Schema to
+	 * the base class, and the values lose the getters of the class.
+	 */
 	readonly schema: Schema.Top
 }
 
@@ -408,7 +413,6 @@ const resolves = (
 const makeDescriptor = (
 	kind: string,
 	options: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
-	schema: Schema.Top,
 ): Descriptor => {
 	// The kind of a value comes from its `_tag`. A field with this name could
 	// give a value another kind, so it is a defect.
@@ -441,7 +445,7 @@ const makeDescriptor = (
 		path: options.path === undefined ? undefined : [...options.path(refs)],
 		fieldPaths: Arr.dedupe(Arr.map(leaves, (visit) => visit.path)),
 		openPaths: Arr.dedupe(Arr.map(open, (visit) => visit.path)),
-		schema,
+		schema: Schema.TaggedStruct(kind, options.fields),
 	})
 }
 
@@ -510,7 +514,7 @@ export const Class: <Self = never>(
 		options: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
 	) => {
 		const Base = Schema.TaggedClass<any>(identifier)(kind, options.fields)
-		const descriptor = makeDescriptor(kind, options, Base)
+		const descriptor = makeDescriptor(kind, options)
 		return class extends Base {
 			static readonly descriptor = descriptor
 			static readonly kind = kind
@@ -564,7 +568,7 @@ export const make: <
 	options: Options<ReadonlyArray<string>, Schema.Struct.Fields>,
 ) => {
 	const schema = Schema.TaggedStruct(kind, options.fields)
-	const descriptor = makeDescriptor(kind, options, schema)
+	const descriptor = makeDescriptor(kind, options)
 	return {
 		descriptor,
 		kind,

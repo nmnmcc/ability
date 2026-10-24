@@ -21,7 +21,6 @@
  */
 import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
-import * as Option from "effect/Option"
 import type * as Pipeable from "effect/Pipeable"
 import * as Condition from "./Condition.ts"
 import type * as Domain from "./Domain.ts"
@@ -414,13 +413,13 @@ type Token = string
 
 /**
  * Gives the parts of a pattern. It reads the pattern by Unicode code points,
- * as `run` reads the field. Two stars next to each other are one part, `**`.
+ * as `run` reads the field. One star is `*`. Two or more stars next to each
+ * other match what `**` matches, so they are one part, `**`. So two star parts
+ * are never next to each other.
  */
 const tokensOf = (pattern: string): ReadonlyArray<Token> =>
-	Arr.reduce(Array.from(pattern), Arr.empty<Token>(), (tokens, char) =>
-		char === "*" && Arr.last(tokens).pipe(Option.contains("*"))
-			? Arr.append(Arr.dropRight(tokens, 1), "**")
-			: Arr.append(tokens, char),
+	Arr.map(pattern.match(/\*+|[^*]/gu) ?? [], (part) =>
+		part.startsWith("*") ? (part.length === 1 ? "*" : "**") : part,
 	)
 
 const isStar = (token: Token | undefined): boolean =>
