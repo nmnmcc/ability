@@ -138,12 +138,24 @@ export type DeciderRequest<D> = Policy.Request<D> | Policy.KindRequest<D>
  * @category models
  * @since 0.3.0
  */
-export interface GuardOptions<D, E2> {
-	/** The action that lets the principal see the resource. The default is `"read"`. */
-	readonly read?: Domain.AnyAction<D>
+export type GuardOptions<D, E2, K extends string = Domain.Kind<D>> = {
 	/** The error when the principal may not see the resource. */
 	readonly hide: () => E2
-}
+} & ("read" extends Domain.ActionOf<D, K>
+	? {
+			/**
+			 * The action of the kind `K` that lets the principal see the
+			 * resource. The default is `"read"`.
+			 */
+			readonly read?: Domain.ActionOf<D, K>
+		}
+	: {
+			/**
+			 * The action of the kind `K` that lets the principal see the
+			 * resource. The kind has no `"read"` action, so you must give it.
+			 */
+			readonly read: Domain.ActionOf<D, K>
+		})
 
 /**
  * The service.
@@ -179,9 +191,9 @@ export interface Authorizer<D extends Domain.Any, E, R> {
 	 * answer "not found" to a principal that may not know that a resource
 	 * exists.
 	 */
-	readonly guard: <E2>(
-		target: Policy.Target<D>,
-		options: GuardOptions<D, E2>,
+	readonly guard: <const T extends Policy.Target<D>, E2>(
+		target: T,
+		options: GuardOptions<D, E2, T["resource"]["_tag"]>,
 	) => Effect.Effect<void, E2 | Forbidden | Pending | PolicyUnavailable | E, R>
 	/**
 	 * Gives the condition on resource values that the principal may act on.
@@ -236,9 +248,9 @@ export interface ServiceClass<
 		Forbidden | Pending | PolicyUnavailable | E,
 		R | Self
 	>
-	readonly guard: <E2>(
-		target: Policy.Target<D>,
-		options: GuardOptions<D, E2>,
+	readonly guard: <const T extends Policy.Target<D>, E2>(
+		target: T,
+		options: GuardOptions<D, E2, T["resource"]["_tag"]>,
 	) => Effect.Effect<
 		void,
 		E2 | Forbidden | Pending | PolicyUnavailable | E,
@@ -419,7 +431,9 @@ const classId = (constructor: object): string => {
  * An object of another class may keep its data where the text can not see it,
  * as a `URL` does. So it gives `undefined` for such an object, unless it is a
  * plain `Date`, `URL`, array, `Map` or `Set` with no extra own keys. It also
- * gives `undefined` for a function, a symbol, or a value that contains itself.
+ * gives `undefined` for a function, a symbol, or a value with one object in two
+ * places. The text can not show that two places hold the same object, and a
+ * loader may test it, as `set.has(value)` does.
  * The private fields (`#name`) of a class can not be seen, so a principal
  * class must not keep its data in them.
  */
@@ -503,7 +517,6 @@ const keyText = (value: unknown, seen: Set<object>): string | undefined => {
 				? undefined
 				: `${name}{${keys.map((key, index) => `${JSON.stringify(key)}:${items[index]!}`).join(",")}}`
 	}
-	seen.delete(value)
 	return text
 }
 

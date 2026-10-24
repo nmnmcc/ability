@@ -123,6 +123,20 @@ export interface CeilingNode {
 export type Node = RulesNode | AllNode | AnyNode | FirstOfNode | CeilingNode
 
 /**
+ * The tree of a policy with the types of its predicates. `"~Node"` is only in
+ * the types. A node made by hand does not have it, and the node of a policy
+ * with predicates has their types. So the node of one policy can not go into
+ * a policy with other types.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.4.0
+ */
+export type TypedNode<E = never, R = never, O = never> = Node & {
+	readonly "~Node": Condition.Variance<E, R, O>
+}
+
+/**
  * A policy for the domain `D`. `E`, `R` and `O` come from the conditions of
  * its rules. See `Condition.Condition`.
  *
@@ -133,7 +147,7 @@ export type Node = RulesNode | AllNode | AnyNode | FirstOfNode | CeilingNode
 export interface Policy<D extends Domain.Any, E = never, R = never, O = never>
 	extends Pipeable.Pipeable {
 	readonly domain: D
-	readonly node: Node
+	readonly node: TypedNode<E, R, O>
 	readonly "~Policy"?: Condition.Variance<E, R, O>
 	/**
 	 * Only in the types. A policy reads the values and the principal of its

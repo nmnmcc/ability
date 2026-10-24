@@ -236,6 +236,19 @@ describe("Policy", () => {
 		})
 	})
 
+	it("does not let the node of a policy go into a policy of other types", () => {
+		expect<Policy.Policy<App>>().type.not.toBeAssignableFrom({
+			...Policy.empty(App),
+			node: effectful.node,
+		})
+	})
+
+	it("does not let a reference with no type stand for any field", () => {
+		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
+		const ref: Condition.PrincipalRef = $.principal("role")
+		expect($.ne).type.not.toBeCallableWith("level", ref)
+	})
+
 	it("gives a predicate what it reads", () => {
 		const leveled = Condition.builder<unknown, Bot, Caller>().predicate(
 			"leveled",
@@ -424,6 +437,17 @@ describe("Authorizer", () => {
 			resource: aliceBot,
 		} as const
 		expect(Auth.check).type.not.toBeCallableWith(target)
+	})
+
+	it("takes only a read action of the kind of the target", () => {
+		expect(Auth.guard).type.toBeCallableWith(
+			{ action: "update", resource: aliceBot },
+			{ hide: () => "hidden" },
+		)
+		expect(Auth.guard).type.not.toBeCallableWith(
+			{ action: "update", resource: aliceBot },
+			{ read: "write", hide: () => "hidden" },
+		)
 	})
 
 	it("keeps a loaded policy opaque", () => {

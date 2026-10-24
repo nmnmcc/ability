@@ -726,4 +726,50 @@ describe("Authorizer", () => {
 			assert.strictEqual(failureTag(exit), "Forbidden")
 		}),
 	)
+
+	it.effect("does not cache a principal with one object in two places", () =>
+		Effect.gen(function* () {
+			class Role extends Schema.Class<Role>("Role")({ name: Schema.String }) {}
+			class Chooser extends Principal.Class<Chooser>("Chooser")({
+				selected: Role,
+				allowed: Schema.ReadonlySet(Role),
+			}) {}
+			const Choosers = Domain.make({ principal: Chooser, resources: [Bot] })
+			class CurrentChooser extends Context.Service<CurrentChooser, Chooser>()(
+				"@nmnmcc/ability/tests/Authorizer.test/CurrentChooser",
+			) {}
+			class ChooserAuth extends Authorizer.Service<
+				ChooserAuth,
+				{ requires: CurrentChooser }
+			>()("test/ChooserAuth", Choosers) {}
+			const layer = Authorizer.layer(ChooserAuth, {
+				principal: CurrentChooser,
+				policy: (user) =>
+					Effect.succeed(
+						Policy.define(Choosers)(function* (_) {
+							if (user.allowed.has(user.selected)) {
+								yield* _.allow("read", Bot)
+							}
+						}),
+					),
+			})
+			const admin = Role.make({ name: "admin" })
+			const exit = yield* Effect.gen(function* () {
+				yield* Effect.provideService(
+					ChooserAuth.check({ action: "read", resource: aliceBot }),
+					CurrentChooser,
+					Chooser.make({ selected: admin, allowed: new Set([admin]) }),
+				)
+				yield* Effect.provideService(
+					ChooserAuth.check({ action: "read", resource: aliceBot }),
+					CurrentChooser,
+					Chooser.make({
+						selected: Role.make({ name: "admin" }),
+						allowed: new Set([admin]),
+					}),
+				)
+			}).pipe(Effect.provide(layer), Effect.exit)
+			assert.strictEqual(failureTag(exit), "Forbidden")
+		}),
+	)
 })

@@ -74,13 +74,15 @@ export interface PrincipalRef {
 }
 
 /**
- * A field of the principal with a known value type.
+ * A field of the principal with a known value type. `"~Ref"` is only in the
+ * types. A reference with no type does not have it, so it can not stand for a
+ * field of any type.
  *
  * @stability stable
  * @category models
  * @since 0.3.0
  */
-export type Ref<A> = PrincipalRef & { readonly "~Ref"?: () => A }
+export type Ref<A> = PrincipalRef & { readonly "~Ref": () => A }
 
 /**
  * @stability stable
