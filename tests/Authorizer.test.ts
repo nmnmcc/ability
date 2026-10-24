@@ -927,4 +927,17 @@ describe("Authorizer", () => {
 			assert.strictEqual(yield* Ref.get(loads), 1)
 		}),
 	)
+
+	it.effect("says no to an action of another kind before the decider", () =>
+		Effect.gen(function* () {
+			const { exit } = yield* run(
+				Auth.check({
+					action: "write",
+					resource: aliceBot,
+				} as unknown as Policy.Target<typeof App>),
+				{ decider: () => Effect.succeed(Decision.Allow({})) },
+			)
+			assert.strictEqual(failureTag(exit), "Forbidden")
+		}),
+	)
 })

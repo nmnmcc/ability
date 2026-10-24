@@ -111,6 +111,21 @@ export type ResourceOf<D, K extends string> =
 export type ActionOf<D, K extends string> = Resource.Action<ResourceOf<D, K>>
 
 /**
+ * The actions that every kind in `K` has. For one kind, they are its actions.
+ * For a union of kinds, an action of only some of them is left out, so a
+ * value of the union type can not get an action that its kind does not have.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 0.4.0
+ */
+export type CommonAction<D, K extends string> = (
+	K extends unknown ? (action: ActionOf<D, K>) => void : never
+) extends (action: infer A) => void
+	? A
+	: never
+
+/**
  * All the actions of all the resources of a domain.
  *
  * @stability stable

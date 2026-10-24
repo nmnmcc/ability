@@ -29,7 +29,6 @@ import type * as Context from "effect/Context"
 import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 import { dual } from "effect/Function"
-import * as MutableHashSet from "effect/MutableHashSet"
 import { hasProperty, isObject } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import type * as Resource from "./Resource.ts"
@@ -1113,15 +1112,82 @@ export const evaluateSync: {
 	(condition: Condition<never, never, never, any>, input: Input): boolean
 } = dual(2, evaluateSyncAst)
 
-// The nodes are Effect data, so a hash set finds an equal node at once. A
-// test of each pair of nodes would take a very long time for a long list.
+// Two nodes with the same structure get the same number, so a set of numbers
+// finds an equal node at once. The number of a node is kept, so a node that
+// is a child of many nodes gets its number one time. The hash of Effect data
+// would walk a shared child again for each path to it.
+
+const structureIds = new WeakMap<Ast, number>()
+// The table of structures is made empty when it is full, so it does not grow
+// without end. A structure that comes again then gets a new number. Two equal
+// nodes may so get two numbers, and then the simplification does a little
+// less. Two nodes that are not equal never get one number.
+const maxStructures = 100_000
+let structures = new Map<string, number>()
+let nextId = 0
+
+const newId = (): number => {
+	const id = nextId
+	nextId = nextId + 1
+	return id
+}
+
+const operandText = (operand: Operand): string =>
+	operand._tag === "Literal"
+		? `L${typeof operand.value}:${JSON.stringify(operand.value)}`
+		: `R${JSON.stringify(operand.path)}`
+
+const structureText = (ast: Ast): string | undefined => {
+	switch (ast._tag) {
+		case "True":
+		case "False":
+			return ast._tag
+		case "Compare":
+			return `C${ast.op}:${JSON.stringify(ast.field)}:${operandText(ast.value)}`
+		case "In":
+			return `I${JSON.stringify(ast.field)}:${ast.values.map(operandText).join(",")}`
+		case "Exists":
+			return `E${JSON.stringify(ast.field)}`
+		case "Under":
+			return `U${ast.prefix.map(operandText).join(",")}`
+		case "And":
+		case "Or":
+			return `${ast._tag}:${ast.conditions.map(structureId).join(",")}`
+		case "Not":
+			return `N${String(structureId(ast.condition))}`
+		case "Predicate":
+			// A predicate is equal only to itself.
+			return undefined
+	}
+}
+
+const structureId = (ast: Ast): number => {
+	const cached = structureIds.get(ast)
+	if (cached !== undefined) {
+		return cached
+	}
+	const text = structureText(ast)
+	let id = text === undefined ? undefined : structures.get(text)
+	if (id === undefined) {
+		id = newId()
+		if (text !== undefined) {
+			if (structures.size >= maxStructures) {
+				structures = new Map()
+			}
+			structures.set(text, id)
+		}
+	}
+	structureIds.set(ast, id)
+	return id
+}
 
 const dedupe = (conditions: ReadonlyArray<Ast>): ReadonlyArray<Ast> => {
-	const seen = MutableHashSet.empty<Ast>()
+	const seen = new Set<number>()
 	const output: Array<Ast> = []
 	for (const condition of conditions) {
-		if (!MutableHashSet.has(seen, condition)) {
-			MutableHashSet.add(seen, condition)
+		const id = structureId(condition)
+		if (!seen.has(id)) {
+			seen.add(id)
 			output.push(condition)
 		}
 	}
@@ -1137,11 +1203,11 @@ const absorb = (
 	inner: "And" | "Or",
 	conditions: ReadonlyArray<Ast>,
 ): ReadonlyArray<Ast> => {
-	const all = MutableHashSet.make(...conditions)
+	const all = new Set(conditions.map(structureId))
 	return conditions.filter(
 		(condition) =>
 			condition._tag !== inner ||
-			!condition.conditions.some((part) => MutableHashSet.has(all, part)),
+			!condition.conditions.some((part) => all.has(structureId(part))),
 	)
 }
 

@@ -95,7 +95,8 @@ export class GroupRequired extends Context.Service<
 
 /**
  * Makes a {@link Requirement} with the types of an authorizer. The action must
- * be an action of the kind, and `load` must give a value of the kind.
+ * be an action of the kind, also when the kind has a union type, and `load`
+ * must give a value of the kind.
  *
  * `load` may fail. Its errors must be errors of the middleware, and the
  * services that it needs must be given to {@link layer}.
@@ -109,13 +110,15 @@ export const requires: <
 	const K extends Domain.Kind<A["domain"]>,
 >(
 	authorizer: A,
-	action: Domain.ActionOf<A["domain"], K>,
+	action: Domain.CommonAction<A["domain"], K>,
 	kind: K,
 	load?: (
 		params: Readonly<Record<string, string | undefined>>,
 	) => Effect.Effect<Domain.ValueOf<A["domain"], K>, unknown, unknown>,
 ) => Requirement = (_authorizer, action, kind, load) =>
-	load === undefined ? { action, kind } : { action, kind, load }
+	load === undefined
+		? { action: action as string, kind }
+		: { action: action as string, kind, load }
 
 /**
  * The Schema of a `PolicyUnavailable` response. It encodes only the `_tag`, so

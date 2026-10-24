@@ -141,20 +141,21 @@ export type DeciderRequest<D> = Policy.Request<D> | Policy.KindRequest<D>
 export type GuardOptions<D, E2, K extends string = Domain.Kind<D>> = {
 	/** The error when the principal may not see the resource. */
 	readonly hide: () => E2
-} & ("read" extends Domain.ActionOf<D, K>
+} & ("read" extends Domain.CommonAction<D, K>
 	? {
 			/**
-			 * The action of the kind `K` that lets the principal see the
-			 * resource. The default is `"read"`.
+			 * The action that lets the principal see the resource. It must be an
+			 * action of every kind in `K`. The default is `"read"`.
 			 */
-			readonly read?: Domain.ActionOf<D, K>
+			readonly read?: Domain.CommonAction<D, K>
 		}
 	: {
 			/**
-			 * The action of the kind `K` that lets the principal see the
-			 * resource. The kind has no `"read"` action, so you must give it.
+			 * The action that lets the principal see the resource. It must be an
+			 * action of every kind in `K`. Some kind in `K` has no `"read"`
+			 * action, so you must give it.
 			 */
-			readonly read: Domain.ActionOf<D, K>
+			readonly read: Domain.CommonAction<D, K>
 		})
 
 /**
@@ -676,6 +677,12 @@ const makeLayer = (
 					target.resource === undefined
 						? (target.kind ?? "")
 						: (Resource.kindOf(target.resource) ?? "")
+				// A request that does not fit its kind gets a "no" at once. The
+				// decider must not say yes to an action that the kind does not have.
+				const descriptor = domain.resources.get(kind)
+				if (descriptor === undefined || !Policy.fitsKind(descriptor, target)) {
+					return yield* forbidden(target, kind, undefined)
+				}
 				let decision: Decision.Decision =
 					target.resource === undefined
 						? kindDecision(value, principal, target)

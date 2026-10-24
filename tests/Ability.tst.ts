@@ -1,5 +1,6 @@
 import { Context, Effect, Schema } from "effect"
 import { describe, expect, it } from "tstyche"
+import * as HttpApi from "../src/HttpApi.ts"
 import {
 	Authorizer,
 	Condition,
@@ -342,6 +343,19 @@ describe("Policy", () => {
 		}
 	})
 
+	it("does not let a residual for a union of kinds read either value", () => {
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot, {
+				when: ($) => $.predicate("level", (bot) => bot.level !== 0),
+			})
+		})
+		const of = (kind: "Bot" | "Trigger") =>
+			Policy.residual(policy, { principal: alice, action: "read", kind })
+		expect(Condition.evaluate).type.not.toBeCallableWith(of("Bot"), {
+			value: aliceTrigger,
+		})
+	})
+
 	it("keeps the kind of a residual", () => {
 		const policy = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot, {
@@ -586,6 +600,23 @@ describe("Authorizer", () => {
 			{ action: "update", resource: aliceBot },
 			{ read: "write", hide: () => "hidden" },
 		)
+	})
+
+	it("needs a read action of every kind of a union target", () => {
+		const target = { action: "update", resource: aliceBot } as
+			| Policy.Target<App>
+			| { readonly action: "write"; readonly resource: typeof aliceTrigger }
+		expect(Auth.guard).type.not.toBeCallableWith(target, {
+			read: "update",
+			hide: () => "hidden",
+		})
+	})
+
+	it("takes only an action of every kind of a requirement", () => {
+		const loose = (kind: "Bot" | "Trigger") =>
+			expect(HttpApi.requires).type.not.toBeCallableWith(Auth, "delete", kind)
+		loose("Bot")
+		expect(HttpApi.requires).type.toBeCallableWith(Auth, "delete", "Bot")
 	})
 
 	it("keeps a loaded policy opaque", () => {

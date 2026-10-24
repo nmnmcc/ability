@@ -826,6 +826,26 @@ const decideOnce = (
 	}
 }
 
+/**
+ * Tests if a request fits its kind: the action is an action of the kind, and
+ * the field, if there is one, is a field of the kind. The types check this,
+ * but a value with a union type, or a value from outside, may get past them.
+ * A rule for every action (`"*"`) must not cover an action that the kind does
+ * not have, so such a request is not applicable.
+ *
+ * @stability stable
+ * @category predicates
+ * @since 0.4.0
+ */
+export const fitsKind = (
+	descriptor: Resource.Descriptor,
+	request: { readonly action: string; readonly field?: string | undefined },
+): boolean =>
+	descriptor.actions.includes(request.action) &&
+	(request.field === undefined ||
+		descriptor.fieldPaths.includes(request.field) ||
+		Resource.hasPath(descriptor.schema, request.field))
+
 const makeContext = (
 	domain: Domain.Any,
 	request: AnyRequest,
@@ -833,7 +853,11 @@ const makeContext = (
 ): DecideContext | undefined => {
 	const kind = Resource.kindOf(request.resource)
 	const descriptor = kind === undefined ? undefined : domain.resources.get(kind)
-	if (kind === undefined || descriptor === undefined) {
+	if (
+		kind === undefined ||
+		descriptor === undefined ||
+		!fitsKind(descriptor, request)
+	) {
 		return undefined
 	}
 	return {
@@ -1085,14 +1109,20 @@ type Fits<Req, T> = [Req] extends [T] ? unknown : never
 
 /**
  * What a residual condition reads: a value of the kind `K`. The principal is
- * already in it.
+ * already in it. A residual is for one kind, so when `K` is a union of kinds,
+ * the value must be a value of each of them. No value is, so such a residual
+ * can not be evaluated on a value of the wrong kind.
  *
  * @stability stable
  * @category utility types
  * @since 0.4.0
  */
 export type ResidualReads<D, K> = Condition.Reads<
-	Domain.ValueOf<D, K & string>,
+	(
+		K extends unknown ? (value: Domain.ValueOf<D, K & string>) => void : never
+	) extends (value: infer V) => void
+		? V
+		: never,
 	unknown
 >
 
@@ -1375,7 +1405,7 @@ const residualsAny = (
 	},
 ): Pair => {
 	const descriptor = policy.domain.resources.get(request.kind)
-	if (descriptor === undefined) {
+	if (descriptor === undefined || !fitsKind(descriptor, request)) {
 		return { allow: never, deny: never }
 	}
 	const context: ResidualContext = {
@@ -1422,9 +1452,13 @@ const residualsAny = (
 			},
 			[],
 		)
+	// A value of another kind is not a value that the residual is about, so
+	// the rules of this kind must not run on it.
 	const test = (tag: Decision.Decision["_tag"]): Ast =>
 		Condition.builder<any, any, any>().predicate(policyPredicate, (value) =>
-			Effect.map(decision(value), (result) => result._tag === tag),
+			Resource.kindOf(value) === request.kind
+				? Effect.map(decision(value), (result) => result._tag === tag)
+				: Effect.succeed(false),
 		)
 	return { allow: test("Allow"), deny: test("Deny") }
 }
@@ -1438,7 +1472,8 @@ const residualsAny = (
  * When a rule that the request may use has a predicate, the condition is one
  * predicate with the name `"policy"`. It runs the whole policy for each value,
  * so its answers and its failures are the same as those of {@link decide}. It
- * takes the principal with it.
+ * takes the principal with it. Give it resource values with their `_tag`. It
+ * is false for a value of another kind.
  *
  * A policy tree may use the condition of a child two times, so a small policy
  * may give a very large condition. When the condition would have more than

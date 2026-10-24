@@ -1093,6 +1093,71 @@ describe("Policy", () => {
 		assert.include(fields, "data")
 	})
 
+	it("simplifies a condition with many shared parts in a short time", () => {
+		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
+		const build = (seed: number) => {
+			let c: Condition.Test<Bot, Caller> = $.eq("level", 0)
+			for (let level = 0; level < 22; level++) {
+				const a = $.eq("name", `${String(seed)}-${String(level)}-a`)
+				const b = $.eq("name", `${String(seed)}-${String(level)}-b`)
+				c =
+					level % 2 === 0
+						? $.and($.or(c, a), $.or(c, b))
+						: $.or($.and(c, a), $.and(c, b))
+			}
+			return c
+		}
+		const condition = $.or(build(1), build(2))
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot, { when: () => condition })
+		})
+		const start = Date.now()
+		try {
+			Policy.residual(policy, { principal: alice, action: "read", kind: "Bot" })
+		} catch {
+			// A residual that is too large is an error. This test is about time.
+		}
+		assert.isBelow(Date.now() - start, 2000)
+	})
+
+	it("is not applicable for an action that the kind does not have", () => {
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("*", "*")
+		})
+		const request = {
+			principal: alice,
+			action: "write",
+			resource: aliceBot,
+		} as unknown as Policy.Request<App>
+		assert.strictEqual(Policy.decideSync(policy, request)._tag, "NotApplicable")
+	})
+
+	it("gives a predicate residual no answer for a value of another kind", () => {
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot, {
+				when: ($) => $.predicate("level", (bot) => bot.level !== 0),
+			})
+		})
+		const residual = Policy.residual(policy, {
+			principal: alice,
+			action: "read",
+			kind: "Bot",
+		})
+		assert.isFalse(
+			Effect.runSync(
+				// The types stop a Trigger here. The test casts, to check the code.
+				Condition.evaluate(
+					residual as unknown as Condition.Condition<
+						never,
+						never,
+						Condition.Opaque
+					>,
+					{ value: aliceTrigger },
+				),
+			),
+		)
+	})
+
 	it("does not let a rule for no fields cover a request", () => {
 		const policy = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot, { fields: [] })
