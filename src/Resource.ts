@@ -23,6 +23,7 @@
  */
 import * as Arr from "effect/Array"
 import { Class as DataClass } from "effect/Data"
+import * as HashMap from "effect/HashMap"
 import * as HashSet from "effect/HashSet"
 import * as Option from "effect/Option"
 import { hasProperty } from "effect/Predicate"
@@ -501,7 +502,11 @@ const isPlainScalar = (ast: SchemaAST.AST): boolean => {
 		case "Undefined":
 			return true
 		case "Union":
-			return Arr.every(ast.types, isPlainScalar)
+			// A union in the mode "oneOf" stops a value that fits two members.
+			// The search does not see that, so such a field is not plain.
+			return (
+				ast.options?.mode !== "oneOf" && Arr.every(ast.types, isPlainScalar)
+			)
 		default:
 			return false
 	}
@@ -765,6 +770,11 @@ const templateTokens = (
 				// search is not exact.
 				return undefined
 			case "Union": {
+				// A union in the mode "oneOf" stops a key that fits two members,
+				// and token lists can not show that.
+				if (part.options?.mode === "oneOf") {
+					return undefined
+				}
 				const choices = Arr.map(part.types, partTokens)
 				return Arr.every(choices, (choice) => choice !== undefined)
 					? Arr.flatten(
@@ -852,9 +862,20 @@ const tokensMeet = (
 		frontier: ReadonlyArray<readonly [number, number]>,
 		seen: HashSet.HashSet<number>,
 	): boolean => {
-		const fresh = Arr.filter(
-			Arr.flatMap(frontier, ([t, g]) => closeOf(t, g)),
-			([t, g]) => !HashSet.has(seen, key(t, g)),
+		// Each pair comes one time, also when many paths reach it, so the work
+		// is at most the number of pairs.
+		const fresh = Array.from(
+			HashMap.values(
+				HashMap.fromIterable(
+					Arr.map(
+						Arr.filter(
+							Arr.flatMap(frontier, ([t, g]) => closeOf(t, g)),
+							([t, g]) => !HashSet.has(seen, key(t, g)),
+						),
+						(pair) => [key(pair[0], pair[1]), pair] as const,
+					),
+				),
+			),
 		)
 		if (fresh.length === 0) {
 			return false
@@ -986,7 +1007,11 @@ const isSurelyInhabited = (
 				)
 			)
 		case "Union":
-			return Arr.some(ast.types, (type) => isSurelyInhabited(type, open))
+			// A union in the mode "oneOf" may stop every value of its members.
+			return (
+				ast.options?.mode !== "oneOf" &&
+				Arr.some(ast.types, (type) => isSurelyInhabited(type, open))
+			)
 		case "Suspend":
 			return (
 				!open.has(ast) &&

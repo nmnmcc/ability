@@ -2222,6 +2222,77 @@ describe("Policy", () => {
 					resource: Numbered.make({ data: {}, names: {} }),
 				},
 			)._tag
+		// A key Schema with a union in the mode "oneOf" goes to the check
+		// with samples, which uses the Schema itself.
+		const Exclusive = Resource.make("Exclusive", {
+			actions: ["read"],
+			fields: {
+				entries: Schema.Record(
+					Schema.TemplateLiteral([
+						"key-",
+						Schema.Union(
+							[Schema.Literals(["a", "b"]), Schema.Literals(["a", "c"])],
+							{ mode: "oneOf" },
+						),
+						Schema.String,
+					]),
+					Schema.String,
+				),
+			},
+		})
+		const ExclusiveDomain = Domain.make({
+			principal: Caller,
+			resources: [Exclusive],
+		})
+		assert.strictEqual(
+			Policy.decideSync(
+				Policy.define(ExclusiveDomain)(function* (_) {
+					yield* _.allow("read", Exclusive, {
+						fields: ["entries.key-a*" as never],
+					})
+				}),
+				{
+					principal: alice,
+					action: "read",
+					resource: Exclusive.make({ entries: {} }),
+				},
+			)._tag,
+			"NotApplicable",
+		)
+		// Many stars in a key pattern take a short time.
+		const Starred = Resource.make("Starred", {
+			actions: ["read"],
+			fields: {
+				entries: Schema.Record(
+					Schema.TemplateLiteral([
+						...Array.from({ length: 12 }).flatMap(() => [
+							"a" as const,
+							Schema.String,
+						]),
+						"z",
+					] as never),
+					Schema.String,
+				),
+			},
+		})
+		const StarredDomain = Domain.make({
+			principal: Caller,
+			resources: [Starred],
+		})
+		const start = Date.now()
+		Policy.decideSync(
+			Policy.define(StarredDomain)(function* (_) {
+				yield* _.allow("read", Starred, {
+					fields: [`entries.${"*a".repeat(12)}y` as never],
+				})
+			}),
+			{
+				principal: alice,
+				action: "read",
+				resource: Starred.make({ entries: {} } as never),
+			},
+		)
+		assert.isBelow(Date.now() - start, 1000)
 		assert.strictEqual(numbered("data.n-1"), "Allow")
 		assert.strictEqual(numbered(`names.x${"a".repeat(10_000)}`), "Allow")
 	})
@@ -2372,6 +2443,29 @@ describe("Policy", () => {
 			],
 		})
 		assert.isTrue(Exit.isFailure(exit))
+	})
+
+	it("does not give exact coverage for a union in the mode oneOf", () => {
+		const Note = Resource.make("OneOfNote", {
+			actions: ["read"],
+			fields: {
+				x: Schema.Union([Schema.String, Schema.Literal("blocked")], {
+					mode: "oneOf",
+				}),
+			},
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.define(Notes)(function* (_) {
+			yield* _.allow("read", Note)
+		})
+		const request = {
+			principal: alice,
+			action: "read",
+			kind: "OneOfNote",
+			within: ($) => $.eq("x", "blocked"),
+		} satisfies Policy.KindRequest<typeof Notes>
+		assert.strictEqual(Policy.coverage(policy, request)._tag, "Unknown")
+		assert.isFalse(Policy.scopeHasValue(policy, request))
 	})
 
 	it("does not cover a kind whose values a check may stop", () => {
