@@ -21,6 +21,7 @@
  */
 import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
+import * as HashSet from "effect/HashSet"
 import type * as Pipeable from "effect/Pipeable"
 import * as Condition from "./Condition.ts"
 import type * as Domain from "./Domain.ts"
@@ -425,32 +426,31 @@ const tokensOf = (pattern: string): ReadonlyArray<Token> =>
 const isStar = (token: Token | undefined): boolean =>
 	token === "*" || token === "**"
 
+type States = HashSet.HashSet<number>
+
 /** Adds the places after the stars, because a star may match nothing. */
-const close = (
-	tokens: ReadonlyArray<Token>,
-	states: ReadonlySet<number>,
-): ReadonlySet<number> => {
-	const after = Arr.map(
-		Arr.filter(
-			Array.from(states),
-			(state) => isStar(tokens[state]) && !states.has(state + 1),
+const close = (tokens: ReadonlyArray<Token>, states: States): States => {
+	const after = HashSet.map(
+		HashSet.filter(
+			states,
+			(state) => isStar(tokens[state]) && !HashSet.has(states, state + 1),
 		),
 		(state) => state + 1,
 	)
-	return after.length === 0
+	return HashSet.size(after) === 0
 		? states
-		: close(tokens, new Set([...states, ...after]))
+		: close(tokens, HashSet.union(states, after))
 }
 
 /** Gives the places in the pattern after one more character of the input. */
 const step = (
 	tokens: ReadonlyArray<Token>,
-	states: ReadonlySet<number>,
+	states: States,
 	char: string,
-): ReadonlySet<number> =>
+): States =>
 	close(
 		tokens,
-		new Set(
+		HashSet.fromIterable(
 			Arr.flatMap(Array.from(states), (state) => {
 				const token = tokens[state]
 				return token === "**" || (token === "*" && char !== ".")
@@ -468,12 +468,12 @@ const step = (
  * at most the length of the input times the length of the pattern. A regular
  * expression may take a very long time on a pattern with many stars.
  */
-const run = (
-	tokens: ReadonlyArray<Token>,
-	input: string,
-): ReadonlySet<number> =>
-	Arr.reduce(Array.from(input), close(tokens, new Set([0])), (states, char) =>
-		states.size === 0 ? states : step(tokens, states, char),
+const run = (tokens: ReadonlyArray<Token>, input: string): States =>
+	Arr.reduce(
+		Array.from(input),
+		close(tokens, HashSet.make(0)),
+		(states, char) =>
+			HashSet.size(states) === 0 ? states : step(tokens, states, char),
 	)
 
 /**
@@ -488,7 +488,7 @@ export const matchesField = (pattern: string, field: string): boolean => {
 		return pattern === field
 	}
 	const tokens = tokensOf(pattern)
-	return run(tokens, field).has(tokens.length)
+	return HashSet.has(run(tokens, field), tokens.length)
 }
 
 /**
@@ -503,7 +503,7 @@ export const matchesField = (pattern: string, field: string): boolean => {
 export const matchesInside = (pattern: string, field: string): boolean =>
 	// The name of a part may be empty, as a key of a record may be. So a match
 	// that ends just after the dot names a part too.
-	run(tokensOf(pattern), `${field}.`).size > 0
+	HashSet.size(run(tokensOf(pattern), `${field}.`)) > 0
 
 /**
  * Tests the parts of a rule that do not need the resource value: the action,

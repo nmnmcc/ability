@@ -45,6 +45,8 @@ import * as Data from "effect/Data"
 import * as Arr from "effect/Array"
 import * as Effect from "effect/Effect"
 import { dual } from "effect/Function"
+import * as HashMap from "effect/HashMap"
+import * as HashSet from "effect/HashSet"
 import * as Option from "effect/Option"
 import type * as Pipeable from "effect/Pipeable"
 import * as Ref from "effect/Ref"
@@ -52,7 +54,7 @@ import * as Schema from "effect/Schema"
 import * as SchemaTransformation from "effect/SchemaTransformation"
 import * as Condition from "./Condition.ts"
 import * as Decision from "./Decision.ts"
-import type * as Domain from "./Domain.ts"
+import * as Domain from "./Domain.ts"
 import * as Resource from "./Resource.ts"
 import * as Rule from "./Rule.ts"
 
@@ -601,6 +603,11 @@ export const ceiling: {
  * node may be a child of many nodes, so each walk over a tree keeps its work
  * on a node in a memo that the walk makes for itself. No memo lives longer
  * than one call.
+ *
+ * The memo is a native `Map`, because it must find a node by the node itself.
+ * An Effect `HashMap` finds a key by `Equal`, and the nodes are Effect data,
+ * so it would hash the whole structure of a node, and a shared child again for
+ * each path to it.
  */
 const remember = <K, A>(memo: Map<K, A>, key: K, work: () => A): A => {
 	const cached = memo.get(key)
@@ -944,7 +951,8 @@ const makeContext = (
 	trace: Ref.Ref<ReadonlyArray<Step>> | undefined,
 ): DecideContext | undefined => {
 	const kind = Resource.kindOf(request.resource)
-	const descriptor = kind === undefined ? undefined : domain.resources.get(kind)
+	const descriptor =
+		kind === undefined ? undefined : Domain.descriptorOf(domain, kind)
 	if (
 		kind === undefined ||
 		descriptor === undefined ||
@@ -1064,6 +1072,7 @@ const deniesInside = (
 	node: Node,
 	target: { readonly action: string; readonly kind: string },
 	field: string,
+	// A native set: it must find a node by the node itself. See `remember`.
 	seen: Set<Node> = new Set(),
 ): boolean => {
 	// One node may be a child of many nodes. It is tested one time.
@@ -1127,7 +1136,7 @@ export const permittedFields: {
 	): Effect.Effect<ReadonlyArray<string>, unknown, unknown> => {
 		const kind = Resource.kindOf(request.resource)
 		const descriptor: Resource.Descriptor | undefined =
-			kind === undefined ? undefined : policy.domain.resources.get(kind)
+			kind === undefined ? undefined : Domain.descriptorOf(policy.domain, kind)
 		if (descriptor === undefined) {
 			return Effect.succeed([])
 		}
@@ -1475,7 +1484,7 @@ const residualsAny = (
 		readonly field?: string | undefined
 	},
 ): Pair => {
-	const descriptor = policy.domain.resources.get(request.kind)
+	const descriptor = Domain.descriptorOf(policy.domain, request.kind)
 	if (descriptor === undefined || !fitsKind(descriptor, request)) {
 		return { allow: never, deny: never }
 	}
@@ -1691,11 +1700,11 @@ const principalRefs = (ast: ConditionNode): ReadonlyArray<string> =>
 /** The principal fields of a node. A shared node is visited one time. */
 const refsIn = (
 	node: ConditionNode,
-	memo: Map<ConditionNode, ReadonlySet<string>>,
-): ReadonlySet<string> =>
+	memo: Map<ConditionNode, HashSet.HashSet<string>>,
+): HashSet.HashSet<string> =>
 	remember(memo, node, () => {
 		const refs = (operands: ReadonlyArray<Condition.Operand>) =>
-			new Set(
+			HashSet.fromIterable(
 				Arr.flatMap(operands, (operand) =>
 					operand._tag === "Principal" ? [operand.path] : [],
 				),
@@ -1709,16 +1718,15 @@ const refsIn = (
 				return refs(node.prefix)
 			case "And":
 			case "Or":
-				return new Set(
-					Arr.flatMap(
-						node.conditions as ReadonlyArray<ConditionNode>,
-						(child) => Array.from(refsIn(child, memo)),
-					),
+				return Arr.reduce(
+					node.conditions as ReadonlyArray<ConditionNode>,
+					HashSet.empty<string>(),
+					(all, child) => HashSet.union(all, refsIn(child, memo)),
 				)
 			case "Not":
 				return refsIn(node.condition, memo)
 			default:
-				return new Set()
+				return HashSet.empty()
 		}
 	})
 
@@ -1735,7 +1743,10 @@ const validate = (
 	domain: Domain.Any,
 	root: EncodedNode,
 ): ReadonlyArray<Issue> => {
-	const principalPaths = new Set(Resource.fieldPaths(domain.principal))
+	const principalPaths = domain.principal.pipe(
+		Resource.fieldPaths,
+		HashSet.fromIterable,
+	)
 	const ruleIssues = (
 		value: EncodedRule,
 		at: ReadonlyArray<PropertyKey>,
@@ -1743,17 +1754,19 @@ const validate = (
 		const all = value.resources.includes("*")
 		const named = Arr.filter(value.resources, (kind) => kind !== "*")
 		const descriptors = Arr.flatMap(named, (kind) => {
-			const descriptor = domain.resources.get(kind)
+			const descriptor = Domain.descriptorOf(domain, kind)
 			return descriptor === undefined ? [] : [descriptor]
 		})
-		const known = all ? Array.from(domain.resources.values()) : descriptors
+		const known = all
+			? Array.from(HashMap.values(domain.resources))
+			: descriptors
 		const usedFields = [
 			...Arr.filter(value.fields ?? [], (field) => !field.includes("*")),
 			...(value.when === undefined ? [] : Condition.fields(value.when as Ast)),
 		]
 		return [
 			...Arr.map(
-				Arr.filter(named, (kind) => !domain.resources.has(kind)),
+				Arr.filter(named, (kind) => !HashMap.has(domain.resources, kind)),
 				(kind): Issue => ({
 					path: [...at, "resources"],
 					issue: `There is no resource with the kind "${kind}"`,
@@ -1797,7 +1810,7 @@ const validate = (
 				Arr.filter(
 					value.when === undefined ? [] : principalRefs(value.when),
 					(ref) =>
-						!principalPaths.has(ref) &&
+						!HashSet.has(principalPaths, ref) &&
 						!Resource.hasPath(domain.principal, ref),
 				),
 				(ref): Issue => ({

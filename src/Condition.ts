@@ -31,6 +31,9 @@ import * as Data from "effect/Data"
 import * as Effect from "effect/Effect"
 import * as Option from "effect/Option"
 import { dual } from "effect/Function"
+import * as HashMap from "effect/HashMap"
+import * as HashSet from "effect/HashSet"
+import * as MutableHashMap from "effect/MutableHashMap"
 import { hasProperty, isObject } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import type * as Resource from "./Resource.ts"
@@ -433,6 +436,8 @@ type Leaf = string | number | boolean | bigint | symbol | null | undefined
 type Whole =
 	| ReadonlyMap<unknown, unknown>
 	| ReadonlySet<unknown>
+	| HashMap.HashMap<unknown, unknown>
+	| HashSet.HashSet<unknown>
 	| Date
 	| URL
 	| Uint8Array
@@ -910,7 +915,14 @@ export const hasPredicate = (condition: Ast): boolean =>
 // children takes time for its nodes, not for its paths. No memo lives longer
 // than one call.
 
-/** Gives the answer for a key from the memo, or works it out and keeps it. */
+/**
+ * Gives the answer for a key from the memo, or works it out and keeps it.
+ *
+ * A memo keyed by a node is a native `Map`, because it must find a node by
+ * the node itself. An Effect `HashMap` finds a key by `Equal`, and the nodes
+ * are Effect data, so it would hash the whole structure of a node, and a
+ * shared child again for each path to it.
+ */
 const remember = <K, A>(memo: Map<K, A>, key: K, work: () => A): A => {
 	const cached = memo.get(key)
 	if (cached !== undefined) {
@@ -1129,14 +1141,14 @@ interface Memo {
 	readonly predicates: Map<Ast, boolean>
 	/** A number for each node. Two nodes with one structure get one number. */
 	readonly ids: Map<Ast, number>
-	readonly structures: Map<string, number>
+	readonly structures: MutableHashMap.MutableHashMap<string, number>
 }
 
 const makeMemo = (): Memo => ({
 	simple: new Map(),
 	predicates: new Map(),
 	ids: new Map(),
-	structures: new Map(),
+	structures: MutableHashMap.empty(),
 })
 
 const literalText = (value: Scalar): string =>
@@ -1186,9 +1198,13 @@ const structureId = (ast: Ast, memo: Memo): number =>
 	remember(memo.ids, ast, () => {
 		const text = structureText(ast, memo)
 		const fresh = memo.ids.size
-		return text === undefined
-			? fresh
-			: remember(memo.structures, text, () => fresh)
+		if (text === undefined) {
+			return fresh
+		}
+		return Option.getOrElse(MutableHashMap.get(memo.structures, text), () => {
+			MutableHashMap.set(memo.structures, text, fresh)
+			return fresh
+		})
 	})
 
 const dedupe = (
@@ -1198,10 +1214,12 @@ const dedupe = (
 	const ids = Arr.map(conditions, (condition) => structureId(condition, memo))
 	// The first place of each number. The entries go in from the end, so the
 	// first place is the one that stays.
-	const first = new Map(
+	const first = HashMap.fromIterable(
 		Arr.reverse(Arr.map(ids, (id, index) => [id, index] as const)),
 	)
-	return Arr.filter(conditions, (_, index) => first.get(ids[index]!) === index)
+	return Arr.filter(conditions, (_, index) =>
+		Option.contains(HashMap.get(first, ids[index]!), index),
+	)
 }
 
 /**
@@ -1214,7 +1232,7 @@ const absorb = (
 	conditions: ReadonlyArray<Ast>,
 	memo: Memo,
 ): ReadonlyArray<Ast> => {
-	const all = new Set(
+	const all = HashSet.fromIterable(
 		Arr.map(conditions, (condition) => structureId(condition, memo)),
 	)
 	return Arr.filter(
@@ -1222,7 +1240,7 @@ const absorb = (
 		(condition) =>
 			condition._tag !== inner ||
 			!Arr.some(condition.conditions, (part) =>
-				all.has(structureId(part, memo)),
+				HashSet.has(all, structureId(part, memo)),
 			),
 	)
 }
@@ -1660,29 +1678,31 @@ export const fold: {
  * @since 0.3.0
  */
 export const fields = (condition: Ast): ReadonlyArray<string> =>
-	Array.from(fieldsIn(condition, new Map()))
+	fieldsIn(condition, new Map())
 
+/**
+ * The fields of a node, in the order that they first come. `Arr.union` keeps
+ * that order, and a `HashSet` would not.
+ */
 const fieldsIn = (
 	ast: Ast,
-	memo: Map<Ast, ReadonlySet<string>>,
-): ReadonlySet<string> =>
+	memo: Map<Ast, ReadonlyArray<string>>,
+): ReadonlyArray<string> =>
 	remember(memo, ast, () => {
 		switch (ast._tag) {
 			case "Compare":
 			case "In":
 			case "Exists":
-				return new Set([ast.field])
+				return [ast.field]
 			case "And":
 			case "Or":
-				return new Set(
-					Arr.flatMap(ast.conditions, (child) =>
-						Array.from(fieldsIn(child, memo)),
-					),
+				return Arr.reduce(ast.conditions, Arr.empty<string>(), (all, child) =>
+					Arr.union(all, fieldsIn(child, memo)),
 				)
 			case "Not":
 				return fieldsIn(ast.condition, memo)
 			default:
-				return new Set()
+				return []
 		}
 	})
 

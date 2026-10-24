@@ -46,11 +46,12 @@ import * as Effect from "effect/Effect"
 import * as Equal from "effect/Equal"
 import * as Hash from "effect/Hash"
 import * as Layer from "effect/Layer"
+import * as MutableHashMap from "effect/MutableHashMap"
 import * as Option from "effect/Option"
 import * as Schema from "effect/Schema"
 import * as Condition from "./Condition.ts"
 import * as Decision from "./Decision.ts"
-import type * as Domain from "./Domain.ts"
+import * as Domain from "./Domain.ts"
 import * as Policy from "./Policy.ts"
 import * as Resource from "./Resource.ts"
 
@@ -417,21 +418,26 @@ const isObjectLike = (value: unknown): boolean =>
 
 /**
  * The number of each class that a key has seen. Each layer has its own, so
- * no state is kept for the whole program.
+ * no state is kept for the whole program. A class is a function, and `Equal`
+ * compares functions by the function itself.
  */
-type ClassIds = Map<object, number>
+type ClassIds = MutableHashMap.MutableHashMap<object, number>
 
 /** Gives a number that is only for this class, in this layer. */
 const classId = (classes: ClassIds, constructor: object): string => {
-	const known = classes.get(constructor)
-	const id = known ?? classes.size
-	if (known === undefined) {
-		classes.set(constructor, id)
-	}
+	const id = Option.getOrElse(MutableHashMap.get(classes, constructor), () => {
+		const fresh = MutableHashMap.size(classes)
+		MutableHashMap.set(classes, constructor, fresh)
+		return fresh
+	})
 	return `#${String(id)}`
 }
 
-/** A text for a value, and the objects that the walk has seen up to now. */
+/**
+ * A text for a value, and the objects that the walk has seen up to now. The
+ * objects are in a native `Set`, because it must find an object by the object
+ * itself: `Equal` would call two objects with the same data one object.
+ */
 interface Keyed {
 	readonly text: string
 	readonly seen: ReadonlySet<object>
@@ -625,7 +631,7 @@ const makeLayer = (
 	const domain: Domain.Any = service.domain
 	// It gives `undefined` when the principal has no key. Such a principal does
 	// not use the cache.
-	const classes: ClassIds = new Map()
+	const classes: ClassIds = MutableHashMap.empty()
 	const keyOf = (principal: object): PrincipalKey | undefined => {
 		const keyed = keyText(principal, new Set(), classes)
 		return keyed === undefined
@@ -728,7 +734,7 @@ const makeLayer = (
 						: (Resource.kindOf(target.resource) ?? "")
 				// A request that does not fit its kind gets a "no" at once. The
 				// decider must not say yes to an action that the kind does not have.
-				const descriptor = domain.resources.get(kind)
+				const descriptor = Domain.descriptorOf(domain, kind)
 				if (descriptor === undefined || !Policy.fitsKind(descriptor, target)) {
 					return yield* forbidden(target, kind, undefined)
 				}

@@ -16,6 +16,7 @@
  */
 import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
+import * as HashMap from "effect/HashMap"
 import * as Option from "effect/Option"
 import type * as Schema from "effect/Schema"
 import type * as PrincipalSchema from "./Principal.ts"
@@ -35,7 +36,8 @@ export interface Domain<
 	Meta,
 > {
 	readonly principal: PrincipalSchema.Any
-	readonly resources: ReadonlyMap<string, Resource.Descriptor>
+	/** The descriptor of each resource, by its kind name. */
+	readonly resources: HashMap.HashMap<string, Resource.Descriptor>
 	readonly meta: Schema.Top | undefined
 	readonly "~Domain"?: {
 		readonly Principal: P
@@ -168,7 +170,7 @@ export type AnyValue<D> = Resource.Value<Resources<D>>
  */
 class DomainData extends Data.Class<{
 	readonly principal: PrincipalSchema.Any
-	readonly resources: ReadonlyMap<string, Resource.Descriptor>
+	readonly resources: HashMap.HashMap<string, Resource.Descriptor>
 	readonly meta: Schema.Top | undefined
 }> {}
 
@@ -205,7 +207,7 @@ export const make: <
 	if (kinds.includes("*")) {
 		throw new Error(`A resource may not have the kind name "*"`)
 	}
-	const resources = new Map(
+	const resources = HashMap.fromIterable(
 		Arr.map(
 			descriptors,
 			(descriptor) => [descriptor.kind, descriptor] as const,
@@ -219,6 +221,20 @@ export const make: <
 		meta: options.meta,
 	})
 }
+
+/**
+ * Gives the descriptor of the resource with a kind name, or `undefined` when
+ * the domain has no such resource.
+ *
+ * @stability stable
+ * @category getters
+ * @since 0.4.0
+ */
+export const descriptorOf = (
+	domain: Any,
+	kind: string,
+): Resource.Descriptor | undefined =>
+	Option.getOrUndefined(HashMap.get(domain.resources, kind))
 
 /**
  * Tests if a value is a domain.

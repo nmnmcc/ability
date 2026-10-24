@@ -23,6 +23,7 @@
  */
 import * as Arr from "effect/Array"
 import { Class as DataClass } from "effect/Data"
+import * as HashSet from "effect/HashSet"
 import { hasProperty } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import type * as SchemaAST from "effect/SchemaAST"
@@ -194,7 +195,9 @@ const classStruct = (
 
 /**
  * Gives the structs inside a Schema, with the `Schema.suspend` nodes that are
- * open on the way to each one. It looks through optional keys, unions such as
+ * open on the way to each one. The open nodes are in a native `Set`, because
+ * it must find a node by the node itself: `Equal` compares Schema nodes by
+ * structure, and a recursive Schema has no end. It looks through optional keys, unions such as
  * `Schema.NullOr`, `Schema.suspend`, and `Schema.Class`. A suspend node that
  * is already open is not opened again, so a recursive Schema has an end.
  */
@@ -429,7 +432,7 @@ const makeDescriptor = (
 	const leaves = Arr.filter(visits, (visit) => visit.leaf)
 	// In a union, one path may hold a scalar in one branch and a struct in
 	// another. Such a path holds more than one value, so it is open too.
-	const structs = new Set(
+	const structs = HashSet.fromIterable(
 		Arr.map(
 			Arr.filter(visits, (visit) => !visit.leaf),
 			(visit) => visit.path,
@@ -437,7 +440,8 @@ const makeDescriptor = (
 	)
 	const open = Arr.filter(
 		leaves,
-		(visit) => shapeOf(visit.type) !== "scalar" || structs.has(visit.path),
+		(visit) =>
+			shapeOf(visit.type) !== "scalar" || HashSet.has(structs, visit.path),
 	)
 	return new ResourceDescriptor({
 		kind,

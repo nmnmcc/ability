@@ -91,6 +91,11 @@ material. Do not change it unless the user asks.
 - Change as little state as you can. Use `const` and values that do not change.
   Make a new value in place of a change to an old one. A memo `Map` inside one
   call is the usual exception.
+- Use the `HashMap` and `HashSet` of Effect, not a native `Map` or `Set`. Use
+  `MutableHashMap` for a memo with keys that are strings, numbers or functions.
+  A native `Map` or `Set` is right only when it must find an object by the
+  object itself: `Equal` compares Effect data, Schema nodes and plain objects by
+  structure. Say why in a comment.
 - Do not write `for` or `while` loops. Use the tools of Effect: `Array` from
   `effect` (`map`, `flatMap`, `filter`, `reduce`, `reduceRight`, `some`,
   `every`, `findFirst`, `groupWith`, `unfold`) for values, and `Effect.forEach`,
