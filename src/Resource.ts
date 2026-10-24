@@ -26,7 +26,7 @@ import { Class as DataClass } from "effect/Data"
 import * as HashMap from "effect/HashMap"
 import * as HashSet from "effect/HashSet"
 import * as Option from "effect/Option"
-import { hasProperty } from "effect/Predicate"
+import { hasProperty, isObject } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import * as SchemaAST from "effect/SchemaAST"
 
@@ -217,7 +217,8 @@ const innerSchemas = (schema: unknown): ReadonlyArray<unknown> =>
  * @since 0.5.0
  */
 export const hasGetter = (schema: unknown, path: string): boolean =>
-	!isTooLong(path) && getterAt(schema, path.split("."))
+	!isTooLong(path) &&
+	getterAt(schema, path.split("."), (part, name) => part === name)
 
 /**
  * The most parts that a field path may have. The walks below call themselves
@@ -230,7 +231,39 @@ const maxPathParts = 256
 const isTooLong = (path: string): boolean =>
 	path.split(".", maxPathParts + 1).length > maxPathParts
 
-const getterAt = (schema: unknown, names: ReadonlyArray<string>): boolean => {
+/**
+ * Tests if a Schema has a getter of a class at a path whose parts fit
+ * `parts`, as `hasGetter` does for one path. A part fits a name when `fits`
+ * says so, as a part with `*` fits many names. A part `**` is not taken here.
+ *
+ * @stability stable
+ * @category predicates
+ * @since 0.5.0
+ */
+export const hasMatchingGetter = (
+	schema: unknown,
+	parts: ReadonlyArray<string>,
+	fits: (part: string, name: string) => boolean,
+): boolean =>
+	parts.length <= maxPathParts &&
+	!parts.includes("**") &&
+	getterAt(schema, parts, fits)
+
+/** The names of the getters of the prototypes of a class. */
+const getterNames = (schema: unknown): ReadonlyArray<string> =>
+	Arr.flatMap(prototypesOf(schema), (prototype) =>
+		Arr.filter(
+			Object.getOwnPropertyNames(prototype),
+			(name) =>
+				Object.getOwnPropertyDescriptor(prototype, name)?.get !== undefined,
+		),
+	)
+
+const getterAt = (
+	schema: unknown,
+	names: ReadonlyArray<string>,
+	fits: (part: string, name: string) => boolean,
+): boolean => {
 	const [name, ...rest] = names
 	if (name === undefined) {
 		return false
@@ -238,18 +271,8 @@ const getterAt = (schema: unknown, names: ReadonlyArray<string>): boolean => {
 	return Arr.some(innerSchemas(schema), (inner) => {
 		// A path ends at a getter. The library can not see the type of the
 		// value of a getter, so it can not check a path that goes past it.
-		if (
-			rest.length === 0 &&
-			Arr.some(
-				prototypesOf(inner),
-				(prototype) =>
-					Object.getOwnPropertyDescriptor(prototype, name)?.get !== undefined,
-			)
-		) {
-			return true
-		}
 		if (rest.length === 0) {
-			return false
+			return Arr.some(getterNames(inner), (getter) => fits(name, getter))
 		}
 		// A record, such as `Schema.Record(Schema.String, Owner)`, keeps the
 		// Schema of its keys and of its values.
@@ -258,18 +281,38 @@ const getterAt = (schema: unknown, names: ReadonlyArray<string>): boolean => {
 			hasProperty(inner, "value") &&
 			Schema.isSchema(inner.key) &&
 			Schema.isSchema(inner.value) &&
-			Schema.is(Schema.toType(inner.key))(name)
+			Arr.some(
+				[name.replaceAll("*", ""), name.replaceAll("*", "a")],
+				(key) => fits(name, key) && keyFits((inner.key as Schema.Top).ast, key),
+			)
 		) {
-			return getterAt(inner.value, rest)
+			return getterAt(inner.value, rest, fits)
 		}
 		const fields: unknown = hasProperty(inner, "fields")
 			? inner.fields
 			: undefined
 		return (
-			hasProperty(fields, name) &&
-			getterAt((fields as Record<string, unknown>)[name], rest)
+			isObject(fields) &&
+			Arr.some(
+				Object.keys(fields as object),
+				(field) =>
+					fits(name, field) &&
+					getterAt((fields as Record<string, unknown>)[field], rest, fits),
+			)
 		)
 	})
+}
+
+/**
+ * Tests if a record takes a key. A key of an object is a string, also a key
+ * that a number Schema takes: `{ 1: "a" }` has the key `"1"`. So a key that
+ * is the text of a number is tried as that number too.
+ */
+const keyFits = (parameter: SchemaAST.AST, key: string): boolean => {
+	const is = Schema.is(Schema.make(parameter))
+	return (
+		is(key) || (key !== "" && String(Number(key)) === key && is(Number(key)))
+	)
 }
 
 /**
@@ -622,7 +665,7 @@ const resolves = (
 				// A key of a record must fit the Schema of the keys.
 				return ast.indexSignatures.some(
 					(signature) =>
-						Schema.is(Schema.make(signature.parameter))(name) &&
+						keyFits(signature.parameter, name) &&
 						resolves(signature.type, names, index + 1, memo),
 				)
 			}
@@ -722,9 +765,7 @@ const matchesFrom = (
 						(globMeetsKeys(part, signature.parameter) ??
 							Arr.some(
 								Arr.dedupe([...fromPart, ...sampleKeys(signature.parameter)]),
-								(key) =>
-									Schema.is(Schema.make(signature.parameter))(key) &&
-									fits(part, key),
+								(key) => keyFits(signature.parameter, key) && fits(part, key),
 							)) &&
 						next(signature.type, index + 1, true),
 			)

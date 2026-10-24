@@ -2327,6 +2327,49 @@ describe("Policy", () => {
 		)
 	})
 
+	it("grants the whole value for a ** inside a name, a number key and a getter", () => {
+		class Owner extends Schema.Class<Owner>("PatternOwner")({
+			id: Schema.String,
+		}) {
+			get label() {
+				return this.id
+			}
+		}
+		const Box = Resource.make("PatternBox", {
+			actions: ["read"],
+			fields: {
+				data: Schema.Record(
+					Schema.String,
+					Schema.Struct({ value: Schema.String }),
+				),
+				values: Schema.Record(Schema.Finite, Schema.String),
+				owner: Owner,
+			},
+		})
+		const Boxes = Domain.make({ principal: Caller, resources: [Box] })
+		const decide = (pattern: string) =>
+			Policy.decideSync(
+				Policy.define(Boxes)(function* (_) {
+					yield* _.allow("read", Box, { fields: [pattern as never] })
+				}),
+				{
+					principal: alice,
+					action: "read",
+					resource: Box.make({
+						data: {},
+						values: {},
+						owner: Owner.make({ id: "o" }),
+					}),
+				},
+			)._tag
+		assert.strictEqual(decide("data.**value"), "Allow")
+		assert.strictEqual(decide("data.**missing"), "NotApplicable")
+		assert.strictEqual(decide("values.*"), "Allow")
+		assert.strictEqual(decide("owner.label*"), "Allow")
+		assert.strictEqual(decide("owner.name*"), "NotApplicable")
+		assert.isTrue(Resource.hasPath(Resource.descriptor(Box).schema, "values.1"))
+	})
+
 	it("does not take a condition with a node that is not known", () => {
 		assert.isFalse(Schema.is(Condition.schema)({ _tag: "Broken" }))
 		assert.isFalse(

@@ -572,21 +572,59 @@ export const matchesInside = (pattern: string, field: string): boolean =>
 /**
  * Tests if a field pattern may match a field of a kind: a field in its list,
  * a path that the Schema has, such as a key of a record, or a getter. See
- * `Resource.hasMatchingPath`.
+ * `Resource.hasMatchingPath` and `Resource.hasMatchingGetter`.
  */
 const fitsSomeField = (
 	pattern: string,
 	descriptor: Resource.Descriptor,
 ): boolean =>
 	Arr.some(descriptor.fieldPaths, (field) => matchesField(pattern, field)) ||
-	Resource.hasMatchingPath(
-		descriptor.schema,
-		Arr.map(normalize(pattern).split("."), (part) =>
-			isGlobstar(part) ? "**" : part,
+	Arr.some(
+		partLists(pattern),
+		(parts) =>
+			Resource.hasMatchingPath(descriptor.schema, parts, matchesField) ||
+			Resource.hasMatchingGetter(descriptor.schema, parts, matchesField),
+	)
+
+/**
+ * The lists of parts that a pattern may stand for. A part that is only stars
+ * is `**`. One `**` inside a part, as in `**value`, may take the dots of more
+ * parts, so such a part gives two lists: one with the part as it is, with
+ * `*` for `**`, and one with the part cut at the stars, as in `*`, `**`,
+ * `*value`. A part with two such runs stays as it is, with `*` for `**`, so
+ * it may miss a field but never fits one too many. The number of lists is
+ * kept small.
+ */
+const partLists = (pattern: string): ReadonlyArray<ReadonlyArray<string>> =>
+	Arr.take(
+		Arr.reduce(
+			normalize(pattern).split("."),
+			[[]] as ReadonlyArray<ReadonlyArray<string>>,
+			(lists, part) => {
+				const choices: ReadonlyArray<ReadonlyArray<string>> = isGlobstar(part)
+					? [["**"]]
+					: // Only one run of stars: with two, the cut would leave out the
+						// text between them, and the lists would fit more fields.
+						(part.match(/\*{2,}/gu) ?? []).length === 1
+						? [
+								[part.replace(/\*{2,}/gu, "*")],
+								[
+									`${part.slice(0, part.indexOf("**"))}*`,
+									"**",
+									`*${part.slice(part.lastIndexOf("**") + 2)}`,
+								],
+							]
+						: [[part]]
+				return Arr.take(
+					Arr.flatMap(lists, (list) =>
+						Arr.map(choices, (choice) => [...list, ...choice]),
+					),
+					16,
+				)
+			},
 		),
-		matchesField,
-	) ||
-	(!pattern.includes("*") && Resource.hasGetter(descriptor.schema, pattern))
+		16,
+	)
 
 /**
  * Tests the parts of a rule that do not need the resource value: the action,

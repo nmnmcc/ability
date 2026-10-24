@@ -193,6 +193,12 @@ An allow rule with fields covers a request for the whole value: "may update some
 fields" is a yes. This is true only for a kind that has one of these fields. A
 deny rule with fields does not stop a request for the whole value.
 
+To know if a kind has a field that a pattern fits, the library walks the Schema
+of the kind: its fields, the keys of its records, and the getters of its
+classes. For some key Schemas it can only try sample keys, so it may not find a
+field that is there. Then the answer for the whole value is "no", never a wrong
+"yes".
+
 ## Conditions
 
 The builder in `when` has these functions:
