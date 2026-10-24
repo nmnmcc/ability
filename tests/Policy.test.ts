@@ -426,6 +426,27 @@ describe("Policy", () => {
 			)
 		})
 
+		it("does not decode a shared input that would be too large", () => {
+			const shared = Arr.reduce(
+				Arr.range(1, 26),
+				{ _tag: "Rules", algorithm: "denyOverrides", rules: [] } as unknown,
+				(inner) => ({ _tag: "All", policies: [inner, inner] }),
+			)
+			const start = Date.now()
+			const exit = Schema.decodeUnknownExit(PolicySchema)(shared)
+			assert.isTrue(Exit.isFailure(exit))
+			assert.include(String(Exit.isFailure(exit) ? exit.cause : ""), "objects")
+			const condition = Arr.reduce(
+				Arr.range(1, 30),
+				{ _tag: "True" } as unknown,
+				(inner) => ({ _tag: "And", conditions: [inner, inner] }),
+			)
+			assert.isTrue(
+				Exit.isFailure(Schema.decodeUnknownExit(Condition.schema)(condition)),
+			)
+			assert.isBelow(Date.now() - start, 1000)
+		})
+
 		it("does not fill the stack with deep JSON", () => {
 			const one = Schema.encodeSync(PolicySchema)(
 				Policy.define(App)(function* (_) {

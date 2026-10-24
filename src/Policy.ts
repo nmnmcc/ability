@@ -2195,14 +2195,64 @@ const encodedRuleSchema = (meta: Schema.Top | undefined) =>
 const maxJsonDepth = 1000
 
 /**
- * Tests if a value has at most `levels` levels of objects and arrays. The walk
- * stops at that depth, so it does not fill the stack itself.
+ * The most objects and arrays in the JSON form of an input, with a shared one
+ * counted for each place. The decoder writes out a shared one each time, so
+ * an input with few objects may give a very large tree.
  */
-const nestedWithin = (input: unknown, levels: number): boolean =>
-	typeof input !== "object" ||
-	input === null ||
-	(levels > 0 &&
-		Arr.every(Object.values(input), (child) => nestedWithin(child, levels - 1)))
+const maxInputNodes = 1_000_000
+
+/** The size and the height of a value, in objects and arrays. */
+interface Measure {
+	readonly size: number
+	readonly height: number
+}
+
+/**
+ * Measures a value, or gives `undefined` when it is higher than `levels`. A
+ * shared object is measured one time. The walk stops at that height, so it
+ * does not fill the stack itself. The memo is a native `Map`, because it
+ * must find an object by the object itself.
+ */
+const measure = (
+	input: unknown,
+	levels: number,
+	memo: Map<object, Measure>,
+): Measure | undefined => {
+	if (typeof input !== "object" || input === null) {
+		return { size: 0, height: 0 }
+	}
+	const cached = memo.get(input)
+	if (cached !== undefined) {
+		return cached.height <= levels ? cached : undefined
+	}
+	if (levels === 0) {
+		return undefined
+	}
+	const children = Arr.map(Object.values(input), (child) =>
+		measure(child, levels - 1, memo),
+	)
+	if (!Arr.every(children, (child) => child !== undefined)) {
+		return undefined
+	}
+	const result = {
+		size: Arr.reduce(children, 1, (size, child) => size + child!.size),
+		height: Arr.reduce(children, 1, (height, child) =>
+			Math.max(height, 1 + child!.height),
+		),
+	}
+	memo.set(input, result)
+	return result
+}
+
+/** Tests if a value is low and small enough to decode. */
+const fitsLimits = (input: unknown): string | true => {
+	const measured = measure(input, maxJsonDepth, new Map())
+	return measured === undefined
+		? `A policy may have at most ${String(maxJsonDepth)} levels of JSON`
+		: measured.size > maxInputNodes
+			? `A policy may have at most ${String(maxInputNodes)} objects and arrays in JSON`
+			: true
+}
 
 const encodedNodeSchema = (
 	meta: Schema.Top | undefined,
@@ -2936,13 +2986,7 @@ export const schema = <D extends Domain.Any>(
 		(input): input is EncodedNode =>
 			typeof input === "object" && input !== null,
 	).pipe(
-		Schema.check(
-			Schema.makeFilter((input) =>
-				nestedWithin(input, maxJsonDepth)
-					? true
-					: `A policy may have at most ${String(maxJsonDepth)} levels of JSON`,
-			),
-		),
+		Schema.check(Schema.makeFilter(fitsLimits)),
 		Schema.decodeTo(
 			encodedNodeSchema(domain.meta),
 			SchemaTransformation.passthrough(),
