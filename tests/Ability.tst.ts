@@ -675,6 +675,29 @@ describe("Policy", () => {
 		}
 	})
 
+	it("keeps what a predicate reads when it goes with a decoded condition", () => {
+		const _ = Policy.builder(App)
+		const leveled = Condition.builder<
+			Policy.DataFor<App, "Bot">,
+			Bot,
+			Caller
+		>().predicate("leveled", (bot) => bot.level >= 1)
+		const decoded = Schema.decodeSync(Condition.schema)({ _tag: "True" })
+		const both = Condition.and(decoded, leveled)
+		expect<Condition.ReadsOf<typeof both>>().type.toBe<
+			Condition.ReadsOf<typeof leveled>
+		>()
+		expect<Condition.ReadsOf<typeof decoded>>().type.toBe<unknown>()
+		expect<Condition.ReadsOf<never>>().type.toBe<unknown>()
+		expect(_.deny).type.toBeCallableWith("read", Bot, { when: () => both })
+		expect(_.deny).type.not.toBeCallableWith("read", Trigger, {
+			when: () => both,
+		})
+		expect(_.deny).type.toBeCallableWith("read", Trigger, {
+			when: () => decoded,
+		})
+	})
+
 	it("keeps a predicate in rules of its own kind", () => {
 		const _ = Policy.builder(App)
 		const leveled = Condition.builder<

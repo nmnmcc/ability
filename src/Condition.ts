@@ -297,15 +297,20 @@ export type Any = Condition<any, any>
 
 /**
  * What the tests of a condition read. For a union of conditions, it is what
- * all of them read.
+ * all of them read. A condition that may read any values, as a decoded one,
+ * has `any` here: it fits any rule, so it adds nothing to what the others
+ * read. It must not take away what they read, as `any` in an intersection
+ * would.
  *
  * @stability stable
  * @category utility types
  * @since 1.0.0
  */
-export type ReadsOf<C> = [C] extends [
-	{ readonly "~Reads": (reads: infer I) => void },
-]
+export type ReadsOf<C> = (
+	C extends { readonly "~Reads": (reads: infer I) => void }
+		? (reads: 0 extends 1 & I ? unknown : I) => void
+		: never
+) extends (reads: infer I) => void
 	? I
 	: unknown
 
