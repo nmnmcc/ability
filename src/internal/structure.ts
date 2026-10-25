@@ -5,6 +5,12 @@
  * its constructor makes from the hashes that its children keep, and the test
  * of equality is a walk of the trampoline. Two nodes with the same data are
  * equal, as with `Data.Class`.
+ *
+ * The walk goes into the parts that the library owns, nodes and rules, and
+ * into plain objects and lists, as the `meta` of a rule from JSON. Any other
+ * value, as a class, an `Option` or a `HashMap` in a `meta`, goes to `Equal`,
+ * with the limits of Effect. A walk that knew the data of every such value
+ * would be a copy of `Equal`, so the docs of `meta` say this.
  */
 import * as Arr from "effect/Array"
 import * as Equal from "effect/Equal"

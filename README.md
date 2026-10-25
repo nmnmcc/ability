@@ -189,7 +189,11 @@ _.allow("read", "*", {
   `secret` and `settings.secret`. A pattern that matches no field of the
   resources of the rule is an error, so a mistake in a name shows at once.
 - `reason`, `id` and `meta` are kept with the rule. `meta` is extra data, such
-  as the scope of a grant. Give its Schema to `Domain.make({ meta })`.
+  as the scope of a grant. Give its Schema to `Domain.make({ meta })`. Two rules
+  are equal only when their `meta` is equal. The test of equality walks plain
+  objects and lists of a `meta` with any number of levels. It gives any other
+  value, as a class, an `Option` or a `HashMap`, to `Equal`, which may fill the
+  stack for a value with very many levels.
 
 An allow rule with fields covers a request for the whole value: "may update some
 fields" is a yes. This is true only for a kind that has one of these fields. A

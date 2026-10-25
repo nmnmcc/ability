@@ -175,7 +175,10 @@ export type AnyValue<D> = Resource.Value<Resources<D>>
  * Makes a domain. Each resource must have its own kind name. Give `meta` when
  * rules must keep extra data, such as the scope of a grant. The `meta` Schema
  * may not need services, because `Policy.schema` gives a Schema that needs
- * none.
+ * none. The test of equality of rules walks the plain objects and lists of a
+ * `meta` with any number of levels, and it gives any other value, as a class
+ * or an `Option`, to `Equal`, which may fill the stack for a value with very
+ * many levels.
  *
  * Give `limits` to set the limits of the domain, as
  * `{ limits: { fieldPathParts: 2000 } }`. Each one is a whole number from 1
