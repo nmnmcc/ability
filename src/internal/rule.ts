@@ -7,8 +7,6 @@
  */
 import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
-import * as MutableHashMap from "effect/MutableHashMap"
-import * as Option from "effect/Option"
 import * as Condition from "../Condition.ts"
 import type * as Domain from "../Domain.ts"
 import type * as Policy from "../Policy.ts"
@@ -170,13 +168,19 @@ export const matchesInside = (pattern: string, field: string): boolean =>
 export const fitsOf = (
 	catalog: Catalog.Catalog,
 ): ((pattern: string) => boolean) => {
-	const memo = MutableHashMap.empty<string, boolean>()
-	return (pattern) =>
-		Option.getOrElse(MutableHashMap.get(memo, pattern), () => {
-			const found = Patterns.fitsCatalog(Patterns.parseBound(pattern), catalog)
-			MutableHashMap.set(memo, pattern, found)
-			return found
-		})
+	// A native `Map`: the hash of a string in Effect has no random seed, and a
+	// policy could hold very many patterns with one hash. The engine hashes a
+	// string with a random seed.
+	const memo = new Map<string, boolean>()
+	return (pattern) => {
+		const known = memo.get(pattern)
+		if (known !== undefined) {
+			return known
+		}
+		const found = Patterns.fitsCatalog(Patterns.parseBound(pattern), catalog)
+		memo.set(pattern, found)
+		return found
+	}
 }
 
 /**

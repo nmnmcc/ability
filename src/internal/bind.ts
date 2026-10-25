@@ -41,8 +41,13 @@ export interface RuleData {
 interface Memo {
 	/** The suggestion for each name, by the place where it was looked for. */
 	readonly suggestions: MutableHashMap.MutableHashMap<string, string>
-	/** If a pattern matches a field of a kind, by the kind and the pattern. */
-	readonly fits: MutableHashMap.MutableHashMap<string, boolean>
+	/**
+	 * If a pattern matches a field of a kind, by the kind and the pattern. The
+	 * patterns come from a policy, so the map is native: the hash of a string
+	 * in Effect has no random seed, and a policy could hold very many
+	 * patterns with one hash. The engine hashes a string with a random seed.
+	 */
+	readonly fits: Map<string, boolean>
 	/** The count of the issues of conditions so far. It belongs to one binding. */
 	readonly issues: { count: number; noted: boolean }
 	/** The steps of the checks of patterns so far. It belongs to one binding. */
@@ -51,7 +56,7 @@ interface Memo {
 
 const makeMemo = (): Memo => ({
 	suggestions: MutableHashMap.empty(),
-	fits: MutableHashMap.empty(),
+	fits: new Map(),
 	issues: { count: 0, noted: false },
 	work: { steps: 0, noted: false },
 })
@@ -230,7 +235,7 @@ const patternIssues = (
 				Arr.reduce(known, false, (before, descriptor) => {
 					const key = `${descriptor.kind}\u0000${pattern}`
 					return (
-						Option.getOrElse(MutableHashMap.get(memo.fits, key), () => {
+						Option.getOrElse(Option.fromUndefinedOr(memo.fits.get(key)), () => {
 							// Each check of a pattern reads the fields of a catalog. The
 							// work of one binding has a limit, so very many patterns stop
 							// with one issue, and the policy does not load.
@@ -240,7 +245,7 @@ const patternIssues = (
 								return true
 							}
 							const found = Patterns.fitsCatalog(parsed, descriptor.catalog)
-							MutableHashMap.set(memo.fits, key, found)
+							memo.fits.set(key, found)
 							return found
 						}) || before
 					)
@@ -577,8 +582,12 @@ export const ruleIssues = (
 	memo: Memo = makeMemo(),
 ): ReadonlyArray<Issue> => {
 	const all = rule.resources.includes("*")
-	// Each kind is checked one time, also when the list names it again.
-	const names = Arr.dedupe(Arr.filter(rule.resources, (kind) => kind !== "*"))
+	// Each kind is checked one time, also when the list names it again. A
+	// native `Set` finds the copies in one pass: `Arr.dedupe` compares each
+	// name with each name before it, and a stored rule may name very many.
+	const names = Array.from(
+		new Set(Arr.filter(rule.resources, (kind) => kind !== "*")),
+	)
 	const kinds = Array.from(HashMap.keys(domain.resources))
 	const named = Arr.flatMap(names, (kind) =>
 		Option.toArray(HashMap.get(domain.resources, kind)),

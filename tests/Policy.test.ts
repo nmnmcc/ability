@@ -1388,22 +1388,63 @@ describe("Policy", () => {
 
 	describe("strings with one hash", () => {
 		// Effect hashes a string from its end, with `h = (h * 33) ^ code`, and
-		// with no random seed. For a string of two codes `a` and `b`, the hash
-		// after `b` gives the one `a` that makes the hash `target`, when the
-		// high bits agree. So these strings are different, with one hash.
-		const start = Math.imul(5381, 33)
-		const after = (b: number) => Math.imul(start ^ b, 33)
-		const high = after(0) >>> 16
-		const target = (high << 16) | 0x1234
-		const strings = Arr.flatMap(Arr.range(0, 0xffff), (b) =>
-			after(b) >>> 16 === high
-				? [String.fromCharCode((after(b) ^ target) & 0xffff, b)]
-				: [],
+		// with no random seed. From a state `h`, for two codes `a` and `b`, the
+		// state after `b` gives the one `a` that makes the state `target`, when
+		// the high bits agree. So `blocks` gives different strings of two codes
+		// that take one state to one state.
+		const blocks = (state: number) => {
+			const after = (b: number) => Math.imul(Math.imul(state, 33) ^ b, 33)
+			const high = after(0) >>> 16
+			const target = (high << 16) | 0x1234
+			return {
+				target,
+				strings: Arr.flatMap(Arr.range(0, 0xffff), (b) =>
+					after(b) >>> 16 === high
+						? [String.fromCharCode((after(b) ^ target) & 0xffff, b)]
+						: [],
+				),
+			}
+		}
+		const first = blocks(5381)
+		const strings = first.strings
+		// A block from the state after `strings`, and then one of `strings`,
+		// gives very many more strings with one hash. The names leave out the
+		// codes that a field pattern reads.
+		const longer = Arr.filter(
+			Arr.flatMap(Arr.take(blocks(first.target).strings, 26), (head) =>
+				Arr.map(strings, (tail) => head + tail),
+			),
+			(text) => !/[.*\\]/.test(text),
 		)
 
 		it("has very many strings with one hash", () => {
 			assert.isAbove(strings.length, 1900)
 			assert.strictEqual(new Set(Arr.map(strings, Hash.string)).size, 1)
+			assert.isAbove(longer.length, 45_000)
+			assert.strictEqual(new Set(Arr.map(longer, Hash.string)).size, 1)
+		})
+
+		it("binds a rule with very many kinds and patterns of them in a short time", () => {
+			const begin = Date.now()
+			const result = Schema.decodeResult(Policy.schema(App))({
+				_tag: "Rules",
+				algorithm: "denyOverrides",
+				rules: [
+					{
+						_tag: "Allow",
+						actions: ["read"],
+						resources: longer,
+					},
+					{
+						_tag: "Allow",
+						actions: ["read"],
+						resources: ["Bot"],
+						fields: Arr.map(longer, (text) => `*${text}`),
+					},
+				],
+			})
+			assert.isTrue(Result.isFailure(result))
+			assert.isBelow(Date.now() - begin, 3000)
 		})
 
 		it("searches the tests of them in a short time", () => {
@@ -2221,6 +2262,27 @@ describe("Policy", () => {
 				"steps to check",
 			)
 		})
+	})
+
+	it("binds a rule that names very many kinds in a short time", () => {
+		const start = Date.now()
+		const result = Schema.decodeResult(Policy.schema(App))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: Arr.makeBy(50_000, (index) => `Kind${String(index)}`),
+				},
+			],
+		})
+		assert.isTrue(Result.isFailure(result))
+		assert.include(
+			String(Result.isFailure(result) ? result.failure : ""),
+			'There is no resource with the kind "Kind0"',
+		)
+		assert.isBelow(Date.now() - start, 3000)
 	})
 
 	it("binds a very long wrong name in a short time", () => {
