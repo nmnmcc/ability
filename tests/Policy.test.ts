@@ -1914,6 +1914,34 @@ describe("Policy", () => {
 		)
 	})
 
+	it("binds a very long wrong name in a short time", () => {
+		const Wide = Resource.make("Wide", {
+			actions: ["read"],
+			fields: Object.fromEntries(
+				Array.from({ length: 1000 }, (_, index) => [
+					`field${String(index)}`,
+					Schema.String,
+				]),
+			),
+		})
+		const Wides = Domain.make({ principal: Caller, resources: [Wide] })
+		const start = Date.now()
+		const exit = Schema.decodeExit(Policy.schema(Wides))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Wide"],
+					when: { _tag: "Exists", field: "x".repeat(100_000) },
+				},
+			],
+		})
+		assert.isTrue(Exit.isFailure(exit))
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
 	it("counts the meta of a rule in the budget of a decode", () => {
 		const Metas = Domain.make({
 			principal: Caller,

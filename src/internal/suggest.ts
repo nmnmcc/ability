@@ -46,6 +46,9 @@ const distance = (left: string, right: string): number => {
 	return last[to.length]!
 }
 
+/** The longest name that gets a suggestion. */
+const maxNameLength = 64
+
 /**
  * Gives the name in `names` that is nearest to `name`, when it is near
  * enough: at most one change for a short name, and two for a longer one.
@@ -54,9 +57,20 @@ export const suggest = (
 	name: string,
 	names: ReadonlyArray<string>,
 ): string | undefined => {
+	// The work of one distance grows with the length of both names, so a very
+	// long name gets no suggestion.
+	if (name.length > maxNameLength) {
+		return undefined
+	}
 	const most = Math.min(2, Math.max(1, Math.floor(name.length / 2)))
-	const scored = Arr.map(
+	// Two names whose lengths differ by more than `most` are not near, so
+	// only the others need a distance.
+	const close = Arr.filter(
 		names,
+		(other) => Math.abs(other.length - name.length) <= most,
+	)
+	const scored = Arr.map(
+		close,
 		(other) => [other, distance(name, other)] as const,
 	)
 	const near = Arr.filter(
