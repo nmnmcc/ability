@@ -20,6 +20,7 @@ import {
 	sharedBot,
 	Trigger,
 } from "./fixtures.ts"
+import * as Catalog from "../src/internal/catalog.ts"
 
 type App = typeof App
 
@@ -33,6 +34,10 @@ const guest = {
 } as unknown as Caller
 
 const PolicySchemaOfApp = Policy.schema(App)
+
+/** Tests if the catalog of a resource has a field at a path. */
+const hasField = (resource: Resource.Any, path: string): boolean =>
+	Catalog.lookup(Resource.descriptor(resource).catalog, path) !== undefined
 
 describe("Policy", () => {
 	describe("algorithms", () => {
@@ -1403,9 +1408,8 @@ describe("Policy", () => {
 				owner: Schema.OptionFromNullOr(Schema.Struct({ id: Schema.String })),
 			},
 		})
-		const schema = Resource.descriptor(Note).schema
-		assert.isTrue(Resource.hasPath(schema, "owner"))
-		assert.isFalse(Resource.hasPath(schema, "owner.id"))
+		assert.isTrue(hasField(Note, "owner"))
+		assert.isFalse(hasField(Note, "owner.id"))
 	})
 
 	it("keeps a field that holds a scalar or a struct", () => {
@@ -1524,7 +1528,7 @@ describe("Policy", () => {
 		assert.notStrictEqual(covered._tag, "All")
 	})
 
-	it("reads a field that a value has from its class", () => {
+	it("reads only the own data fields of a value", () => {
 		class Info {
 			get owner() {
 				return "alice"
@@ -1536,7 +1540,11 @@ describe("Policy", () => {
 			unknown,
 			unknown
 		>()
-		assert.isTrue(Condition.evaluateSync($.exists("info.owner"), { value }))
+		// A getter is not data that a Schema describes, so a read is a defect.
+		assert.throws(
+			() => Condition.evaluateSync($.exists("info.owner"), { value }),
+			/not plain data/,
+		)
 		// A name of `Object.prototype` is not a field.
 		assert.isFalse(
 			Condition.evaluateSync(
@@ -1738,7 +1746,7 @@ describe("Policy", () => {
 		)
 	})
 
-	it("reads a name of Object.prototype that a class gives another value", () => {
+	it("does not read a name of Object.prototype that a class gives another value", () => {
 		class Info {
 			get toString() {
 				return "x"
@@ -1749,10 +1757,12 @@ describe("Policy", () => {
 			unknown,
 			unknown
 		>()
-		assert.isTrue(
-			Condition.evaluateSync($.exists("info.toString"), {
-				value: { info: new Info() },
-			}),
+		assert.throws(
+			() =>
+				Condition.evaluateSync($.exists("info.toString"), {
+					value: { info: new Info() },
+				}),
+			/not plain data/,
 		)
 		assert.isFalse(
 			Condition.evaluateSync($.exists("info.toString"), {
@@ -1805,7 +1815,7 @@ describe("Policy", () => {
 		)
 	})
 
-	it("takes a principal field that comes from a getter of its class", () => {
+	it("does not take a principal field that comes from a getter of its class", () => {
 		class Member extends Principal.Class<Member>("Member")({
 			id: Schema.String,
 		}) {
@@ -1814,22 +1824,18 @@ describe("Policy", () => {
 			}
 		}
 		const Members = Domain.make({ principal: Member, resources: [Bot] })
-		const policy = Policy.define(Members)(function* (_) {
-			yield* _.allow("read", Bot, {
-				when: ($) => $.eq("ownerUserId", $.principal("ownerId")),
-			})
-		})
-		assert.strictEqual(
-			Policy.decideSync(policy, {
-				principal: Member.make({ id: "alice" }),
-				action: "read",
-				resource: aliceBot,
-			})._tag,
-			"Allow",
+		assert.throws(
+			() =>
+				Policy.define(Members)(function* (_) {
+					yield* _.allow("read", Bot, {
+						when: ($) => $.eq("ownerUserId", $.principal("ownerId")),
+					})
+				}),
+			/The principal has no field "ownerId"/,
 		)
 	})
 
-	it("takes a getter of a class in the values of a record", () => {
+	it("does not take a getter of a class in the values of a record", () => {
 		class Owner extends Schema.Class<Owner>("Owner")({
 			id: Schema.String,
 		}) {
@@ -1842,18 +1848,14 @@ describe("Policy", () => {
 			fields: { users: Schema.Record(Schema.String, Owner) },
 		})
 		const Teams = Domain.make({ principal: Caller, resources: [Team] })
-		const policy = Policy.define(Teams)(function* (_) {
-			yield* _.allow("read", Team, {
-				when: ($) => $.eq("users.owner.name", "admin"),
-			})
-		})
-		assert.strictEqual(
-			Policy.decideSync(policy, {
-				principal: alice,
-				action: "read",
-				resource: Team.make({ users: { owner: Owner.make({ id: "admin" }) } }),
-			})._tag,
-			"Allow",
+		assert.throws(
+			() =>
+				Policy.define(Teams)(function* (_) {
+					yield* _.allow("read", Team, {
+						when: ($) => $.eq("users.owner.name", "admin"),
+					})
+				}),
+			/is not a field of every resource of the rule/,
 		)
 	})
 
@@ -2478,7 +2480,7 @@ describe("Policy", () => {
 		)
 	})
 
-	it("grants the whole value for a ** inside a name, a number key and a getter", () => {
+	it("grants the whole value for a ** inside a name and a number key, not a getter", () => {
 		class Owner extends Schema.Class<Owner>("PatternOwner")({
 			id: Schema.String,
 		}) {
@@ -2516,9 +2518,9 @@ describe("Policy", () => {
 		assert.strictEqual(decide("data.**value"), "Allow")
 		assert.strictEqual(decide("data.**missing"), "NotApplicable")
 		assert.strictEqual(decide("values.*"), "Allow")
-		assert.strictEqual(decide("owner.label*"), "Allow")
+		assert.strictEqual(decide("owner.label*"), "NotApplicable")
 		assert.strictEqual(decide("owner.name*"), "NotApplicable")
-		assert.isTrue(Resource.hasPath(Resource.descriptor(Box).schema, "values.1"))
+		assert.isTrue(hasField(Box, "values.1"))
 	})
 
 	it("does not take a fixed value in a path test that the path can not hold", () => {
@@ -2569,7 +2571,7 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 1000)
 	})
 
-	it("takes a getter of a class with an annotation, a check or a suspend", () => {
+	it("does not take a getter of a class with an annotation, a check or a suspend", () => {
 		class Owner extends Schema.Class<Owner>("WrappedOwner")({
 			id: Schema.String,
 		}) {
@@ -2587,13 +2589,14 @@ describe("Policy", () => {
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
 		const owner = Owner.make({ id: "a" })
+		// The data fields of the class are fields through each wrapper.
 		const policy = Policy.define(Notes)(function* (_) {
 			yield* _.allow("read", Note, {
 				when: ($) =>
 					$.and(
-						$.eq("annotated.label", "a"),
-						$.eq("checked.label", "a"),
-						$.eq("suspended.label", "a"),
+						$.eq("annotated.id", "a"),
+						$.eq("checked.id", "a"),
+						$.eq("suspended.id", "a"),
 					),
 			})
 		})
@@ -2609,46 +2612,18 @@ describe("Policy", () => {
 			})._tag,
 			"Allow",
 		)
-	})
-
-	it("does not cover a kind when a rule reads a getter that a smaller condition leaves out", () => {
-		class Info extends Schema.Class<Info>("ThrowingInfo")({
-			id: Schema.String,
-		}) {
-			get allowed(): boolean {
-				throw new globalThis.Error("no")
-			}
-		}
-		const Note = Resource.make("GetterNote", {
-			actions: ["read"],
-			fields: { info: Info },
-		})
-		const Notes = Domain.make({ principal: Caller, resources: [Note] })
-		const policy = Policy.define(Notes)(function* (_) {
-			yield* _.allow("read", Note, {
-				when: ($) => $.or($.eq("info.allowed", true), Condition.always),
-			})
-		})
-		assert.strictEqual(
-			Policy.coverage(policy, {
-				principal: alice,
-				action: "read",
-				kind: "GetterNote",
-			})._tag,
-			"Unknown",
-		)
 		assert.throws(
 			() =>
-				Policy.residual(policy, {
-					principal: alice,
-					action: "read",
-					kind: "GetterNote",
+				Policy.define(Notes)(function* (_) {
+					yield* _.allow("read", Note, {
+						when: ($) => $.eq("annotated.label", "a"),
+					})
 				}),
-			/reads a getter/,
+			/is not a field of every resource of the rule/,
 		)
 	})
 
-	it("gives no residual for a getter in a branch of a union or in a scope", () => {
+	it("reads a getter in a branch of a union as a defect", () => {
 		class Owner extends Schema.Class<Owner>("UnionOwner")({
 			id: Schema.String,
 		}) {
@@ -2656,6 +2631,29 @@ describe("Policy", () => {
 				throw new globalThis.Error("no")
 			}
 		}
+		const Box = Resource.make("UnionBox", {
+			actions: ["read"],
+			fields: {
+				box: Schema.Union([Owner, Schema.Struct({ flag: Schema.String })]),
+			},
+		})
+		const Boxes = Domain.make({ principal: Caller, resources: [Box] })
+		const policy = Policy.define(Boxes)(function* (_) {
+			yield* _.allow("read", Box, {
+				when: ($) => $.eq("box.flag", "yes"),
+			})
+		})
+		const decide = (box: Resource.Data<typeof Box>["box"]) =>
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: Box.make({ box }),
+			})._tag
+		assert.strictEqual(decide({ flag: "yes" }), "Allow")
+		assert.throws(() => decide(Owner.make({ id: "o" })), /not plain data/)
+	})
+
+	it("does not take a scope that reads a getter", () => {
 		class Info extends Schema.Class<Info>("ScopeInfo")({
 			id: Schema.String,
 		}) {
@@ -2663,96 +2661,41 @@ describe("Policy", () => {
 				throw new globalThis.Error("no")
 			}
 		}
-		const Box = Resource.make("UnionBox", {
+		const Box = Resource.make("ScopeBox", {
 			actions: ["read"],
-			fields: {
-				box: Schema.Union([Owner, Schema.Struct({ flag: Schema.String })]),
-				info: Info,
-			},
+			fields: { info: Info },
 		})
 		const Boxes = Domain.make({ principal: Caller, resources: [Box] })
-		const policy = Policy.define(Boxes)(function* (_) {
-			yield* _.allow("read", Box, {
-				when: ($) => $.or($.eq("box.flag", "yes"), Condition.always),
-			})
-		})
-		const request = {
-			principal: alice,
-			action: "read",
-			kind: "UnionBox",
-		} as const
-		assert.throws(() => Policy.residual(policy, request), /reads a getter/)
-		assert.strictEqual(Policy.coverage(policy, request)._tag, "Unknown")
 		const open = Policy.define(Boxes)(function* (_) {
 			yield* _.allow("read", Box)
 		})
 		const scoped = {
-			...request,
+			principal: alice,
+			action: "read",
+			kind: "ScopeBox",
 			within: ($) => $.or($.eq("info.allowed", true), Condition.always),
 		} satisfies Policy.KindRequest<typeof Boxes>
-		assert.strictEqual(Policy.coverage(open, scoped)._tag, "Unknown")
-		// A getter on the way to a field is a read of a getter too.
-		class Holder extends Schema.Class<Holder>("PathHolder")({
-			id: Schema.String,
-		}) {
-			get details(): { readonly flag: boolean } {
-				throw new globalThis.Error("no")
-			}
-		}
-		const Deep = Resource.make("DeepBox", {
-			actions: ["read"],
-			fields: {
-				owner: Schema.Union([
-					Holder,
-					Schema.Struct({ details: Schema.Struct({ flag: Schema.Boolean }) }),
-				]),
-			},
-		})
-		const Deeps = Domain.make({ principal: Caller, resources: [Deep] })
-		const deep = Policy.define(Deeps)(function* (_) {
-			yield* _.allow("read", Deep, {
-				when: ($) => $.or($.eq("owner.details.flag", true), Condition.always),
-			})
-		})
 		assert.throws(
-			() =>
-				Policy.residual(deep, {
-					principal: alice,
-					action: "read",
-					kind: "DeepBox",
-				}),
-			/reads a getter/,
+			() => Policy.residual(open, scoped),
+			/A scope does not fit the domain/,
 		)
-		// Also next to a predicate, which keeps the reads of the rules.
-		const withPredicate = Policy.define(Boxes)(function* (_) {
-			yield* _.allow("read", Box, {
-				when: ($) => $.predicate("always", () => true),
-			})
-		})
 		assert.throws(
-			() => Policy.residual(withPredicate, scoped),
-			/scope of this request reads a getter/,
+			() => Policy.coverage(open, scoped),
+			/A scope does not fit the domain/,
 		)
 	})
 
 	it("keeps a residual with a predicate in an unknown coverage", () => {
-		class Info extends Schema.Class<Info>("TrueInfo")({
-			id: Schema.String,
-		}) {
-			get allowed(): boolean {
-				return true
-			}
-		}
 		const Note = Resource.make("PredicateNote", {
 			actions: ["read"],
-			fields: { info: Info },
+			fields: { allowed: Schema.Boolean },
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
 		const policy = Policy.define(Notes)(function* (_) {
 			yield* _.allow("read", Note, {
 				when: ($) =>
 					$.and(
-						$.eq("info.allowed", true),
+						$.eq("allowed", true),
 						$.predicate("extra", () => true),
 					),
 			})
@@ -2784,7 +2727,7 @@ describe("Policy", () => {
 		assert.strictEqual(covered.condition._tag, "Compare")
 	})
 
-	it("finds a getter for a pattern with **", () => {
+	it("does not find a getter for a pattern with **", () => {
 		class Owner extends Schema.Class<Owner>("StarOwner")({
 			id: Schema.String,
 		}) {
@@ -2808,7 +2751,7 @@ describe("Policy", () => {
 					resource: Box.make({ owner: Owner.make({ id: "o" }) }),
 				},
 			)._tag,
-			"Allow",
+			"NotApplicable",
 		)
 	})
 
@@ -3300,7 +3243,7 @@ describe("Policy", () => {
 		)
 	})
 
-	it("does not take a path that goes past a getter", () => {
+	it("does not take a path to a getter or past it", () => {
 		class Owner extends Schema.Class<Owner>("Owner")({
 			id: Schema.String,
 		}) {
@@ -3333,6 +3276,11 @@ describe("Policy", () => {
 		})
 		assert.isTrue(
 			Exit.isSuccess(
+				Schema.decodeUnknownExit(PolicySchema)(policy("owner.id")),
+			),
+		)
+		assert.isTrue(
+			Exit.isFailure(
 				Schema.decodeUnknownExit(PolicySchema)(policy("owner.label")),
 			),
 		)
@@ -3393,7 +3341,7 @@ describe("Policy", () => {
 		)
 	})
 
-	it("takes a getter of a class inside a codec", () => {
+	it("does not take a getter of a class inside a codec", () => {
 		class Member extends Schema.Class<Member>("Member")({
 			id: Schema.String,
 		}) {
@@ -3407,7 +3355,7 @@ describe("Policy", () => {
 		})
 		const policy = Policy.define(Members)(function* (_) {
 			yield* _.allow("read", Bot, {
-				when: ($) => $.eq("ownerUserId", $.principal("ownerId")),
+				when: ($) => $.eq("ownerUserId", $.principal("id")),
 			})
 		})
 		assert.strictEqual(
@@ -3417,6 +3365,15 @@ describe("Policy", () => {
 				resource: aliceBot,
 			})._tag,
 			"Allow",
+		)
+		assert.throws(
+			() =>
+				Policy.define(Members)(function* (_) {
+					yield* _.allow("read", Bot, {
+						when: ($) => $.eq("ownerUserId", $.principal("ownerId")),
+					})
+				}),
+			/The principal has no field "ownerId"/,
 		)
 	})
 
@@ -3489,7 +3446,7 @@ describe("Policy", () => {
 		assert.throws(() => Policy.any([{ ...policy } as Policy.Policy<App>]))
 	})
 
-	it("takes a field that is a getter of a nested class", () => {
+	it("does not take a field that is a getter of a nested class", () => {
 		class Info extends Schema.Class<Info>("Info")({ id: Schema.String }) {
 			get owner() {
 				return this.id
@@ -3500,12 +3457,53 @@ describe("Policy", () => {
 			fields: { info: Info },
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
-		assert.doesNotThrow(() =>
-			Policy.define(Notes)(function* (_) {
-				yield* _.allow("read", Note, {
-					when: ($) => $.eq("info.owner", "alice"),
-				})
+		assert.throws(
+			() =>
+				Policy.define(Notes)(function* (_) {
+					yield* _.allow("read", Note, {
+						when: ($) => $.eq("info.owner", "alice"),
+					})
+				}),
+			/is not a field of every resource of the rule/,
+		)
+	})
+
+	it("says which name a name with a mistake may mean", () => {
+		const bind = (rule: Partial<Rule.Shape>) => () =>
+			Policy.rules(App, [
+				Rule.make({
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Bot"],
+					...rule,
+				} as Rule.Shape),
+			])
+		const $ = Condition.builder<{ readonly nmae: string }, unknown, unknown>()
+		assert.throws(
+			bind({ when: $.eq("nmae", "a") as Condition.Condition }),
+			/The field "nmae" is not a field of every resource of the rule. Did you mean "name"\?/,
+		)
+		assert.throws(
+			bind({ resources: ["Bto"] }),
+			/There is no resource with the kind "Bto". Did you mean "Bot"\?/,
+		)
+		assert.throws(
+			bind({ actions: ["raed"] }),
+			/The action "raed" is not an action of these resources. Did you mean "read"\?/,
+		)
+		const ref = Condition.builder<
+			{ readonly ownerUserId: string },
+			unknown,
+			{ readonly userid: string }
+		>()
+		assert.throws(
+			bind({
+				when: ref.eq(
+					"ownerUserId",
+					ref.principal("userid"),
+				) as Condition.Condition,
 			}),
+			/The principal has no field "userid". Did you mean "userId"\?/,
 		)
 	})
 
@@ -3923,12 +3921,8 @@ describe("Policy", () => {
 			fields: { settings: Schema.Record(Schema.String, Schema.String) },
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
-		assert.isTrue(
-			Resource.hasPath(Resource.descriptor(Note).schema, "settings.mode"),
-		)
-		assert.isFalse(
-			Resource.hasPath(Resource.descriptor(Note).schema, "settings.mode.x"),
-		)
+		assert.isTrue(hasField(Note, "settings.mode"))
+		assert.isFalse(hasField(Note, "settings.mode.x"))
 		assert.throws(() =>
 			Policy.rules(Notes, [
 				Rule.make({
@@ -3951,9 +3945,8 @@ describe("Policy", () => {
 				),
 			},
 		})
-		const schema = Resource.descriptor(Note).schema
-		assert.isTrue(Resource.hasPath(schema, "settings.public-mode"))
-		assert.isFalse(Resource.hasPath(schema, "settings.private-mode"))
+		assert.isTrue(hasField(Note, "settings.public-mode"))
+		assert.isFalse(hasField(Note, "settings.private-mode"))
 	})
 
 	it("takes a deep path in a recursive Schema", () => {

@@ -571,8 +571,8 @@ export const matchesInside = (pattern: string, field: string): boolean =>
 
 /**
  * Tests if a field pattern may match a field of a kind: a field in its list,
- * a path that the Schema has, such as a key of a record, or a getter. See
- * `Resource.hasMatchingPath` and `Resource.hasMatchingGetter`.
+ * or a path that the Schema has, such as a key of a record. See
+ * `Resource.hasMatchingPath`.
  */
 const fitsSomeField = (
 	pattern: string,
@@ -582,11 +582,8 @@ const fitsSomeField = (
 	// A pattern with more parts than a field path may have fits no other
 	// field, and it is not cut into lists of parts.
 	(pattern.split(".", maxPatternParts + 1).length <= maxPatternParts &&
-		Arr.some(
-			partLists(pattern),
-			(parts) =>
-				Resource.hasMatchingPath(descriptor.schema, parts, matchesField) ||
-				Resource.hasMatchingGetter(descriptor.schema, parts, matchesField),
+		Arr.some(partLists(pattern), (parts) =>
+			Resource.hasMatchingPath(descriptor.schema, parts, matchesField),
 		))
 
 /** The most parts of a pattern that the walk of the Schema takes. */

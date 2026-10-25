@@ -45,6 +45,7 @@ import { hasProperty, isObject } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import * as SchemaIssue from "effect/SchemaIssue"
 import * as SchemaTransformation from "effect/SchemaTransformation"
+import { readPath } from "./internal/read.ts"
 import * as Resource from "./Resource.ts"
 
 /**
@@ -940,46 +941,12 @@ export interface Input {
 }
 
 /**
- * Gets a field of an object by a path with dots. A missing field, or a field
- * under a value that is not an object, gives `null`.
+ * Gets a field of a value by a path with dots. It reads only plain data: see
+ * `readPart`. A missing field, or a field under a value that is not an object,
+ * gives `null`.
  */
-/**
- * Tests if an object has a field. A field may be the object's own, or come
- * from its class, as a getter does: `Schema.is` reads such a field too. A
- * name that every object has from `Object.prototype`, such as `constructor`
- * or `toString`, is a field only when the object gives it another value, as
- * its own or from its class.
- */
-const hasField = (value: object, key: string): boolean => {
-	if (Object.hasOwn(value, key)) {
-		return true
-	}
-	// `__proto__` reads the prototype of every object, so only an own one is a
-	// field.
-	if (key === "__proto__" || !(key in value)) {
-		return false
-	}
-	return (
-		!(key in Object.prototype) ||
-		(value as Record<string, unknown>)[key] !==
-			(Object.prototype as Record<string, unknown>)[key]
-	)
-}
-
 const getField = (value: unknown, path: string): unknown =>
-	Option.match(
-		Arr.reduce(path.split("."), Option.some(value), (cursor, key) =>
-			Option.flatMap(cursor, (current) =>
-				isObject(current) && hasField(current, key)
-					? Option.some((current as Record<string, unknown>)[key])
-					: Option.none(),
-			),
-		),
-		{
-			onNone: () => null,
-			onSome: (field) => (field === undefined ? null : field),
-		},
-	)
+	readPath(value, path.split("."))
 
 // Any number is a scalar, also `Infinity` and `NaN`: a principal field may
 // hold them, and a test compares them as a fixed value of a condition does.

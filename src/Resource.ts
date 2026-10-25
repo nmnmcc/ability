@@ -25,8 +25,7 @@ import * as Arr from "effect/Array"
 import { Class as DataClass } from "effect/Data"
 import * as HashMap from "effect/HashMap"
 import * as HashSet from "effect/HashSet"
-import * as Option from "effect/Option"
-import { hasProperty, isObject } from "effect/Predicate"
+import { hasProperty } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import * as SchemaAST from "effect/SchemaAST"
 import * as Catalog from "./internal/catalog.ts"
@@ -179,73 +178,6 @@ export interface Options<
  */
 class ResourceDescriptor extends DataClass<Descriptor> {}
 
-/** The prototypes from `prototype` up, below `Object.prototype`. */
-const prototypesFrom = (prototype: unknown): ReadonlyArray<object> =>
-	Arr.unfold(prototype, (current) =>
-		typeof current === "object" &&
-		current !== null &&
-		current !== Object.prototype
-			? Option.some([current, Object.getPrototypeOf(current)] as const)
-			: Option.none(),
-	)
-
-/**
- * Gives the prototype of the class of a class node, or `undefined`. The node
- * does not keep the class: a class Schema with an annotation or a check, or
- * one inside `Schema.suspend`, is a new Schema with the same node. So the
- * walk asks the node to make a value with no check, and reads its prototype.
- *
- * This uses the `"~constructor"` annotation of Effect, which is not a public
- * API: it gives a link whose decode makes a value of the class from its
- * fields without a check. When that is not so, the walk gives `undefined`,
- * and the check of a policy says no to the getter.
- */
-const classPrototype = (ast: SchemaAST.Declaration): object | undefined => {
-	const make: unknown = ast.annotations?.["~constructor"]
-	if (typeof make !== "function") {
-		return undefined
-	}
-	try {
-		const made: unknown = make(ast.typeParameters)
-		const decode: unknown =
-			hasProperty(made, "link") &&
-			hasProperty(made.link, "transformation") &&
-			hasProperty(made.link.transformation, "decode")
-				? made.link.transformation.decode
-				: undefined
-		const value: unknown =
-			hasProperty(decode, "transform") && typeof decode.transform === "function"
-				? decode.transform({})
-				: undefined
-		return isObject(value) ? Object.getPrototypeOf(value) : undefined
-	} catch {
-		return undefined
-	}
-}
-
-/**
- * Tests if a path names a getter of a class Schema, such as a getter of a
- * `Schema.Class` or a `Principal.Class`, at its root or in a nested field. A
- * condition reads such a field, and the types of a condition take it, so the
- * check of a policy takes it too. It goes into the fields of a struct, the
- * values of a record, the members of a union, `Schema.suspend`, and a class
- * with an annotation or a check.
- *
- * @stability stable
- * @category predicates
- * @since 1.0.0
- */
-export const hasGetter = (schema: unknown, path: string): boolean =>
-	!isTooLong(path) &&
-	Schema.isSchema(schema) &&
-	getterAt(
-		schema.ast,
-		path.split("."),
-		0,
-		(part, name) => part === name,
-		new Map(),
-	)
-
 /**
  * The most parts that a field path may have. The walks below call themselves
  * for each part, and a path comes from the input of a policy. So a very long
@@ -256,102 +188,6 @@ const maxPathParts = 256
 /** Tests if a field path has more than {@link maxPathParts} parts. */
 const isTooLong = (path: string): boolean =>
 	path.split(".", maxPathParts + 1).length > maxPathParts
-
-/**
- * Tests if a Schema has a getter of a class at a path whose parts fit
- * `parts`, as `hasGetter` does for one path. A part fits a name when `fits`
- * says so, as a part with `*` fits many names. A part `**` stands for any
- * number of parts, also none.
- *
- * @stability stable
- * @category predicates
- * @since 1.0.0
- */
-export const hasMatchingGetter = (
-	schema: unknown,
-	parts: ReadonlyArray<string>,
-	fits: (part: string, name: string) => boolean,
-): boolean =>
-	parts.length <= maxPathParts &&
-	Schema.isSchema(schema) &&
-	getterAt(schema.ast, parts, 0, fits, new Map())
-
-/** The names of the getters of a prototype and the prototypes above it. */
-const getterNames = (prototype: object | undefined): ReadonlyArray<string> =>
-	Arr.flatMap(prototypesFrom(prototype), (current) =>
-		Arr.filter(
-			Object.getOwnPropertyNames(current),
-			(name) =>
-				Object.getOwnPropertyDescriptor(current, name)?.get !== undefined,
-		),
-	)
-
-const getterAt = (
-	ast: SchemaAST.AST,
-	names: ReadonlyArray<string>,
-	index: number,
-	fits: (part: string, name: string) => boolean,
-	memo: PathMemo<boolean>,
-): boolean =>
-	rememberAt(memo, ast, index, false, () => {
-		const name = names[index]
-		if (name === undefined) {
-			return false
-		}
-		const last = index === names.length - 1
-		const next = (type: SchemaAST.AST, at: number) =>
-			getterAt(type, names, at, fits, memo)
-		// A `**` may stand for no parts.
-		if (name === "**" && !last && next(ast, index + 1)) {
-			return true
-		}
-		switch (ast._tag) {
-			case "Union":
-				return Arr.some(ast.types, (type) => next(type, index))
-			case "Suspend":
-				return next(ast.thunk(), index)
-			case "Declaration": {
-				const inner = classStruct(ast)
-				if (inner === undefined) {
-					return false
-				}
-				// A path ends at a getter. The library can not see the type of
-				// the value of a getter, so it can not check a path that goes
-				// past it.
-				return last
-					? Arr.some(getterNames(classPrototype(ast)), (getter) =>
-							fits(name, getter),
-						)
-					: next(inner, index)
-			}
-			case "Objects":
-				return (
-					!last &&
-					(Arr.some(
-						ast.propertySignatures,
-						(property) =>
-							typeof property.name === "string" &&
-							// A `**` may stand for this part and more.
-							((name === "**" && next(property.type, index)) ||
-								(fits(name, property.name) && next(property.type, index + 1))),
-					) ||
-						// A record keeps the Schema of its keys and of its values.
-						Arr.some(ast.indexSignatures, (signature) =>
-							name === "**"
-								? hasSomeKey(signature.parameter) &&
-									(next(signature.type, index) ||
-										next(signature.type, index + 1))
-								: Arr.some(
-										[name.replaceAll("*", ""), name.replaceAll("*", "a")],
-										(key) =>
-											fits(name, key) && keyFits(signature.parameter, key),
-									) && next(signature.type, index + 1),
-						))
-				)
-			default:
-				return false
-		}
-	})
 
 /**
  * Tests if a record takes a key. A key of an object is a string, also a key
@@ -649,19 +485,6 @@ const plainAt = (ast: SchemaAST.AST, names: ReadonlyArray<string>): boolean => {
 }
 
 /**
- * Tests if a path names a field of a Schema that holds a value with no named
- * fields: a scalar, or a value such as a record or an array. It goes into
- * records by their keys, and into recursive Schemas as far as the path goes.
- * So it finds paths that {@link fieldPaths} does not list.
- *
- * @stability stable
- * @category predicates
- * @since 1.0.0
- */
-export const hasPath = (schema: Schema.Top, path: string): boolean =>
-	!isTooLong(path) && resolves(schema.ast, path.split("."), 0, new Map())
-
-/**
  * The answers of a walk along a path, by Schema node and by place in the path.
  * Two branches of a union may come to one node at one place, as in a recursive
  * union, and the memo does that work one time. It is a native `Map`, because
@@ -692,45 +515,6 @@ const rememberAt = <A>(
 	places.set(index, result)
 	return result
 }
-
-const resolves = (
-	ast: SchemaAST.AST,
-	names: ReadonlyArray<string>,
-	index: number,
-	memo: PathMemo<boolean>,
-): boolean =>
-	rememberAt(memo, ast, index, false, () => {
-		if (index === names.length) {
-			return index > 0 && holdsValue(ast, new Set())
-		}
-		const name = names[index]!
-		switch (ast._tag) {
-			case "Objects": {
-				const property = ast.propertySignatures.find(
-					(signature) => signature.name === name,
-				)
-				if (property !== undefined) {
-					return resolves(property.type, names, index + 1, memo)
-				}
-				// A key of a record must fit the Schema of the keys.
-				return ast.indexSignatures.some(
-					(signature) =>
-						keyFits(signature.parameter, name) &&
-						resolves(signature.type, names, index + 1, memo),
-				)
-			}
-			case "Union":
-				return ast.types.some((type) => resolves(type, names, index, memo))
-			case "Suspend":
-				return resolves(ast.thunk(), names, index, memo)
-			case "Declaration": {
-				const inner = classStruct(ast)
-				return inner !== undefined && resolves(inner, names, index, memo)
-			}
-			default:
-				return false
-		}
-	})
 
 /**
  * Tests if a Schema has a field whose path fits a pattern. `parts` are the

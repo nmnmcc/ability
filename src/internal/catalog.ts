@@ -12,7 +12,9 @@
  */
 import * as Arr from "effect/Array"
 import * as HashMap from "effect/HashMap"
+import * as HashSet from "effect/HashSet"
 import * as Option from "effect/Option"
+import { hasProperty } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import * as SchemaAST from "effect/SchemaAST"
 import * as Limits from "./limits.ts"
@@ -264,12 +266,56 @@ const kindsOf = (ast: SchemaAST.AST): Kinds => {
 		case "Symbol":
 		case "UniqueSymbol":
 			return objectKinds
+		case "Declaration":
+			// A declaration of Effect in `objectDeclarations` holds an object,
+			// such as a `Date`. Another declaration may hold any value, as
+			// `Schema.Json` or one from `Schema.declare` may.
+			return HashSet.has(objectDeclarations, declarationId(ast))
+				? objectKinds
+				: anyKinds
 		default:
-			// `Schema.Unknown`, `Schema.Void`, `Struct({})`, which takes a string
-			// too, and a declaration that is not a class, such as `Schema.Json`
-			// or one from `Schema.declare`: these may hold any value.
+			// `Schema.Unknown`, `Schema.Void`, and `Struct({})`, which takes a
+			// string too: these may hold any value.
 			return anyKinds
 	}
+}
+
+/**
+ * The ids of the declarations of Effect that hold only objects. Effect puts
+ * the id in the `representation` annotation. A declaration that is not in
+ * this list may hold a scalar, as `Schema.Json` may, so its kinds are any
+ * value.
+ */
+const objectDeclarations = HashSet.make(
+	"effect/schema/Date",
+	"effect/schema/URL",
+	"effect/schema/Uint8Array",
+	"effect/schema/Duration",
+	"effect/schema/DateTimeUtc",
+	"effect/schema/DateTimeZoned",
+	"effect/schema/BigDecimal",
+	"effect/schema/Redacted",
+	"effect/schema/Cause",
+	"effect/schema/Chunk",
+	"effect/schema/HashMap",
+	"effect/schema/HashSet",
+	"effect/schema/ReadonlyMap",
+	"effect/schema/ReadonlySet",
+	"effect/schema/Option",
+	"effect/schema/Result",
+	"effect/schema/Exit",
+	"effect/schema/File",
+	"effect/schema/FormData",
+	"effect/schema/RegExp",
+	"effect/schema/URLSearchParams",
+)
+
+const declarationId = (ast: SchemaAST.Declaration): string | undefined => {
+	const representation: unknown = ast.annotations?.["representation"]
+	return hasProperty(representation, "id") &&
+		typeof representation.id === "string"
+		? representation.id
+		: undefined
 }
 
 /** The things that a walk of the catalog knows at one place. */

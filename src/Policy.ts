@@ -46,16 +46,15 @@ import * as Arr from "effect/Array"
 import * as Chunk from "effect/Chunk"
 import * as Effect from "effect/Effect"
 import { dual } from "effect/Function"
-import * as HashMap from "effect/HashMap"
-import * as HashSet from "effect/HashSet"
 import * as Option from "effect/Option"
-import { hasProperty } from "effect/Predicate"
 import type * as Pipeable from "effect/Pipeable"
 import * as Ref from "effect/Ref"
 import * as Schema from "effect/Schema"
 import * as SchemaIssue from "effect/SchemaIssue"
 import * as SchemaTransformation from "effect/SchemaTransformation"
 import * as Condition from "./Condition.ts"
+import * as Bind from "./internal/bind.ts"
+import * as Catalog from "./internal/catalog.ts"
 import * as Decision from "./Decision.ts"
 import * as Domain from "./Domain.ts"
 import * as Resource from "./Resource.ts"
@@ -557,6 +556,28 @@ const fromNode = (domain: Domain.Any, node: Node): any =>
 	new PolicyData({ domain, node })
 
 /**
+ * The error when a rule does not fit its domain: it names a kind, an action,
+ * a field or a field of the principal that the domain does not have, or it
+ * tests a field with a value that the field can not hold. It has one issue
+ * for each problem, with its path, and a suggestion when a name has a mistake.
+ *
+ * @stability stable
+ * @category errors
+ * @since 2.0.0
+ */
+export class PolicyError extends Schema.TaggedError<PolicyError>(
+	"@nmnmcc/ability/Policy/PolicyError",
+)("PolicyError", {
+	issues: Schema.Array(
+		Schema.Struct({
+			path: Schema.Array(Schema.Union([Schema.String, Schema.Finite])),
+			message: Schema.String,
+		}),
+	),
+	message: Schema.String,
+}) {}
+
+/**
  * Makes a policy from a list of rules.
  *
  * @stability stable
@@ -599,12 +620,20 @@ export const rules: <
 			"A rule comes from the builder of another domain",
 		)
 	}
-	// A rule from `Rule.make` keeps no domain, so its names are checked here.
-	const issues = validate(domain, encodeNode(node))
+	// Every rule is bound to the domain here, also a rule from `Rule.make`.
+	const issues = Arr.flatMap(node.rules, (value, index) =>
+		Bind.ruleIssues(domain, value, ["rules", index]),
+	)
 	if (issues.length > 0) {
-		throw new globalThis.Error(
-			`A rule does not fit the domain: ${issues.map((issue) => issue.issue).join("; ")}`,
-		)
+		throw PolicyError.make({
+			issues: Arr.map(issues, (issue) => ({
+				path: Arr.map(issue.path, (part) =>
+					typeof part === "number" ? part : String(part),
+				),
+				message: issue.issue,
+			})),
+			message: `A rule does not fit the domain: ${issues.map((issue) => issue.issue).join("; ")}`,
+		})
 	}
 	return fromNode(domain, node)
 }
@@ -1138,9 +1167,7 @@ export const fitsKind = (
 ): boolean =>
 	descriptor.actions.includes(request.action) &&
 	(request.field === undefined ||
-		descriptor.fieldPaths.includes(request.field) ||
-		Resource.hasPath(descriptor.schema, request.field) ||
-		Resource.hasGetter(descriptor.schema, request.field))
+		(Catalog.lookup(descriptor.catalog, request.field)?.listed ?? false))
 
 const makeContext = (
 	domain: Domain.Any,
@@ -1799,14 +1826,33 @@ const scopeFields = (within: unknown): ReadonlyArray<string> =>
 				(within as (builder: unknown) => Ast)(Condition.builder()),
 			)
 
-const scopeOf = (within: unknown, input: ResidualContext["input"]): Ast => {
-	if (within === undefined) {
+/**
+ * Makes the scope of a request, with the principal in it. A scope comes from
+ * code, so a scope that does not fit the domain is a defect. It is bound as a
+ * rule for the kind and the action of the request is.
+ */
+const scopeOf = (
+	request: ScopedRequest,
+	domain: Domain.Any,
+	input: ResidualContext["input"],
+): Ast => {
+	if (request.within === undefined) {
 		return always
 	}
-	const ast = (within as (builder: unknown) => Ast)(Condition.builder())
+	const ast = (request.within as (builder: unknown) => Ast)(Condition.builder())
 	const problem = scopeProblem(ast)
 	if (problem !== undefined) {
 		throw new globalThis.Error(`A scope ${problem}`)
+	}
+	const issues = Bind.ruleIssues(
+		domain,
+		{ actions: [request.action], resources: [request.kind], when: ast },
+		["within"],
+	)
+	if (issues.length > 0) {
+		throw new globalThis.Error(
+			`A scope does not fit the domain: ${issues.map((issue) => issue.issue).join("; ")}`,
+		)
 	}
 	return Condition.partial(ast as Condition.Condition, input)
 }
@@ -1834,15 +1880,8 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 	if (descriptor === undefined || !fitsKind(descriptor, request)) {
 		return { scope: never, allow: never, deny: never, schema: undefined }
 	}
-	// A scope is made smaller below, and that may leave out a read of a
-	// getter that fails. So such a scope has no residual.
-	if (scopeReadsGetter(request, descriptor)) {
-		throw new globalThis.Error(
-			"The scope of this request reads a getter, so it has no residual condition",
-		)
-	}
 	const input = { principal: request.principal, path: descriptor.path }
-	const scope = scopeOf(request.within, input)
+	const scope = scopeOf(request, policy.domain, input)
 	const build = makeBuild()
 	const and = build.and
 	const inScope = (pair: Pair): Scoped => ({
@@ -1865,14 +1904,6 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 		build,
 	}
 	if (!usesPredicate(nodeOf(policy), context)) {
-		// A read of a getter may fail when `decide` runs, and a smaller
-		// condition may leave the read out. So a plain residual can not agree
-		// with `decide`, and there is none.
-		if (readsGetter(policy, request, descriptor)) {
-			throw new globalThis.Error(
-				"A rule of this request reads a getter, so it has no residual condition",
-			)
-		}
 		try {
 			return inScope(residualNode(nodeOf(policy), context))
 		} catch (error) {
@@ -2042,62 +2073,6 @@ type AnyCoverage = Data.TaggedEnum<{
 
 const coverages = Data.taggedEnum<AnyCoverage>()
 
-/**
- * Tests if a rule that the request may use, or its scope, reads a getter of
- * a class, in any branch of a union.
- */
-const readsGetter = (
-	policy: Any,
-	request: ScopedRequest,
-	descriptor: Resource.Descriptor,
-): boolean =>
-	scopeReadsGetter(request, descriptor) ||
-	!readsOnly(
-		nodeOf(policy),
-		targetOf(request, descriptor),
-		(field) => !readsGetterAt(descriptor.schema, field),
-		new Map(),
-	)
-
-/**
- * Tests if a read of a field may read a getter of a class: at the field, or
- * at a field on the way to it, in any branch of a union.
- */
-const readsGetterAt = (schema: Schema.Top, field: string): boolean => {
-	const parts = field.split(".")
-	return Arr.some(Arr.range(1, parts.length), (count) =>
-		Resource.hasGetter(schema, parts.slice(0, count).join(".")),
-	)
-}
-
-/**
- * Tests if the scope of a request reads a getter of a class. A scope is made
- * smaller in each residual, also next to a predicate that runs `decide`, so
- * such a scope has no residual.
- */
-const scopeReadsGetter = (
-	request: ScopedRequest,
-	descriptor: Resource.Descriptor,
-): boolean =>
-	!Arr.every(
-		scopeFields(request.within),
-		(field) => !readsGetterAt(descriptor.schema, field),
-	)
-
-/**
- * Tests if a request has no residual: its scope reads a getter, or it has a
- * plain residual and a rule that it may use reads a getter. A residual with
- * a predicate runs `decide`, so the reads of its rules stay.
- */
-const hasNoResidual = (
-	policy: Any,
-	request: ScopedRequest,
-	descriptor: Resource.Descriptor,
-): boolean =>
-	scopeReadsGetter(request, descriptor) ||
-	(!usesPredicate(nodeOf(policy), targetOf(request, descriptor)) &&
-		readsGetter(policy, request, descriptor))
-
 /** The parts of a request that tell which rules it may use. */
 const targetOf = (
 	request: ScopedRequest,
@@ -2148,19 +2123,14 @@ const readsOnly = (
 
 const coverageAny = (policy: Any, request: ScopedRequest): AnyCoverage => {
 	const descriptor = Domain.descriptorOf(policy.domain, request.kind)
-	// A request with no residual has the condition `False`.
-	if (descriptor !== undefined && hasNoResidual(policy, request, descriptor)) {
-		return coverages.Unknown({ condition: never, reason: "schema" })
-	}
 	const scoped = scopedResiduals(policy, request)
 	const allowed = scoped.allow
 	// Each field that a rule or the scope reads must be plain, also a field
-	// that a smaller condition leaves out. The condition is the residual.
+	// that a smaller condition leaves out.
 	if (descriptor !== undefined) {
 		const plain = (field: string) =>
 			Resource.isPlainField(descriptor.schema, field)
 		if (
-			readsGetter(policy, request, descriptor) ||
 			!Arr.every(scopeFields(request.within), plain) ||
 			!readsOnly(
 				nodeOf(policy),
@@ -2481,754 +2451,6 @@ const encodedNodeSchema = (
 	return self
 }
 
-type ConditionNode = Condition.Encoded | Ast
-
-const principalRefs = (ast: ConditionNode): ReadonlyArray<string> =>
-	Array.from(refsIn(ast, new Map()))
-
-/** The principal fields of a node. A shared node is visited one time. */
-const refsIn = (
-	node: ConditionNode,
-	memo: Map<ConditionNode, HashSet.HashSet<string>>,
-): HashSet.HashSet<string> =>
-	remember(memo, node, () => {
-		const refs = (operands: ReadonlyArray<Condition.Operand>) =>
-			HashSet.fromIterable(
-				Arr.flatMap(operands, (operand) =>
-					operand._tag === "Principal" ? [operand.path] : [],
-				),
-			)
-		switch (node._tag) {
-			case "Compare":
-				return refs([node.value])
-			case "In":
-				return refs(node.values)
-			case "Under":
-				return refs(node.prefix)
-			case "And":
-			case "Or":
-				return Arr.reduce(
-					node.conditions as ReadonlyArray<ConditionNode>,
-					HashSet.empty<string>(),
-					(all, child) => HashSet.union(all, refsIn(child, memo)),
-				)
-			case "Not":
-				return refsIn(node.condition, memo)
-			default:
-				return HashSet.empty()
-		}
-	})
-
-interface Issue {
-	readonly path: ReadonlyArray<PropertyKey>
-	readonly issue: string
-}
-
-/** A test of a field with a fixed value, as in `eq("level", 3)`. */
-type LiteralTest = readonly [field: string, value: Condition.Scalar]
-
-const literalTests = (node: ConditionNode): ReadonlyArray<LiteralTest> =>
-	Arr.map(Array.from(literalTestsIn(node, new Map())), (text) => {
-		const [field, value] = JSON.parse(text) as readonly [string, unknown]
-		return [
-			field,
-			hasProperty(value, "number") ? Number(value.number) : value,
-		] as LiteralTest
-	})
-
-/**
- * The JSON text of a test. JSON has no `Infinity`, `-Infinity` or `NaN`, so
- * such a number goes in as its text.
- */
-const literalText = (field: string, value: Condition.Scalar): string =>
-	JSON.stringify([
-		field,
-		typeof value === "number" && !Number.isFinite(value)
-			? { number: String(value) }
-			: value,
-	])
-
-/**
- * The tests of fields with fixed values in a node, each as the JSON text of a
- * {@link LiteralTest}. A set of texts keeps each test one time, so a node
- * with many shared parts gives a small set. A shared node is visited one time.
- */
-const literalTestsIn = (
-	node: ConditionNode,
-	memo: Map<ConditionNode, HashSet.HashSet<string>>,
-): HashSet.HashSet<string> =>
-	remember(memo, node, () => {
-		const tests = (
-			field: string,
-			operands: ReadonlyArray<Condition.Operand>,
-		): HashSet.HashSet<string> =>
-			HashSet.fromIterable(
-				Arr.flatMap(operands, (operand) =>
-					operand._tag === "Literal" ? [literalText(field, operand.value)] : [],
-				),
-			)
-		switch (node._tag) {
-			case "Compare":
-				return tests(node.field, [node.value])
-			case "In":
-				return tests(node.field, node.values)
-			case "And":
-			case "Or":
-				return Arr.reduce(
-					node.conditions as ReadonlyArray<ConditionNode>,
-					HashSet.empty<string>(),
-					(all, child) => HashSet.union(all, literalTestsIn(child, memo)),
-				)
-			case "Not":
-				return literalTestsIn(node.condition, memo)
-			default:
-				return HashSet.empty()
-		}
-	})
-
-/** A test of a field with a field of the principal, as in `eq("ownerId", $.principal("id"))`. */
-type PrincipalTest = readonly [field: string, ref: string]
-
-const principalTests = (node: ConditionNode): ReadonlyArray<PrincipalTest> =>
-	Arr.map(
-		Array.from(principalTestsIn(node, new Map())),
-		(text) => JSON.parse(text) as PrincipalTest,
-	)
-
-/**
- * The tests of fields with principal fields in a node, each as the JSON text
- * of a {@link PrincipalTest}. See {@link literalTestsIn}.
- */
-const principalTestsIn = (
-	node: ConditionNode,
-	memo: Map<ConditionNode, HashSet.HashSet<string>>,
-): HashSet.HashSet<string> =>
-	remember(memo, node, () => {
-		const tests = (
-			field: string,
-			operands: ReadonlyArray<Condition.Operand>,
-		): HashSet.HashSet<string> =>
-			HashSet.fromIterable(
-				Arr.flatMap(operands, (operand) =>
-					operand._tag === "Principal"
-						? [JSON.stringify([field, operand.path])]
-						: [],
-				),
-			)
-		switch (node._tag) {
-			case "Compare":
-				return tests(node.field, [node.value])
-			case "In":
-				return tests(node.field, node.values)
-			case "And":
-			case "Or":
-				return Arr.reduce(
-					node.conditions as ReadonlyArray<ConditionNode>,
-					HashSet.empty<string>(),
-					(all, child) => HashSet.union(all, principalTestsIn(child, memo)),
-				)
-			case "Not":
-				return principalTestsIn(node.condition, memo)
-			default:
-				return HashSet.empty()
-		}
-	})
-
-/**
- * Tests if a node has a fixed value that is not a {@link Condition.Scalar},
- * such as `undefined`. A shared node is visited one time.
- */
-const hasBadLiteralIn = (
-	node: ConditionNode,
-	memo: Map<ConditionNode, boolean>,
-): boolean =>
-	remember(memo, node, () => {
-		const bad = (operands: ReadonlyArray<Condition.Operand>) =>
-			Arr.some(
-				operands,
-				(operand) =>
-					operand._tag === "Literal" &&
-					operand.value !== null &&
-					typeof operand.value !== "string" &&
-					typeof operand.value !== "number" &&
-					typeof operand.value !== "boolean",
-			)
-		switch (node._tag) {
-			case "Compare":
-				return bad([node.value])
-			case "In":
-				return bad(node.values)
-			case "Under":
-				return bad(node.prefix)
-			case "And":
-			case "Or":
-				return Arr.some(
-					node.conditions as ReadonlyArray<ConditionNode>,
-					(child) => hasBadLiteralIn(child, memo),
-				)
-			case "Not":
-				return hasBadLiteralIn(node.condition, memo)
-			default:
-				return false
-		}
-	})
-
-/**
- * The principal fields in the prefixes of `Under` nodes, each as the JSON text
- * of the place in the prefix and the path of the field. See
- * {@link literalTestsIn}.
- */
-/**
- * The fixed values in the prefixes of `Under` nodes, each as the JSON text of
- * the place in the prefix, the value, and the fixed strings of the whole
- * prefix. A number that JSON can not hold is left out: it fits no field
- * that a path names. See {@link underRefsIn}.
- */
-const underLiteralsIn = (
-	node: ConditionNode,
-	memo: Map<ConditionNode, HashSet.HashSet<string>>,
-): HashSet.HashSet<string> =>
-	remember(memo, node, () => {
-		switch (node._tag) {
-			case "Under": {
-				const strings = Arr.map(node.prefix, (operand) =>
-					operand._tag === "Literal" && typeof operand.value === "string"
-						? operand.value
-						: null,
-				)
-				return HashSet.fromIterable(
-					Arr.flatMap(node.prefix, (operand, index) =>
-						operand._tag === "Literal" &&
-						(operand.value === null ||
-							typeof operand.value === "string" ||
-							typeof operand.value === "boolean" ||
-							Number.isFinite(operand.value))
-							? [JSON.stringify([index, operand.value, strings])]
-							: [],
-					),
-				)
-			}
-			case "And":
-			case "Or":
-				return Arr.reduce(
-					node.conditions as ReadonlyArray<ConditionNode>,
-					HashSet.empty<string>(),
-					(all, child) => HashSet.union(all, underLiteralsIn(child, memo)),
-				)
-			case "Not":
-				return underLiteralsIn(node.condition, memo)
-			default:
-				return HashSet.empty()
-		}
-	})
-
-/** A fixed value in a path test. See {@link underLiteralsIn}. */
-type UnderLiteral = readonly [
-	index: number,
-	value: Condition.Scalar,
-	strings: ReadonlyArray<string | null>,
-]
-
-const underLiterals = (node: ConditionNode): ReadonlyArray<UnderLiteral> =>
-	Arr.map(
-		Array.from(underLiteralsIn(node, new Map())),
-		(text) => JSON.parse(text) as UnderLiteral,
-	)
-
-const underRefsIn = (
-	node: ConditionNode,
-	memo: Map<ConditionNode, HashSet.HashSet<string>>,
-): HashSet.HashSet<string> =>
-	remember(memo, node, () => {
-		switch (node._tag) {
-			case "Under": {
-				// The fixed strings of the prefix, so the check can leave out a
-				// resource whose path can not match them.
-				const strings = Arr.map(node.prefix, (operand) =>
-					operand._tag === "Literal" && typeof operand.value === "string"
-						? operand.value
-						: null,
-				)
-				return HashSet.fromIterable(
-					Arr.flatMap(node.prefix, (operand, index) =>
-						operand._tag === "Principal"
-							? [JSON.stringify([index, operand.path, strings])]
-							: [],
-					),
-				)
-			}
-			case "And":
-			case "Or":
-				return Arr.reduce(
-					node.conditions as ReadonlyArray<ConditionNode>,
-					HashSet.empty<string>(),
-					(all, child) => HashSet.union(all, underRefsIn(child, memo)),
-				)
-			case "Not":
-				return underRefsIn(node.condition, memo)
-			default:
-				return HashSet.empty()
-		}
-	})
-
-/**
- * A principal field in a path test: its place in the prefix, its path, and
- * the fixed strings of the whole prefix, or `null` for another part.
- */
-type UnderRef = readonly [
-	index: number,
-	ref: string,
-	strings: ReadonlyArray<string | null>,
-]
-
-const underRefs = (node: ConditionNode): ReadonlyArray<UnderRef> =>
-	Arr.map(
-		Array.from(underRefsIn(node, new Map())),
-		(text) => JSON.parse(text) as UnderRef,
-	)
-
-/**
- * Tests if the path of a resource may start with a prefix: it is as long as
- * the prefix, and each fixed string of the prefix is the string of the path
- * at its place, when the path has a string there.
- */
-const mayStartWith = (
-	descriptor: Resource.Descriptor,
-	strings: ReadonlyArray<string | null>,
-): boolean =>
-	// A path shorter than the prefix never matches.
-	(descriptor.path?.length ?? 0) >= strings.length &&
-	Arr.every(strings, (string, index) => {
-		const segment = descriptor.path?.[index]
-		return string === null || typeof segment !== "string" || segment === string
-	})
-
-/**
- * Tests if a principal field may hold the part of a path at `index`: a string
- * of the path, or a value of the field that the path names there.
- */
-const fitsPathPart = (
-	descriptor: Resource.Descriptor,
-	index: number,
-	principal: Resource.FieldDomain,
-): boolean => {
-	const segment = descriptor.path?.[index]
-	return segment === undefined
-		? false
-		: typeof segment === "string"
-			? fitsDomain(principal, segment)
-			: domainsMeet(
-					Resource.domainOf(descriptor.schema, segment.field),
-					principal,
-				)
-}
-
-/**
- * The fields of ordered tests (`lt`, `lte`, `gt`, `gte`) in a node, each as
- * the JSON text of the field and the operand. See {@link literalTestsIn}.
- */
-const orderedTestsIn = (
-	node: ConditionNode,
-	memo: Map<ConditionNode, HashSet.HashSet<string>>,
-): HashSet.HashSet<string> =>
-	remember(memo, node, () => {
-		switch (node._tag) {
-			case "Compare":
-				return node.op === "eq" || node.op === "ne"
-					? HashSet.empty()
-					: HashSet.make(
-							JSON.stringify([
-								node.field,
-								// The type of a fixed value, not the value: JSON has no
-								// `Infinity`.
-								node.value._tag === "Literal"
-									? { _tag: "Literal", type: typeof node.value.value }
-									: node.value,
-							]),
-						)
-			case "And":
-			case "Or":
-				return Arr.reduce(
-					node.conditions as ReadonlyArray<ConditionNode>,
-					HashSet.empty<string>(),
-					(all, child) => HashSet.union(all, orderedTestsIn(child, memo)),
-				)
-			case "Not":
-				return orderedTestsIn(node.condition, memo)
-			default:
-				return HashSet.empty()
-		}
-	})
-
-/** The operand of an ordered test: the type of a fixed value, or a principal field. */
-type OrderedOperand =
-	| { readonly _tag: "Literal"; readonly type: string }
-	| { readonly _tag: "Principal"; readonly path: string }
-
-const orderedTests = (
-	node: ConditionNode,
-): ReadonlyArray<readonly [field: string, operand: OrderedOperand]> =>
-	Arr.map(
-		Array.from(orderedTestsIn(node, new Map())),
-		(text) =>
-			JSON.parse(text) as readonly [field: string, operand: OrderedOperand],
-	)
-
-/**
- * Tests if a field may hold a value with an order: a number or a string. An
- * ordered test is false for any other value.
- */
-const isOrdered = (domain: Resource.FieldDomain): boolean =>
-	domain.string ||
-	domain.number !== "none" ||
-	Arr.some(
-		domain.literals,
-		(value) => typeof value === "string" || typeof value === "number",
-	)
-
-/**
- * Tests if two fields may hold values of one ordered type: two strings or two
- * numbers. An ordered test of two values of other types is false.
- */
-const orderedMeet = (
-	left: Resource.FieldDomain,
-	right: Resource.FieldDomain,
-): boolean => {
-	const strings = (domain: Resource.FieldDomain) =>
-		domain.string ||
-		Arr.some(domain.literals, (value) => typeof value === "string")
-	const numbers = (domain: Resource.FieldDomain) =>
-		domain.number !== "none" ||
-		Arr.some(domain.literals, (value) => typeof value === "number")
-	return (strings(left) && strings(right)) || (numbers(left) && numbers(right))
-}
-
-/**
- * Tests if two fields may hold one value: a value of one type, or a single
- * value that the other field may hold.
- */
-const domainsMeet = (
-	left: Resource.FieldDomain,
-	right: Resource.FieldDomain,
-): boolean =>
-	// A principal field that is `null` is a missing value, and a test with a
-	// missing value is false. A principal field that holds an object is not a
-	// scalar, and it is a missing value too. So only scalars can be shared.
-	(left.string && right.string) ||
-	(left.boolean && right.boolean) ||
-	(left.number !== "none" && right.number !== "none") ||
-	Arr.some(left.literals, (value) => fitsDomain(right, value)) ||
-	Arr.some(right.literals, (value) => fitsDomain(left, value))
-
-/**
- * Tests if a field with this domain may hold a value of the type of `value`.
- * `null` always fits: a test with `null` is a test that the field is missing.
- */
-const fitsDomain = (
-	domain: Resource.FieldDomain,
-	value: Condition.Scalar,
-): boolean =>
-	value === null ||
-	domain.literals.includes(value) ||
-	(typeof value === "string" && domain.string) ||
-	(typeof value === "boolean" && domain.boolean) ||
-	(typeof value === "number" && domain.number !== "none")
-
-/**
- * Checks the names in an encoded policy against the domain. It gives one
- * message for each problem.
- */
-const validate = (
-	domain: Domain.Any,
-	root: EncodedNode,
-): ReadonlyArray<Issue> => {
-	const principalPaths = domain.principal.pipe(
-		Resource.fieldPaths,
-		HashSet.fromIterable,
-	)
-	const ruleIssues = (
-		value: EncodedRule,
-		at: ReadonlyArray<PropertyKey>,
-	): ReadonlyArray<Issue> => {
-		const all = value.resources.includes("*")
-		// Each kind is checked one time, also when the list names it again. The
-		// order of the kinds does not change the issues, so a set is enough.
-		const named = Array.from(
-			HashSet.fromIterable(Arr.filter(value.resources, (kind) => kind !== "*")),
-		)
-		const descriptors = Arr.flatMap(named, (kind) => {
-			const descriptor = Domain.descriptorOf(domain, kind)
-			return descriptor === undefined ? [] : [descriptor]
-		})
-		const known = all
-			? Array.from(HashMap.values(domain.resources))
-			: descriptors
-		// The kinds of the rule with one of its actions. The rule never runs on
-		// another kind, so the types of its tests are checked only on these.
-		const applicable = Arr.filter(
-			descriptors,
-			(descriptor) =>
-				value.actions.includes("*") ||
-				Arr.some(value.actions, (action) =>
-					descriptor.actions.includes(action),
-				),
-		)
-		const usedFields = [
-			...Arr.filter(value.fields ?? [], (field) => !field.includes("*")),
-			...(value.when === undefined ? [] : Condition.fields(value.when as Ast)),
-		]
-		return [
-			...Arr.map(
-				Arr.filter(named, (kind) => !HashMap.has(domain.resources, kind)),
-				(kind): Issue => ({
-					path: [...at, "resources"],
-					issue: `There is no resource with the kind "${kind}"`,
-				}),
-			),
-			...Arr.map(
-				Arr.filter(
-					value.actions,
-					(action) =>
-						action !== "*" &&
-						!Arr.some(known, (descriptor) =>
-							descriptor.actions.includes(action),
-						),
-				),
-				(action): Issue => ({
-					path: [...at, "actions"],
-					issue: `The action "${action}" is not an action of these resources`,
-				}),
-			),
-			...Arr.map(
-				Arr.filter(
-					usedFields,
-					(field) =>
-						all ||
-						descriptors.length === 0 ||
-						!Arr.every(
-							descriptors,
-							(descriptor) =>
-								descriptor.fieldPaths.includes(field) ||
-								// A key of a record, or a field deep in a recursive
-								// Schema, or a getter of a nested class.
-								Resource.hasPath(descriptor.schema, field) ||
-								Resource.hasGetter(descriptor.schema, field),
-						),
-				),
-				(field): Issue => ({
-					path: at,
-					issue: `The field "${field}" is not a field of every resource of the rule`,
-				}),
-			),
-			...Arr.map(
-				Arr.filter(
-					value.when === undefined ? [] : principalRefs(value.when),
-					(ref) =>
-						!HashSet.has(principalPaths, ref) &&
-						!Resource.hasPath(domain.principal, ref) &&
-						!Resource.hasGetter(domain.principal, ref),
-				),
-				(ref): Issue => ({
-					path: [...at, "when"],
-					issue: `The principal has no field "${ref}"`,
-				}),
-			),
-			// A test with a value of another type than the field never matches.
-			// The types stop it in a typed rule, so here it is a mistake, and in
-			// a deny rule it would let values through.
-			...Arr.map(
-				Arr.filter(
-					value.when === undefined ? [] : literalTests(value.when),
-					([field, literal]) =>
-						Arr.some(
-							applicable,
-							(descriptor) =>
-								!fitsDomain(
-									Resource.domainOf(descriptor.schema, field),
-									literal,
-								),
-						),
-				),
-				([field, literal]): Issue => ({
-					path: [...at, "when"],
-					issue: `The field "${field}" can not hold the value ${JSON.stringify(literal)}`,
-				}),
-			),
-			...Arr.map(
-				Arr.filter(
-					value.when === undefined ? [] : principalTests(value.when),
-					([field, ref]) =>
-						Arr.some(
-							applicable,
-							(descriptor) =>
-								!domainsMeet(
-									Resource.domainOf(descriptor.schema, field),
-									Resource.domainOf(domain.principal, ref),
-								),
-						),
-				),
-				([field, ref]): Issue => ({
-					path: [...at, "when"],
-					issue: `The field "${field}" can not hold a value of the principal field "${ref}"`,
-				}),
-			),
-			// A condition with a node that is not known would be skipped when it
-			// runs, so it is not taken.
-			...(value.when !== undefined && !Condition.isAst(value.when)
-				? [
-						{
-							path: [...at, "when"],
-							issue: "The condition is not a whole condition tree",
-						} satisfies Issue,
-					]
-				: []),
-			// A fixed value such as `undefined` is not a value of a test. Its
-			// JSON text would be `null`, and the test would mean another thing.
-			...(value.when !== undefined && hasBadLiteralIn(value.when, new Map())
-				? [
-						{
-							path: [...at, "when"],
-							issue:
-								"A test has a fixed value that is not a string, a number, a boolean or null",
-						} satisfies Issue,
-					]
-				: []),
-			// A principal field in a path test must hold a value that the path
-			// may have at that place. Else the test is always false.
-			...Arr.map(
-				Arr.filter(
-					value.when === undefined ? [] : underRefs(value.when),
-					([index, ref, strings]) =>
-						// A rule for every resource may run on each of them that has a
-						// part of its path at this place.
-						Arr.some(
-							// The rule runs only on a kind with one of its actions, and
-							// the test can match only a path that starts with the fixed
-							// strings of the prefix.
-							Arr.filter(
-								all
-									? Arr.filter(
-											known,
-											(descriptor) =>
-												descriptor.path?.[index] !== undefined &&
-												(value.actions.includes("*") ||
-													Arr.some(value.actions, (action) =>
-														descriptor.actions.includes(action),
-													)),
-										)
-									: applicable,
-								(descriptor) => mayStartWith(descriptor, strings),
-							),
-							(descriptor) =>
-								!fitsPathPart(
-									descriptor,
-									index,
-									Resource.domainOf(domain.principal, ref),
-								),
-						),
-				),
-				([, ref]): Issue => ({
-					path: [...at, "when"],
-					issue: `The principal field "${ref}" can not hold a part of the path of the resource`,
-				}),
-			),
-			// A fixed value in a path test at the place of a field of the path
-			// must be a value of that field. Else the test is always false.
-			...Arr.map(
-				Arr.filter(
-					value.when === undefined ? [] : underLiterals(value.when),
-					([index, literal, strings]) =>
-						Arr.some(
-							Arr.filter(
-								all
-									? Arr.filter(
-											known,
-											(descriptor) =>
-												value.actions.includes("*") ||
-												Arr.some(value.actions, (action) =>
-													descriptor.actions.includes(action),
-												),
-										)
-									: applicable,
-								(descriptor) => mayStartWith(descriptor, strings),
-							),
-							(descriptor) => {
-								const segment = descriptor.path?.[index]
-								return (
-									segment !== undefined &&
-									typeof segment !== "string" &&
-									!fitsDomain(
-										Resource.domainOf(descriptor.schema, segment.field),
-										literal,
-									)
-								)
-							},
-						),
-				),
-				([index, literal]): Issue => ({
-					path: [...at, "when"],
-					issue: `The path part ${String(index)} can not hold the value ${JSON.stringify(literal)}`,
-				}),
-			),
-			// An ordered test compares numbers with numbers and strings with
-			// strings. With another value it is always false.
-			...Arr.map(
-				Arr.filter(
-					value.when === undefined ? [] : orderedTests(value.when),
-					([field, operand]) =>
-						(operand._tag === "Literal" &&
-							operand.type !== "string" &&
-							operand.type !== "number") ||
-						Arr.some(applicable, (descriptor) => {
-							const fieldDomain = Resource.domainOf(descriptor.schema, field)
-							// A principal field must share an ordered type with the
-							// field: a string and a number never compare.
-							return operand._tag === "Literal"
-								? !isOrdered(fieldDomain)
-								: !orderedMeet(
-										fieldDomain,
-										Resource.domainOf(domain.principal, operand.path),
-									)
-						}),
-				),
-				([field]): Issue => ({
-					path: [...at, "when"],
-					issue: `The field "${field}" has an ordered test with a value that has no order`,
-				}),
-			),
-		]
-	}
-	const issuesOf = (
-		node: EncodedNode,
-		path: ReadonlyArray<PropertyKey>,
-		level: number,
-	): ReadonlyArray<Issue> => {
-		if (level > maxDepth) {
-			return [
-				{ path, issue: `A policy tree may have at most ${maxDepth} levels` },
-			]
-		}
-		switch (node._tag) {
-			case "Rules":
-				return Arr.flatMap(node.rules, (value, index) =>
-					ruleIssues(value, [...path, "rules", index]),
-				)
-			case "All":
-			case "Any":
-			case "FirstOf":
-				return Arr.flatMap(node.policies, (child, index) =>
-					issuesOf(child, [...path, "policies", index], level + 1),
-				)
-			case "Ceiling":
-				return [
-					...issuesOf(node.cap, [...path, "cap"], level + 1),
-					...issuesOf(node.policy, [...path, "policy"], level + 1),
-				]
-		}
-	}
-	return issuesOf(root, [], 1)
-}
-
 /**
  * Makes a policy tree from its JSON form. Each rule gets the domain of the
  * Schema, as a rule from the builder of the domain has it.
@@ -3288,7 +2510,7 @@ export const schema = <D extends Domain.Any>(
 			encodedNodeSchema(domain.meta),
 			SchemaTransformation.passthrough(),
 		),
-		Schema.check(Schema.makeFilter((node) => validate(domain, node))),
+		Schema.check(Schema.makeFilter((node) => Bind.treeIssues(domain, node))),
 		Schema.decodeTo(
 			// A policy with a predicate is not a plain policy, and it can not
 			// become JSON.
