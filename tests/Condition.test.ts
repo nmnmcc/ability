@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Array as Arr, Effect, Equal, Exit, Schema } from "effect"
-import { Condition, Resource } from "../src/index.ts"
+import { Condition, Limits, Resource } from "../src/index.ts"
+import * as Nodes from "../src/internal/nodes.ts"
 import { alice, aliceBot, Bot, Caller, sharedBot } from "./fixtures.ts"
 
 const $ = Condition.builder<Resource.Data<typeof Bot>, Bot, Caller>()
@@ -585,50 +586,47 @@ describe("Condition node properties", () => {
 	const Step = Schema.Literals(["and", "or", "not", "leaf"])
 
 	it.prop(
-		"stops a shared condition exactly when it goes past a limit",
+		"stops a shared condition exactly when it goes past the ceiling",
 		{ steps: Schema.Array(Step).check(Schema.isMaxLength(40)) },
 		({ steps }) => {
-			const leaf = Condition.builder<
-				{ readonly a: number },
-				unknown,
-				unknown
-			>().eq("a", 1) as Condition.Condition
-			const tooLarge = (size: number, depth: number) =>
-				size > 100_000 || depth > 1000
-			// The size and the depth after each step, counted by hand. A step past
-			// a limit stops the work.
-			const sizes = steps.reduce<
-				ReadonlyArray<{ size: number; depth: number }>
-			>(
-				(all, step) => {
-					const { size, depth } = all[all.length - 1]!
-					return [
-						...all,
-						step === "and" || step === "or"
-							? { size: 2 * size + 1, depth: depth + 1 }
-							: { size: size + (step === "not" ? 1 : 2), depth: depth + 1 },
-					]
-				},
-				[{ size: 1, depth: 1 }],
+			// The constructors of the nodes, with no step that makes a condition
+			// smaller, so the size of each node is the size that is counted here.
+			const leaf: Nodes.Node = new Nodes.Compare({
+				op: "eq",
+				field: "a",
+				value: Nodes.literal(1),
+			})
+			// The size after each step, counted by hand. A constructor checks the
+			// ceiling, as a node does not know its domain, and there is no limit
+			// of levels. A step past the ceiling stops the work.
+			const sizes = Arr.reduce(steps, [1], (all, step) => {
+				const size = all[all.length - 1]!
+				return [
+					...all,
+					step === "and" || step === "or"
+						? 2 * size + 1
+						: size + (step === "not" ? 1 : 2),
+				]
+			})
+			const fails = Arr.some(
+				sizes,
+				(size) => size > Limits.ceilings.conditionNodes,
 			)
-			const fails = sizes.some(({ size, depth }) => tooLarge(size, depth))
 			const make = () =>
-				steps.reduce(
-					(condition, step) =>
-						step === "and"
-							? Condition.and(condition, condition)
-							: step === "or"
-								? Condition.or(condition, condition)
-								: step === "not"
-									? Condition.not(condition)
-									: Condition.and(condition, leaf),
-					leaf,
+				Arr.reduce(steps, leaf, (condition, step): Nodes.Node =>
+					step === "and"
+						? new Nodes.And([condition, condition])
+						: step === "or"
+							? new Nodes.Or([condition, condition])
+							: step === "not"
+								? new Nodes.Not(condition)
+								: new Nodes.And([condition, leaf]),
 				)
 			if (fails) {
 				assert.throws(make, /The most is/)
 				return true
 			}
-			return Condition.fields(make()).length === 1
+			return make().size === sizes[sizes.length - 1]
 		},
 	)
 
