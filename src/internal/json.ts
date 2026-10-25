@@ -143,15 +143,6 @@ const decodeOperands = (
 		decodeOperand(operand, [...path, name, index]),
 	)
 
-const compareOperators: ReadonlyArray<string> = [
-	"eq",
-	"ne",
-	"lt",
-	"lte",
-	"gt",
-	"gte",
-]
-
 const decodeNode = (
 	input: unknown,
 	path: ReadonlyArray<PropertyKey>,
@@ -199,11 +190,11 @@ const makeNode = (
 			return Nodes.never
 		case "Compare": {
 			const op = readString(input, "op", path)
-			if (!compareOperators.includes(op)) {
+			if (!Nodes.isCompareOperator(op)) {
 				throw problem([...path, "op"], `"${op}" is not a compare operator`)
 			}
 			return new Nodes.Compare({
-				op: op as Nodes.CompareOperator,
+				op,
 				field: readString(input, "field", path),
 				value: decodeOperand(read(input, "value", path), [...path, "value"]),
 			})

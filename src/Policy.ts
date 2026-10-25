@@ -53,8 +53,7 @@ import type * as Resource from "./Resource.ts"
  * @category models
  * @since 0.3.0
  */
-export type Algorithm =
-	"denyOverrides" | "permitOverrides" | "firstApplicable" | "lastApplicable"
+export type Algorithm = PolicyNodes.Algorithm
 
 /**
  * A list of rules with a combining algorithm.

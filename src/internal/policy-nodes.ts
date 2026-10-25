@@ -11,19 +11,27 @@
  */
 import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
+import * as Schema from "effect/Schema"
 import * as Rule from "./rule.ts"
 import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
 
-export type Algorithm =
-	"denyOverrides" | "permitOverrides" | "firstApplicable" | "lastApplicable"
-
-const algorithms: ReadonlyArray<string> = [
+/** The combining algorithms of a list of rules. The decoder reads this list too. */
+export const Algorithm = Schema.Literals([
 	"denyOverrides",
 	"permitOverrides",
 	"firstApplicable",
 	"lastApplicable",
-]
+])
+
+export type Algorithm = typeof Algorithm.Type
+
+/**
+ * Tests if a value is a combining algorithm. It reads the list of the Schema
+ * with `includes`, as `Nodes.isCompareOperator` does.
+ */
+export const isAlgorithm = (u: unknown): u is Algorithm =>
+	(Algorithm.literals as ReadonlyArray<unknown>).includes(u)
 
 interface Facts {
 	readonly size: number
@@ -103,7 +111,7 @@ export class Rules extends Base {
 		readonly algorithm: Algorithm
 		readonly rules: ReadonlyArray<Rule.Rule>
 	}) {
-		if (!algorithms.includes(props.algorithm)) {
+		if (!isAlgorithm(props.algorithm)) {
 			throw new Error(
 				`"${String(props.algorithm)}" is not a combining algorithm`,
 			)

@@ -136,13 +136,6 @@ export const encode = (
 		return toJson(node, (rule) => forms.get(rule))
 	})
 
-const algorithms: ReadonlyArray<string> = [
-	"denyOverrides",
-	"permitOverrides",
-	"firstApplicable",
-	"lastApplicable",
-]
-
 /** Reads a list of strings. */
 const readStrings = (
 	input: object,
@@ -374,7 +367,7 @@ const readTree = (
 	switch (tag) {
 		case "Rules": {
 			const algorithm = Json.readString(input, "algorithm", path)
-			if (!algorithms.includes(algorithm)) {
+			if (!PolicyNodes.isAlgorithm(algorithm)) {
 				throw Json.problem(
 					[...path, "algorithm"],
 					`"${algorithm}" is not a combining algorithm`,
@@ -392,7 +385,7 @@ const readTree = (
 				_tag: "Rules",
 				place,
 				size: 1 + found.length,
-				algorithm: algorithm as PolicyNodes.Algorithm,
+				algorithm,
 				rules: found,
 			})
 		}
