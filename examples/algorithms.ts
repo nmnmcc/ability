@@ -69,13 +69,18 @@ const owners = Policy.define(Drive)(function* (_) {
 	})
 })
 
-// Grants that a person gave by hand, kept apart from the usual rules.
-const grants = Policy.define(Drive)(function* (_) {
-	yield* _.allow("read", File, {
-		when: ($) => $.and($.eq("id", "f9"), $.eq("ownerId", "zoe")),
-		reason: "Zoe shared this file with the auditors",
+// Grants that a person gave by hand, kept apart from the usual rules. A
+// grant is for some people only, so the loader of a principal adds it only
+// for them.
+const grantsFor = (user: User) =>
+	Policy.define(Drive)(function* (_) {
+		if (user.team === "audit") {
+			yield* _.allow("read", File, {
+				when: ($) => $.and($.eq("id", "f9"), $.eq("ownerId", "zoe")),
+				reason: "Zoe shared this file with the auditors",
+			})
+		}
 	})
-})
 
 // The limits of the company, for every file.
 const company = Policy.define(Drive)(function* (_) {
@@ -85,10 +90,10 @@ const company = Policy.define(Drive)(function* (_) {
 	})
 })
 
-const reading = Policy.firstOf([
-	grants,
-	Policy.any([owners, byVisibility]),
-]).pipe(Policy.ceiling(company))
+const readingFor = (user: User) =>
+	Policy.firstOf([grantsFor(user), Policy.any([owners, byVisibility])]).pipe(
+		Policy.ceiling(company),
+	)
 
 const kim = User.make({ id: "kim", team: "design" })
 const auditor = User.make({ id: "aud", team: "audit" })
@@ -132,14 +137,26 @@ console.log({
 		file({ visibility: "private" }),
 	),
 	// The owner may read their private file: `any` needs one allow.
-	ownPrivate: decide(reading, kim, "read", file({ visibility: "private" })),
+	ownPrivate: decide(
+		readingFor(kim),
+		kim,
+		"read",
+		file({ visibility: "private" }),
+	),
 	// A grant comes first, so the auditor may read the private file of Zoe.
 	granted: decide(
-		reading,
+		readingFor(auditor),
 		auditor,
 		"read",
 		file({ id: "f9", ownerId: "zoe", team: "legal", visibility: "private" }),
 	),
+	// Kim is not an auditor, so the grant is not for Kim.
+	notGranted: decide(
+		readingFor(kim),
+		kim,
+		"read",
+		file({ id: "f9", ownerId: "zoe", team: "legal", visibility: "private" }),
+	),
 	// The cap wins over everything: also the owner may not read it.
-	onHold: decide(reading, kim, "read", held),
+	onHold: decide(readingFor(kim), kim, "read", held),
 })
