@@ -27,9 +27,7 @@
 		"./HttpApi": "./dist/HttpApi.js",
 		"./Limits": "./dist/Limits.js",
 		"./Policy": "./dist/Policy.js",
-		"./Principal": "./dist/Principal.js",
-		"./Resource": "./dist/Resource.js",
-		"./Rule": "./dist/Rule.js"
+		"./Resource": "./dist/Resource.js"
 	},
 	"scripts": {
 		"prepare": "effect-tsgo patch --typescript --no-oxlint",

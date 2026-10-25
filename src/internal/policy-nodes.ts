@@ -11,7 +11,7 @@
  */
 import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
-import * as Rule from "../Rule.ts"
+import * as Rule from "./rule.ts"
 import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
 
@@ -91,17 +91,17 @@ abstract class Base extends Data.Class {
  * The condition of a rule. A value that is not a node counts as one node
  * here: the binding of the rule gives the issue for it, before any walk.
  */
-const whenOf = (rule: Rule.Any): Nodes.Node | undefined =>
+const whenOf = (rule: Rule.Rule): Nodes.Node | undefined =>
 	Nodes.isNode(rule.when) ? rule.when : undefined
 
 /** A list of rules with a combining algorithm. */
 export class Rules extends Base {
 	readonly _tag = "Rules"
 	declare readonly algorithm: Algorithm
-	declare readonly rules: ReadonlyArray<Rule.Any>
+	declare readonly rules: ReadonlyArray<Rule.Rule>
 	constructor(props: {
 		readonly algorithm: Algorithm
-		readonly rules: ReadonlyArray<Rule.Any>
+		readonly rules: ReadonlyArray<Rule.Rule>
 	}) {
 		if (!algorithms.includes(props.algorithm)) {
 			throw new Error(

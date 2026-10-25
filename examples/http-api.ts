@@ -39,11 +39,10 @@ import {
 	Condition,
 	Domain,
 	Policy,
-	Principal,
 	Resource,
 } from "../src/index.ts"
 
-class User extends Principal.Class<User>("User")({ id: Schema.String }) {}
+class User extends Schema.Class<User>("User")({ id: Schema.String }) {}
 
 class Note extends Resource.Class<Note>()("Note", {
 	actions: ["read", "update"],

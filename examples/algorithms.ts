@@ -15,9 +15,9 @@
  * - `Policy.ceiling`: a deny of the cap always wins.
  */
 import { Schema } from "effect"
-import { Domain, Policy, Principal, Resource } from "../src/index.ts"
+import { Domain, Policy, Resource } from "../src/index.ts"
 
-class User extends Principal.Class<User>("User")({
+class User extends Schema.Class<User>("User")({
 	id: Schema.String,
 	team: Schema.String,
 }) {}

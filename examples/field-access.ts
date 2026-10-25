@@ -12,9 +12,9 @@
  * request may use, for example to make a form or to cut a JSON answer.
  */
 import { Effect, Schema } from "effect"
-import { Domain, Policy, Principal, Resource } from "../src/index.ts"
+import { Domain, Policy, Resource } from "../src/index.ts"
 
-class Staff extends Principal.Class<Staff>("Staff")({
+class Staff extends Schema.Class<Staff>("Staff")({
 	id: Schema.String,
 	team: Schema.Literals(["engineering", "people"]),
 }) {}

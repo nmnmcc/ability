@@ -4,11 +4,10 @@ import * as HttpApi from "../src/HttpApi.ts"
 import {
 	Authorizer,
 	Condition,
-	type Decision,
 	Domain,
 	Policy,
 	Resource,
-	Rule,
+	type Decision,
 } from "../src/index.ts"
 import {
 	alice,
@@ -53,7 +52,7 @@ describe("Resource", () => {
 })
 
 describe("Rule", () => {
-	const _ = Rule.builder(App)
+	const _ = Policy.builder(App)
 
 	it("takes only the actions of the resource", () => {
 		expect(_.allow).type.toBeCallableWith("delegate", Bot)
@@ -65,7 +64,7 @@ describe("Rule", () => {
 
 	it("takes only the fields of the resource, with their types", () => {
 		expect(_.allow).type.toBeCallableWith("read", Bot, {
-			when: ($: Condition.Builder<Rule.DataFor<App, "Bot">, Bot, Caller>) =>
+			when: ($: Condition.Builder<Policy.DataFor<App, "Bot">, Bot, Caller>) =>
 				$.and(
 					$.eq("ownerUserId", $.principal("userId")),
 					$.eq("ownerUserId", null),
@@ -112,7 +111,7 @@ describe("Rule", () => {
 			when: ($) => $.predicate("quota", () => Effect.fail("no quota" as const)),
 		})
 		expect(rule).type.toBe<
-			Rule.Rule<
+			Policy.Rule<
 				"no quota",
 				never,
 				Condition.Opaque,
@@ -121,7 +120,7 @@ describe("Rule", () => {
 			>
 		>()
 		expect(_.allow("read", Bot)).type.toBe<
-			Rule.Rule<never, never, never, App>
+			Policy.Rule<never, never, never, App>
 		>()
 	})
 
@@ -154,8 +153,10 @@ describe("Policy", () => {
 	})
 
 	it("does not take a node made by hand", () => {
-		expect(Rule.builder(App).allow).type.not.toBeCallableWith("read", Bot, {
-			when: ($: Condition.Builder<Rule.DataFor<App, "Bot">, Bot, Caller>) => ({
+		expect(Policy.builder(App).allow).type.not.toBeCallableWith("read", Bot, {
+			when: (
+				$: Condition.Builder<Policy.DataFor<App, "Bot">, Bot, Caller>,
+			) => ({
 				_tag: "Not" as const,
 				condition: $.predicate("quota", () => Effect.fail("empty" as const)),
 			}),
@@ -164,7 +165,7 @@ describe("Policy", () => {
 
 	it("takes only rules of its own domain", () => {
 		const Other = Domain.make({ principal: Caller, resources: [Trigger] })
-		const rule = Rule.builder(App).allow("read", Bot)
+		const rule = Policy.builder(App).allow("read", Bot)
 		expect(Policy.rules).type.toBeCallableWith(App, [rule])
 		expect(Policy.rules).type.not.toBeCallableWith(Other, [rule])
 		expect(Policy.define(Other)).type.not.toBeCallableWith(function* () {
@@ -174,7 +175,7 @@ describe("Policy", () => {
 
 	it("does not take a policy or a rule with no type fields", () => {
 		const named = Condition.builder<
-			Rule.DataFor<App, "Bot">,
+			Policy.DataFor<App, "Bot">,
 			Bot,
 			Caller
 		>().predicate("named", (bot) => bot.name.length > 0)
@@ -184,7 +185,7 @@ describe("Policy", () => {
 		const bare: Omit<typeof policy, "~Policy"> = policy
 		expect(Policy.all).type.not.toBeCallableWith([bare])
 		expect(Policy.all).type.toBeCallableWith([policy])
-		const rule = Rule.builder(App).allow("read", Bot, { when: () => named })
+		const rule = Policy.builder(App).allow("read", Bot, { when: () => named })
 		const bareRule: Omit<typeof rule, "~Rule"> = rule
 		expect(Policy.rules).type.not.toBeCallableWith(App, [bareRule])
 		expect(Policy.rules).type.toBeCallableWith(App, [rule])
@@ -197,7 +198,7 @@ describe("Policy", () => {
 	})
 
 	it("takes only common actions for one target of a union type", () => {
-		const _ = Rule.builder(App)
+		const _ = Policy.builder(App)
 		const target = Bot as typeof Bot | typeof Trigger
 		expect(_.allow).type.toBeCallableWith("read", target)
 		expect(_.allow).type.not.toBeCallableWith("write", target)
@@ -205,13 +206,13 @@ describe("Policy", () => {
 	})
 
 	it("takes the shapes of a target that may be one value or a list", () => {
-		const _ = Rule.builder(App)
+		const _ = Policy.builder(App)
 		const target = Bot as typeof Bot | ReadonlyArray<typeof Trigger>
 		expect(_.allow).type.toBeCallableWith("read", target)
 		expect(_.allow).type.not.toBeCallableWith("update", target)
 		expect(_.allow).type.not.toBeCallableWith("write", target)
 		const named = Condition.builder<
-			Rule.DataFor<App, "Bot">,
+			Policy.DataFor<App, "Bot">,
 			Bot,
 			Caller
 		>().predicate("named", (bot) => bot.name.length > 0)
@@ -232,9 +233,9 @@ describe("Policy", () => {
 	})
 
 	it("keeps a predicate in rules of its own kind", () => {
-		const _ = Rule.builder(App)
+		const _ = Policy.builder(App)
 		const leveled = Condition.builder<
-			Rule.DataFor<App, "Bot">,
+			Policy.DataFor<App, "Bot">,
 			Bot,
 			Caller
 		>().predicate("leveled", (bot) => bot.level >= 1)
@@ -283,14 +284,14 @@ describe("Policy", () => {
 	})
 
 	it("does not take the test of a predicate that reads other values", () => {
-		const _ = Rule.builder(App)
+		const _ = Policy.builder(App)
 		const named = Condition.builder<
-			Rule.DataFor<App, "Bot">,
+			Policy.DataFor<App, "Bot">,
 			Bot,
 			Caller
 		>().predicate("named", (bot) => bot.name.length > 0)
 		const enabled = Condition.builder<
-			Rule.DataFor<App, "Trigger">,
+			Policy.DataFor<App, "Trigger">,
 			typeof aliceTrigger,
 			Caller
 		>().predicate("enabled", (trigger) => trigger.enabled)
@@ -313,7 +314,7 @@ describe("Policy", () => {
 	})
 
 	it("keeps what the condition of a rule reads", () => {
-		const _ = Rule.builder(App)
+		const _ = Policy.builder(App)
 		const rule = _.allow("read", Bot, {
 			when: ($) => $.predicate("level", (bot) => bot.level !== 0),
 		})
@@ -380,10 +381,10 @@ describe("Policy", () => {
 	})
 
 	it("keeps the resource of a plain test", () => {
-		const _ = Rule.builder(App)
+		const _ = Policy.builder(App)
 		const enabled = Condition.builder<
-			Rule.DataFor<App, "Trigger">,
-			Rule.ValueFor<App, "Trigger">,
+			Policy.DataFor<App, "Trigger">,
+			Policy.ValueFor<App, "Trigger">,
 			Caller
 		>().eq("enabled", true)
 		expect(_.allow).type.toBeCallableWith("read", "Trigger", {
@@ -395,7 +396,7 @@ describe("Policy", () => {
 	})
 
 	it("does not let a condition from a node go into another rule", () => {
-		const _ = Rule.builder(App)
+		const _ = Policy.builder(App)
 		const node = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot, {
 				when: ($) => $.predicate("level", (bot) => bot.level !== 0),
@@ -414,9 +415,9 @@ describe("Policy", () => {
 			userId: Schema.Finite,
 		}) {}
 		const Other = Domain.make({ principal: Numbered, resources: [Bot] })
-		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
+		const $ = Condition.builder<Policy.DataFor<App, "Bot">, Bot, Caller>()
 		const owned = $.eq("ownerUserId", $.principal("userId"))
-		expect(Rule.builder(Other).deny).type.not.toBeCallableWith("read", Bot, {
+		expect(Policy.builder(Other).deny).type.not.toBeCallableWith("read", Bot, {
 			when: () => owned,
 		})
 	})
@@ -430,9 +431,13 @@ describe("Policy", () => {
 		const foreign = Condition.builder<unknown, unknown, Caller>().principal(
 			"userId",
 		)
-		expect(Rule.builder(Other).deny).type.not.toBeCallableWith("read", Bot, {
+		expect(Policy.builder(Other).deny).type.not.toBeCallableWith("read", Bot, {
 			when: (
-				$: Condition.Builder<Rule.DataFor<typeof Other, "Bot">, Bot, Numbered>,
+				$: Condition.Builder<
+					Policy.DataFor<typeof Other, "Bot">,
+					Bot,
+					Numbered
+				>,
 			) => $.eq("ownerUserId", foreign),
 		})
 	})
@@ -443,12 +448,12 @@ describe("Policy", () => {
 			unknown,
 			Caller
 		>().principal("userId")
-		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
+		const $ = Condition.builder<Policy.DataFor<App, "Bot">, Bot, Caller>()
 		expect($.eq).type.not.toBeCallableWith("ownerUserId", id)
 	})
 
 	it("takes a value that fits every field of a union of fields", () => {
-		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
+		const $ = Condition.builder<Policy.DataFor<App, "Bot">, Bot, Caller>()
 		const either = "level" as "level" | "name"
 		expect($.ne).type.not.toBeCallableWith(either, "blocked")
 		expect($.ne).type.toBeCallableWith("name", "blocked")
@@ -460,7 +465,7 @@ describe("Policy", () => {
 			fields: { secrets: Schema.Array(Schema.String) },
 		})
 		const Docs = Domain.make({ principal: Caller, resources: [Doc] })
-		expect(Rule.builder(Docs).deny).type.toBeCallableWith("read", Doc, {
+		expect(Policy.builder(Docs).deny).type.toBeCallableWith("read", Doc, {
 			fields: ["secrets"],
 		})
 	})
@@ -486,7 +491,7 @@ describe("Policy", () => {
 			fields: { cost: Schema.BigDecimal },
 		})
 		const Prices = Domain.make({ principal: Caller, resources: [Price] })
-		const _ = Rule.builder(Prices)
+		const _ = Policy.builder(Prices)
 		expect(_.deny).type.toBeCallableWith("read", Price, { fields: ["cost"] })
 		expect(_.deny).type.not.toBeCallableWith("read", Price, {
 			fields: ["cost.scale"],
@@ -503,7 +508,7 @@ describe("Policy", () => {
 			},
 		})
 		const Items = Domain.make({ principal: Caller, resources: [Item] })
-		const _ = Rule.builder(Items)
+		const _ = Policy.builder(Items)
 		expect(_.deny).type.toBeCallableWith("read", Item, {
 			fields: ["result", "file", "form"],
 		})
@@ -620,7 +625,7 @@ describe("Policy", () => {
 	})
 
 	it("does not let a rule hide in the node of a plain policy", () => {
-		const quota = Rule.builder(App).allow("read", Bot, {
+		const quota = Policy.builder(App).allow("read", Bot, {
 			when: ($) => $.predicate("quota", () => Effect.map(Quota, (n) => n > 0)),
 		})
 		const plain = Policy.empty(App).node
@@ -640,7 +645,7 @@ describe("Policy", () => {
 	})
 
 	it("does not let a reference with no type stand for any field", () => {
-		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
+		const $ = Condition.builder<Policy.DataFor<App, "Bot">, Bot, Caller>()
 		const ref: Condition.PrincipalRef = $.principal("role")
 		expect($.ne).type.not.toBeCallableWith("level", ref)
 	})
@@ -688,7 +693,7 @@ describe("Policy", () => {
 	})
 
 	it("keeps the types of predicates", () => {
-		const rule = Rule.builder(App).allow("read", Bot, {
+		const rule = Policy.builder(App).allow("read", Bot, {
 			when: ($) => $.predicate("quota", () => Effect.fail("empty" as const)),
 		})
 		expect(rule.when).type.toBe<
@@ -917,8 +922,8 @@ describe("Authorizer", () => {
 		expect(otherField).type.toBe<CheckOf>()
 		expect(otherType).type.toBe<CheckOf>()
 		const enabled = Condition.builder<
-			Rule.DataFor<App, "Trigger">,
-			Rule.ValueFor<App, "Trigger">,
+			Policy.DataFor<App, "Trigger">,
+			Policy.ValueFor<App, "Trigger">,
 			Caller
 		>().eq("enabled", true)
 		expect(Auth.check).type.not.toBeCallableWith({
@@ -929,7 +934,7 @@ describe("Authorizer", () => {
 		expect(Auth.check).type.not.toBeCallableWith({
 			action: "update",
 			kind: "Bot",
-			within: ($: Condition.Builder<Rule.DataFor<App, "Bot">, Bot, Caller>) =>
+			within: ($: Condition.Builder<Policy.DataFor<App, "Bot">, Bot, Caller>) =>
 				$.predicate("shared", (bot) => bot.shared),
 		})
 		const robot = Condition.builder<
@@ -940,7 +945,7 @@ describe("Authorizer", () => {
 		expect(Auth.check).type.not.toBeCallableWith({
 			action: "update",
 			kind: "Bot",
-			within: ($: Condition.Builder<Rule.DataFor<App, "Bot">, Bot, Caller>) =>
+			within: ($: Condition.Builder<Policy.DataFor<App, "Bot">, Bot, Caller>) =>
 				$.eq("name", robot),
 		})
 	})
@@ -970,13 +975,15 @@ describe("Authorizer", () => {
 		expect(HttpApi.requires).type.toBeCallableWith(Auth, "update", "Bot", {
 			within:
 				(params: HttpApi.Params) =>
-				($: Condition.Builder<Rule.DataFor<App, "Bot">, Bot, Caller>) =>
+				($: Condition.Builder<Policy.DataFor<App, "Bot">, Bot, Caller>) =>
 					$.under("org", params["org"] ?? null),
 		})
 		expect(HttpApi.lists).type.not.toBeCallableWith(Auth, "read", "Bot", {
 			within:
 				() =>
-				($: Condition.Builder<Rule.DataFor<App, "Trigger">, object, Caller>) =>
+				(
+					$: Condition.Builder<Policy.DataFor<App, "Trigger">, object, Caller>,
+				) =>
 					$.eq("enabled", true),
 		})
 	})

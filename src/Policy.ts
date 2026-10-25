@@ -61,11 +61,11 @@ import * as Limits from "./internal/limits.ts"
 import * as Nodes from "./internal/nodes.ts"
 import * as PolicyJson from "./internal/policy-json.ts"
 import * as PolicyNodes from "./internal/policy-nodes.ts"
+import * as RuleData from "./internal/rule.ts"
 import * as Search from "./internal/search.ts"
 import * as Decision from "./Decision.ts"
 import * as Domain from "./Domain.ts"
 import * as Resource from "./Resource.ts"
-import * as Rule from "./Rule.ts"
 
 /**
  * @stability stable
@@ -83,7 +83,7 @@ export type Algorithm =
 export interface RulesNode {
 	readonly _tag: "Rules"
 	readonly algorithm: Algorithm
-	readonly rules: ReadonlyArray<Rule.Any>
+	readonly rules: ReadonlyArray<AnyRule>
 }
 
 /**
@@ -153,7 +153,7 @@ export type TypedNode<E = never, R = never, O = never, D = any> = (
 			// The rules may read different values, so a node keeps no one type of
 			// what they read. With `never`, a condition taken from a node fits no
 			// rule that reads a value or a principal.
-			readonly rules: ReadonlyArray<Rule.Rule<E, R, O, D, never>>
+			readonly rules: ReadonlyArray<Rule<E, R, O, D, never>>
 	  }
 	| {
 			readonly _tag: "All" | "Any" | "FirstOf"
@@ -376,7 +376,7 @@ export interface AnyRequest {
  */
 export interface Step {
 	readonly path: ReadonlyArray<number>
-	readonly rule: Rule.Any
+	readonly rule: AnyRule
 	readonly applies: boolean
 }
 
@@ -392,6 +392,316 @@ export interface Explanation {
 	readonly decision: Decision.Decision
 	readonly steps: ReadonlyArray<Step>
 }
+
+// Rules
+
+/**
+ * A rule. `E`, `R` and `O` come from its condition. See
+ * `Condition.Condition`. `D` is the domain of the rule. A predicate reads the
+ * values and the principal of its domain, so a rule may go only into a policy
+ * of its own domain. A rule from {@link rule} has the domain `any`. `I` is
+ * what the predicates of its condition read. See `Condition.Reads`.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+export interface Rule<E = never, R = never, O = never, D = any, I = unknown>
+	extends RuleShape<E, R, O, I>, Pipeable.Pipeable {
+	readonly "~Rule": Condition.Variance<E, R, O>
+	readonly "~Domain": (domain: D) => D
+	[Symbol.iterator](): Generator<
+		Rule<E, R, O, D, I>,
+		Rule<E, R, O, D, I>,
+		unknown
+	>
+}
+
+/**
+ * The data of a rule.
+ *
+ * @stability stable
+ * @category models
+ * @since 1.0.0
+ */
+export interface RuleShape<E = never, R = never, O = never, I = unknown> {
+	readonly _tag: "Allow" | "Deny"
+	readonly actions: ReadonlyArray<string>
+	readonly resources: ReadonlyArray<string>
+	readonly when?: Condition.Condition<E, R, O, I>
+	readonly fields?: ReadonlyArray<string>
+	readonly reason?: string
+	readonly id?: string
+	readonly meta?: unknown
+	/**
+	 * The domain of the builder that made the rule. Two domains may have the
+	 * same types but other paths, so the types can not tell them apart. It is
+	 * not in the JSON form of a rule.
+	 */
+	readonly domain?: Domain.Any
+}
+
+/**
+ * Any rule.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+// Every rule fits `never` as what it reads, and a condition taken from such a
+// rule fits no rule that reads a value or a principal.
+export type AnyRule = Rule<any, any, any, any, never>
+
+/**
+ * The error type of a rule.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 0.3.0
+ */
+export type RuleError<A> = A extends {
+	readonly "~Rule"?: Condition.Variance<infer E, infer _R, infer _O>
+}
+	? E
+	: never
+
+/**
+ * The service type of a rule.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 0.3.0
+ */
+export type RuleServices<A> = A extends {
+	readonly "~Rule"?: Condition.Variance<infer _E, infer R, infer _O>
+}
+	? R
+	: never
+
+/**
+ * `Condition.Opaque` when a rule has a predicate.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 0.3.0
+ */
+export type RuleOpaque<A> = A extends {
+	readonly "~Rule"?: Condition.Variance<infer _E, infer _R, infer O>
+}
+	? O
+	: never
+
+/**
+ * A resource in a rule: a kind name, a resource of the domain, or `"*"`.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+export type RuleTarget<D> = Domain.Kind<D> | Domain.Resources<D> | "*"
+
+/**
+ * The kind name of a target.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 0.3.0
+ */
+export type KindOf<T> = T extends string ? T : Resource.Kind<T>
+
+/**
+ * The actions that a rule may use for the kinds `K`.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 0.3.0
+ */
+export type ActionFor<D, K> =
+	| "*"
+	| ("*" extends K
+			? Domain.AnyAction<D>
+			: Domain.ActionOf<D, Extract<K, string>>)
+
+/**
+ * The targets in the resource argument of a rule: the one target, or the
+ * targets of a list.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 1.0.0
+ */
+export type TargetOf<Res> = Res extends ReadonlyArray<infer X> ? X : Res
+
+/**
+ * The actions that a rule may use for its resource argument. A list of
+ * resources may use an action of any of them. One target with a union type
+ * may use only an action of every kind in the union, because its value may be
+ * any one of them. When the argument may be a list or one target, the rule
+ * may use only an action that each of these shapes allows.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 1.0.0
+ */
+export type ActionForTargets<D, Res> = (
+	Res extends ReadonlyArray<infer X>
+		? (action: ActionFor<D, KindOf<X>>) => void
+		: (action: ActionForTarget<D, Res>) => void
+) extends (action: infer A) => void
+	? A
+	: never
+
+/** The actions for one target that is not a list. */
+type ActionForTarget<D, Res> =
+	| "*"
+	| ("*" extends KindOf<Res>
+			? Domain.AnyAction<D>
+			: Domain.CommonAction<D, Extract<KindOf<Res>, string>>)
+
+/**
+ * The data type of the kinds `K`. For `"*"` it has no fields.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 0.3.0
+ */
+export type DataFor<D, K> = "*" extends K
+	? {}
+	: Domain.DataOf<D, Extract<K, string>>
+
+/**
+ * The value type of the kinds `K`.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 0.3.0
+ */
+export type ValueFor<D, K> = "*" extends K
+	? Domain.AnyValue<D>
+	: Domain.ValueOf<D, Extract<K, string>>
+
+/**
+ * A field name or a field pattern of the kinds `K`.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+export type FieldFor<D, K> =
+	Condition.FieldSelector<DataFor<D, K>> | `${string}*${string}`
+
+/**
+ * A condition that a rule for the kinds `K` may have. Its predicates may read
+ * only the values of these kinds and the principal of the domain.
+ *
+ * @stability stable
+ * @category models
+ * @since 1.0.0
+ */
+export type ConditionFor<D, K> = Condition.Condition<
+	any,
+	any,
+	any,
+	Condition.Reads<ValueFor<D, K>, Domain.Principal<D>>
+>
+
+/**
+ * The options of a rule.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+export interface RuleOptions<D, K, C extends Condition.Any> {
+	/** The condition. It gets a builder with the types of the resource. */
+	readonly when?: (
+		builder: Condition.Builder<
+			DataFor<D, K>,
+			ValueFor<D, K>,
+			Domain.Principal<D>
+		>,
+	) => C & Condition.Checked<C>
+	readonly fields?: ReadonlyArray<FieldFor<D, K>>
+	readonly reason?: string
+	readonly id?: string
+	readonly meta?: Domain.Meta<D>
+}
+
+type SingleOrArray<A> = A | ReadonlyArray<A>
+
+/**
+ * Makes rules with the types of a domain.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+export interface Builder<D> {
+	readonly allow: <
+		const Res extends SingleOrArray<RuleTarget<D>>,
+		const A extends ActionForTargets<D, Res>,
+		const C extends ConditionFor<D, KindOf<TargetOf<Res>>> =
+			Condition.Condition,
+	>(
+		action: SingleOrArray<A>,
+		resource: Res,
+		options?: RuleOptions<D, KindOf<TargetOf<Res>>, C>,
+	) => Rule<
+		Condition.Error<C>,
+		Condition.Services<C>,
+		Condition.OpaqueOf<C>,
+		D,
+		Condition.ReadsOf<C>
+	>
+	readonly deny: <
+		const Res extends SingleOrArray<RuleTarget<D>>,
+		const A extends ActionForTargets<D, Res>,
+		const C extends ConditionFor<D, KindOf<TargetOf<Res>>> =
+			Condition.Condition,
+	>(
+		action: SingleOrArray<A>,
+		resource: Res,
+		options?: RuleOptions<D, KindOf<TargetOf<Res>>, C>,
+	) => Rule<
+		Condition.Error<C>,
+		Condition.Services<C>,
+		Condition.OpaqueOf<C>,
+		D,
+		Condition.ReadsOf<C>
+	>
+}
+
+/**
+ * Makes rules with the types of a domain. `Policy.define` gives one to its
+ * generator. Use this one to make rules outside of a generator.
+ *
+ * @example
+ * ```ts
+ * const _ = Policy.builder(App)
+ * const rule = _.allow("read", Document, {
+ *   when: ($) => $.eq("ownerId", $.principal("id")),
+ * })
+ * ```
+ *
+ * @stability stable
+ * @category constructors
+ * @since 2.0.0
+ */
+export const builder = <D extends Domain.Any>(domain: D): Builder<D> =>
+	RuleData.builder(domain) as never
+
+/**
+ * Makes a rule from its data, with no types. It does not check the data
+ * against a domain: a policy does that when the rule goes into it. Use
+ * {@link builder} for rules with types, or {@link schema} for rules from JSON.
+ *
+ * @stability stable
+ * @category constructors
+ * @since 2.0.0
+ */
+export const rule = <E = never, R = never, O = never, I = unknown>(
+	data: RuleShape<E, R, O, I>,
+): Rule<E, R, O, any, I> => RuleData.make(data as never) as never
 
 /**
  * The options of a list of rules.
@@ -455,17 +765,16 @@ export class PolicyError extends Schema.TaggedError<PolicyError>(
  */
 export const rules: <
 	D extends Domain.Any,
-	Rules extends Rule.Rule<any, any, any, D, never>,
+	Rules extends Rule<any, any, any, D, never>,
 >(
 	domain: D,
 	rules: Iterable<Rules>,
 	options?: Options,
-) => Policy<
-	D,
-	Rule.Error<Rules>,
-	Rule.Services<Rules>,
-	Rule.OpaqueOf<Rules>
-> = (domain, values, options) => {
+) => Policy<D, RuleError<Rules>, RuleServices<Rules>, RuleOpaque<Rules>> = (
+	domain,
+	values,
+	options,
+) => {
 	// The constructor takes only rules, and it stops a list past the limits.
 	const node = new PolicyNodes.Rules({
 		algorithm: options?.algorithm ?? "denyOverrides",
@@ -476,7 +785,7 @@ export const rules: <
 	// find it.
 	if (
 		Arr.some(node.rules, (value) => {
-			const origin = Rule.domainOf(value)
+			const origin = value.domain
 			return origin !== undefined && origin !== domain
 		})
 	) {
@@ -484,7 +793,7 @@ export const rules: <
 			"A rule comes from the builder of another domain",
 		)
 	}
-	// Every rule is bound to the domain here, also a rule from `Rule.make`.
+	// Every rule is bound to the domain here, also a rule from `Policy.rule`.
 	const issues = Arr.flatMap(node.rules, (value, index) =>
 		Bind.ruleIssues(domain, value, ["rules", index]),
 	)
@@ -522,15 +831,10 @@ export const rules: <
  */
 export const define =
 	<D extends Domain.Any>(domain: D, options?: Options) =>
-	<Rules extends Rule.Rule<any, any, any, D, never>, A>(
-		body: (builder: Rule.Builder<D>) => Generator<Rules, A, unknown>,
-	): Policy<
-		D,
-		Rule.Error<Rules>,
-		Rule.Services<Rules>,
-		Rule.OpaqueOf<Rules>
-	> => {
-		const iterator = body(Rule.builder(domain))
+	<Rules extends Rule<any, any, any, D, never>, A>(
+		body: (builder: Builder<D>) => Generator<Rules, A, unknown>,
+	): Policy<D, RuleError<Rules>, RuleServices<Rules>, RuleOpaque<Rules>> => {
+		const iterator = body(builder(domain))
 		// Each rule goes back into the generator, as `yield*` gives it.
 		const collected = Arr.unfold(iterator.next(), (state) =>
 			state.done === true
@@ -661,9 +965,12 @@ const provideNode = (
 				rules: Arr.map(node.rules, (value) =>
 					value.when === undefined || !Condition.hasPredicate(value.when)
 						? value
-						: Rule.make({
+						: RuleData.make({
 								...value,
-								when: Condition.provideContext(value.when, context as never),
+								when: Condition.provideContext(
+									value.when as Condition.Any,
+									context as never,
+								),
 							}),
 				),
 			})
@@ -715,11 +1022,11 @@ interface DecideContext {
 }
 
 const ruleApplies = (
-	value: Rule.Any,
+	value: RuleData.Rule,
 	context: DecideContext,
 	path: ReadonlyArray<number>,
 ): Effect.Effect<boolean, unknown, unknown> => {
-	if (!Rule.matchesTarget(value, context)) {
+	if (!RuleData.matchesTarget(value, context)) {
 		return Effect.succeed(false)
 	}
 	const test =
@@ -733,23 +1040,26 @@ const ruleApplies = (
 		? test
 		: Effect.tap(test, (applies) =>
 				// A chunk adds a step with no copy of the steps before.
-				Ref.update(trace, Chunk.append({ path, rule: value, applies })),
+				Ref.update(trace, Chunk.append({ path, rule: typed(value), applies })),
 			)
 }
 
-const fromRule = (value: Rule.Any): Decision.Decision =>
+/** A rule of a node, with the type of a rule of no domain. */
+const typed = (value: RuleData.Rule): AnyRule => value as never
+
+const fromRule = (value: RuleData.Rule): Decision.Decision =>
 	value._tag === "Allow"
-		? Decision.Allow({ rule: value })
+		? Decision.Allow({ rule: typed(value) })
 		: value.reason === undefined
-			? Decision.Deny({ rule: value })
-			: Decision.Deny({ rule: value, reason: value.reason })
+			? Decision.Deny({ rule: typed(value) })
+			: Decision.Deny({ rule: typed(value), reason: value.reason })
 
 /** Gives the first rule that applies, in order. */
 const firstApplying = (
-	candidates: ReadonlyArray<readonly [Rule.Any, number]>,
+	candidates: ReadonlyArray<readonly [RuleData.Rule, number]>,
 	context: DecideContext,
 	path: ReadonlyArray<number>,
-): Effect.Effect<Option.Option<Rule.Any>, unknown, unknown> =>
+): Effect.Effect<Option.Option<RuleData.Rule>, unknown, unknown> =>
 	Effect.map(
 		Effect.findFirst(candidates, ([value, index]) =>
 			ruleApplies(value, context, [...path, index]),
@@ -765,14 +1075,14 @@ const orElse = <A, E, R>(
 	Effect.filterOrElse(first, Option.isSome, next)
 
 const decideRules = (
-	node: RulesNode,
+	node: PolicyNodes.Rules,
 	context: DecideContext,
 	path: ReadonlyArray<number>,
 ): Effect.Effect<Decision.Decision, unknown, unknown> => {
 	const indexed = Arr.map(node.rules, (value, index) => [value, index] as const)
 	const denies = Arr.filter(indexed, ([value]) => value._tag === "Deny")
 	const allows = Arr.filter(indexed, ([value]) => value._tag === "Allow")
-	const first = (candidates: ReadonlyArray<readonly [Rule.Any, number]>) =>
+	const first = (candidates: ReadonlyArray<readonly [RuleData.Rule, number]>) =>
 		firstApplying(candidates, context, path)
 	const found = (() => {
 		switch (node.algorithm) {
@@ -1069,7 +1379,9 @@ const deniesInside = (
 				(value) =>
 					value._tag === "Deny" &&
 					value.fields !== undefined &&
-					value.fields.some((pattern) => Rule.matchesInside(pattern, field)) &&
+					value.fields.some((pattern) =>
+						RuleData.matchesInside(pattern, field),
+					) &&
 					(value.actions.includes("*") ||
 						value.actions.includes(target.action)) &&
 					(value.resources.includes("*") ||
@@ -1269,8 +1581,8 @@ interface ResidualContext {
 	readonly descriptor: Resource.Descriptor
 }
 
-const ruleCondition = (value: Rule.Any, context: ResidualContext): Ast =>
-	!Rule.matchesTarget(value, context)
+const ruleCondition = (value: RuleData.Rule, context: ResidualContext): Ast =>
+	!RuleData.matchesTarget(value, context)
 		? never
 		: value.when === undefined
 			? always
@@ -1281,7 +1593,7 @@ const ruleCondition = (value: Rule.Any, context: ResidualContext): Ast =>
  * "the first rule that applies is a deny rule".
  */
 const firstApplicableResidual = (
-	values: ReadonlyArray<Rule.Any>,
+	values: ReadonlyArray<RuleData.Rule>,
 	context: ResidualContext,
 ): Pair => {
 	const { and, not, or } = build
@@ -1425,7 +1737,7 @@ const usesPredicate = (
 				(value) =>
 					value.when !== undefined &&
 					Condition.hasPredicate(value.when) &&
-					Rule.matchesTarget(value, context),
+					RuleData.matchesTarget(value, context),
 			)
 		case "All":
 		case "Any":

@@ -9,7 +9,7 @@ import * as Arr from "effect/Array"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import type * as Domain from "../Domain.ts"
-import * as Rule from "../Rule.ts"
+import * as Rule from "./rule.ts"
 import * as Json from "./json.ts"
 import * as Limits from "./limits.ts"
 import * as PolicyNodes from "./policy-nodes.ts"
@@ -17,7 +17,7 @@ import * as PolicyNodes from "./policy-nodes.ts"
 type Node = PolicyNodes.Node
 
 /** Gives the JSON form of a rule. The domain of a rule is not in it. */
-const ruleJson = (rule: Rule.Any, meta: Schema.Top | undefined): unknown => ({
+const ruleJson = (rule: Rule.Rule, meta: Schema.Top | undefined): unknown => ({
 	_tag: rule._tag,
 	actions: rule.actions,
 	resources: rule.resources,
@@ -112,7 +112,7 @@ const decodeRule = (
 	path: ReadonlyArray<PropertyKey>,
 	domain: Domain.Any,
 	budget: Json.Budget,
-): Rule.Any => {
+): Rule.Rule => {
 	if (typeof input !== "object" || input === null) {
 		throw Json.problem(path, "A rule must be an object")
 	}

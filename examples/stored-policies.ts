@@ -10,9 +10,9 @@
  *   audit log.
  */
 import { Effect, Exit, Schema } from "effect"
-import { Domain, Policy, Principal, Resource } from "../src/index.ts"
+import { Domain, Policy, Resource } from "../src/index.ts"
 
-class Agent extends Principal.Class<Agent>("Agent")({
+class Agent extends Schema.Class<Agent>("Agent")({
 	id: Schema.String,
 	queue: Schema.String,
 }) {}

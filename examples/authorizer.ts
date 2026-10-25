@@ -11,16 +11,9 @@
  *   outside the team waits for a person to say yes.
  */
 import { Context, Effect, Schema } from "effect"
-import {
-	Authorizer,
-	Decision,
-	Domain,
-	Policy,
-	Principal,
-	Resource,
-} from "../src/index.ts"
+import { Authorizer, Decision, Domain, Policy, Resource } from "../src/index.ts"
 
-class Member extends Principal.Class<Member>("Member")({
+class Member extends Schema.Class<Member>("Member")({
 	id: Schema.String,
 	team: Schema.String,
 }) {}

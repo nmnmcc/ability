@@ -13,9 +13,9 @@
  *   predicate that runs the whole policy for each value.
  */
 import { Context, Effect, Schema } from "effect"
-import { Domain, Policy, Principal, Resource } from "../src/index.ts"
+import { Domain, Policy, Resource } from "../src/index.ts"
 
-class Employee extends Principal.Class<Employee>("Employee")({
+class Employee extends Schema.Class<Employee>("Employee")({
 	id: Schema.String,
 	floor: Schema.Finite,
 }) {}

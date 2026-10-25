@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
-import { Decision, Domain, Policy, Principal, Resource } from "../src/index.ts"
+import { Decision, Domain, Policy, Resource } from "../src/index.ts"
 
-class User extends Principal.Class<User>("User")({
+class User extends Schema.Class<User>("User")({
 	id: Schema.String,
 }) {}
 

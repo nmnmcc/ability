@@ -1,6 +1,6 @@
 /**
  * The binding of rules to a domain. It is the one check of a rule, for a rule
- * from the builder, from `Rule.make`, and from JSON alike. It reads the
+ * from the builder, from `Policy.rule`, and from JSON alike. It reads the
  * catalogs of the resources and of the principal, and it gives one issue for
  * each problem, with the path of the problem and, for a name with a mistake,
  * the name that it may mean.

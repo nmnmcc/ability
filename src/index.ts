@@ -48,16 +48,4 @@ export * as Policy from "./Policy.ts"
  * @stability stable
  * @since 0.3.0
  */
-export * as Principal from "./Principal.ts"
-
-/**
- * @stability stable
- * @since 0.3.0
- */
 export * as Resource from "./Resource.ts"
-
-/**
- * @stability stable
- * @since 0.3.0
- */
-export * as Rule from "./Rule.ts"

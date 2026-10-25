@@ -22,9 +22,9 @@
  *   button.
  */
 import { Effect, Schema } from "effect"
-import { Condition, Domain, Policy, Principal, Resource } from "../src/index.ts"
+import { Condition, Domain, Policy, Resource } from "../src/index.ts"
 
-class Member extends Principal.Class<Member>("Member")({
+class Member extends Schema.Class<Member>("Member")({
 	userId: Schema.String,
 	workspaceId: Schema.String,
 	role: Schema.Literals(["viewer", "member", "admin", "owner"]),

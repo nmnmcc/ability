@@ -12,7 +12,7 @@
  * @since 0.3.0
  */
 import * as Data from "effect/Data"
-import type * as Rule from "./Rule.ts"
+import type * as Policy from "./Policy.ts"
 
 /**
  * @stability stable
@@ -22,11 +22,11 @@ import type * as Rule from "./Rule.ts"
 export type Decision = Data.TaggedEnum<{
 	Allow: {
 		/** The rule that gave the answer, when a rule gave it. */
-		readonly rule?: Rule.Any
+		readonly rule?: Policy.AnyRule
 	}
 	Deny: {
 		/** The rule that gave the answer, when a rule gave it. */
-		readonly rule?: Rule.Any
+		readonly rule?: Policy.AnyRule
 		readonly reason?: string
 	}
 	NotApplicable: {}
@@ -45,7 +45,8 @@ const {
  * @category constructors
  * @since 0.3.0
  */
-export const Allow: (args: { readonly rule?: Rule.Any }) => Decision = allow
+export const Allow: (args: { readonly rule?: Policy.AnyRule }) => Decision =
+	allow
 
 /**
  * @stability stable
@@ -53,7 +54,7 @@ export const Allow: (args: { readonly rule?: Rule.Any }) => Decision = allow
  * @since 0.3.0
  */
 export const Deny: (args: {
-	readonly rule?: Rule.Any
+	readonly rule?: Policy.AnyRule
 	readonly reason?: string
 }) => Decision = deny
 

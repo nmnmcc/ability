@@ -34,8 +34,8 @@ material. Do not change it unless the user asks.
 - Source files import each other with `.ts` extensions. Node.js runs `.ts` files
   itself, so the examples need no other runner.
 - Public entry points: `src/index.ts`, and one module for each concept:
-  `Resource`, `Principal`, `Domain`, `Condition`, `Rule`, `Policy`, `Decision`,
-  `Authorizer`, `Limits`.
+  `Resource`, `Domain`, `Condition`, `Policy`, `Decision`, `Authorizer`,
+  `Limits`. The types and the builder of rules are in `Policy`.
 - `src/HttpApi.ts` is a separate entry point, because `effect/http-api` is not
   stable. Do not export it from `src/index.ts`.
 - A public module in `src/` keeps the public types, the docs, and short exports.
@@ -53,7 +53,7 @@ material. Do not change it unless the user asks.
   principal. Keep these checks in the types.
 - `Resource.Class` works like `Schema.TaggedClass`. Every resource value has a
   `_tag`. Do not find a resource from a constructor name.
-- `Policy.define()` is pure and synchronous. A `Rule` must work with generators,
+- `Policy.define()` is pure and synchronous. A rule must work with generators,
   so users can write `yield* _.allow(...)`.
 - A condition is plain data. Only a predicate may run code. A predicate keeps
   its error type and service type in the types of the policy and of every check.

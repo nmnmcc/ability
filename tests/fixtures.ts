@@ -1,7 +1,7 @@
 import { Schema } from "effect"
-import { Domain, Principal, Resource } from "../src/index.ts"
+import { Domain, Resource } from "../src/index.ts"
 
-export class Caller extends Principal.Class<Caller>("Caller")({
+export class Caller extends Schema.Class<Caller>("Caller")({
 	userId: Schema.String,
 	organizationId: Schema.String,
 	role: Schema.Literals(["admin", "member", "guest"]),

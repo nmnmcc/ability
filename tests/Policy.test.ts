@@ -1,14 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Array as Arr, Effect, Equal, Exit, Schema } from "effect"
-import {
-	Condition,
-	Decision,
-	Domain,
-	Policy,
-	Principal,
-	Resource,
-	Rule,
-} from "../src/index.ts"
+import { Condition, Decision, Domain, Policy, Resource } from "../src/index.ts"
+import * as RuleData from "../src/internal/rule.ts"
 import {
 	alice,
 	aliceBot,
@@ -41,7 +34,7 @@ const hasField = (resource: Resource.Any, path: string): boolean =>
 
 describe("Policy", () => {
 	describe("algorithms", () => {
-		const rules = (_: Rule.Builder<App>) => [
+		const rules = (_: Policy.Builder<App>) => [
 			_.allow("update", Bot),
 			_.deny("update", Bot, {
 				when: ($) => $.eq("ownerUserId", null),
@@ -605,7 +598,7 @@ describe("Policy", () => {
 		})
 		const principals = { alice, guest }
 
-		type BotBuilder = Condition.Builder<Rule.DataFor<App, "Bot">, Bot, Caller>
+		type BotBuilder = Condition.Builder<Policy.DataFor<App, "Bot">, Bot, Caller>
 		const conditions: Record<
 			Exclude<(typeof Spec.Type)["when"], "none">,
 			($: BotBuilder) => Condition.Test<Bot, Caller>
@@ -628,9 +621,9 @@ describe("Policy", () => {
 		}
 
 		const toRule = (
-			_: Rule.Builder<App>,
+			_: Policy.Builder<App>,
 			spec: typeof Spec.Type,
-		): Rule.Rule<never, never, never, App, Condition.Reads<Bot, Caller>> => {
+		): Policy.Rule<never, never, never, App, Condition.Reads<Bot, Caller>> => {
 			const make = spec.tag === "Allow" ? _.allow : _.deny
 			return make(spec.action, Bot, {
 				...(spec.fields ? { fields: ["name"] } : {}),
@@ -1063,7 +1056,7 @@ describe("Policy", () => {
 	)
 
 	describe("keeps a predicate that may fail in the residual", () => {
-		const _ = Rule.builder(App)
+		const _ = Policy.builder(App)
 		const offline = (tag: "allow" | "deny") =>
 			_[tag]("read", Bot, {
 				when: ($) => $.predicate("offline", () => Effect.fail("offline")),
@@ -1196,7 +1189,7 @@ describe("Policy", () => {
 	})
 
 	it("decodes a rule with a field of an optional principal struct", () => {
-		class User extends Principal.Class<User>("User")({
+		class User extends Schema.Class<User>("User")({
 			user: Schema.optionalKey(Schema.Struct({ id: Schema.String })),
 		}) {}
 		const Blog = Domain.make({ principal: User, resources: [Bot] })
@@ -1245,8 +1238,8 @@ describe("Policy", () => {
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
 		const policy = Policy.rules(Notes, [
-			Rule.builder(Notes).allow("read", Note),
-			Rule.make({
+			Policy.builder(Notes).allow("read", Note),
+			Policy.rule({
 				_tag: "Deny",
 				actions: ["read"],
 				resources: ["Note"],
@@ -1264,28 +1257,28 @@ describe("Policy", () => {
 	})
 
 	it("matches field patterns", () => {
-		assert.isTrue(Rule.matchesField("address.*", "address.city"))
+		assert.isTrue(RuleData.matchesField("address.*", "address.city"))
 		// A pattern matches the fields below a field that it matches.
-		assert.isTrue(Rule.matchesField("address.*", "address.city.code"))
-		assert.isTrue(Rule.matchesField("address", "address.city"))
-		assert.isFalse(Rule.matchesField("address", "addressCity"))
-		assert.isTrue(Rule.matchesField("address.**", "address.city.code"))
-		assert.isTrue(Rule.matchesField("**", "name"))
-		assert.isTrue(Rule.matchesField("*.city", "address.city"))
-		assert.isFalse(Rule.matchesField("*.city", "city"))
-		assert.isTrue(Rule.matchesField("a*c", "abbc"))
-		assert.isFalse(Rule.matchesField("a*c", "a.c"))
-		assert.isTrue(Rule.matchesInside("settings.*", "settings"))
-		assert.isTrue(Rule.matchesInside("**", "settings"))
-		assert.isFalse(Rule.matchesInside("settings", "settings"))
-		assert.isFalse(Rule.matchesInside("name.*", "settings"))
-		assert.isTrue(Rule.matchesInside("settings.", "settings"))
+		assert.isTrue(RuleData.matchesField("address.*", "address.city.code"))
+		assert.isTrue(RuleData.matchesField("address", "address.city"))
+		assert.isFalse(RuleData.matchesField("address", "addressCity"))
+		assert.isTrue(RuleData.matchesField("address.**", "address.city.code"))
+		assert.isTrue(RuleData.matchesField("**", "name"))
+		assert.isTrue(RuleData.matchesField("*.city", "address.city"))
+		assert.isFalse(RuleData.matchesField("*.city", "city"))
+		assert.isTrue(RuleData.matchesField("a*c", "abbc"))
+		assert.isFalse(RuleData.matchesField("a*c", "a.c"))
+		assert.isTrue(RuleData.matchesInside("settings.*", "settings"))
+		assert.isTrue(RuleData.matchesInside("**", "settings"))
+		assert.isFalse(RuleData.matchesInside("settings", "settings"))
+		assert.isFalse(RuleData.matchesInside("name.*", "settings"))
+		assert.isTrue(RuleData.matchesInside("settings.", "settings"))
 	})
 
 	it("matches patterns by Unicode code points", () => {
-		assert.isTrue(Rule.matchesField("🔒*", "🔒secret"))
-		assert.isTrue(Rule.matchesField("a*", "a🔒"))
-		assert.isFalse(Rule.matchesField("🔒*", "🔓secret"))
+		assert.isTrue(RuleData.matchesField("🔒*", "🔒secret"))
+		assert.isTrue(RuleData.matchesField("a*", "a🔒"))
+		assert.isFalse(RuleData.matchesField("🔒*", "🔓secret"))
 	})
 
 	it("takes a rule on a part of a record field", () => {
@@ -1364,7 +1357,7 @@ describe("Policy", () => {
 		// A shared child counts for each place, so 15 levels are near the most.
 		const condition = Arr.reduce(
 			Arr.range(0, 14),
-			Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>().eq(
+			Condition.builder<Policy.DataFor<App, "Bot">, Bot, Caller>().eq(
 				"level",
 				2,
 			) as Condition.Test<Bot>,
@@ -1498,7 +1491,7 @@ describe("Policy", () => {
 	})
 
 	it("simplifies a condition with many shared parts in a short time", () => {
-		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
+		const $ = Condition.builder<Policy.DataFor<App, "Bot">, Bot, Caller>()
 		const build = (seed: number) =>
 			Arr.reduce(
 				Arr.range(0, 11),
@@ -1542,8 +1535,8 @@ describe("Policy", () => {
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
 		const policy = Policy.rules(Notes, [
-			Rule.builder(Notes).allow("read", Note),
-			Rule.make({
+			Policy.builder(Notes).allow("read", Note),
+			Policy.rule({
 				_tag: "Deny",
 				actions: ["read"],
 				resources: ["Note"],
@@ -1569,8 +1562,8 @@ describe("Policy", () => {
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
 		const policy = Policy.rules(Notes, [
-			Rule.builder(Notes).allow("read", Note),
-			Rule.make({
+			Policy.builder(Notes).allow("read", Note),
+			Policy.rule({
 				_tag: "Deny",
 				actions: ["read"],
 				resources: ["Note"],
@@ -1694,8 +1687,8 @@ describe("Policy", () => {
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
 		const policy = Policy.rules(Notes, [
-			Rule.builder(Notes).allow("read", Note),
-			Rule.make({
+			Policy.builder(Notes).allow("read", Note),
+			Policy.rule({
 				_tag: "Deny",
 				actions: ["read"],
 				resources: ["Note"],
@@ -1744,7 +1737,7 @@ describe("Policy", () => {
 	})
 
 	it("folds a condition with shared parts in a short time", () => {
-		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
+		const $ = Condition.builder<Policy.DataFor<App, "Bot">, Bot, Caller>()
 		const shared = Arr.reduce(
 			Arr.range(0, 11),
 			$.eq("level", 0) as Condition.Test<Bot>,
@@ -1802,8 +1795,8 @@ describe("Policy", () => {
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
 		const policy = Policy.rules(Notes, [
-			Rule.builder(Notes).allow("read", Note),
-			Rule.make({
+			Policy.builder(Notes).allow("read", Note),
+			Policy.rule({
 				_tag: "Deny",
 				actions: ["read"],
 				resources: ["Note"],
@@ -1871,8 +1864,8 @@ describe("Policy", () => {
 			unknown
 		>()
 		const policy = Policy.rules(Notes, [
-			Rule.builder(Notes).allow("read", Note),
-			Rule.make({
+			Policy.builder(Notes).allow("read", Note),
+			Policy.rule({
 				_tag: "Deny",
 				actions: ["read"],
 				resources: ["Note"],
@@ -1896,7 +1889,7 @@ describe("Policy", () => {
 	})
 
 	it("does not take a principal field that comes from a getter of its class", () => {
-		class Member extends Principal.Class<Member>("Member")({
+		class Member extends Schema.Class<Member>("Member")({
 			id: Schema.String,
 		}) {
 			get ownerId() {
@@ -2023,7 +2016,7 @@ describe("Policy", () => {
 	})
 
 	it("does not take a test that can never match by its types", () => {
-		class Person extends Principal.Class<Person>("Person")({
+		class Person extends Schema.Class<Person>("Person")({
 			score: Schema.NullOr(Schema.Finite),
 		}) {}
 		const Note = Resource.make("Note", {
@@ -2070,7 +2063,7 @@ describe("Policy", () => {
 	})
 
 	it("needs one ordered type for an ordered test with a principal field", () => {
-		class Scored extends Principal.Class<Scored>("Scored")({
+		class Scored extends Schema.Class<Scored>("Scored")({
 			score: Schema.Union([Schema.Finite, Schema.Boolean]),
 		}) {}
 		const Note = Resource.make("Note", {
@@ -2104,7 +2097,7 @@ describe("Policy", () => {
 		fields["blocked"] = Schema.Literal(false)
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
 		const policy = Policy.rules(Notes, [
-			Rule.make({
+			Policy.rule({
 				_tag: "Allow",
 				actions: ["read"],
 				resources: ["Note"],
@@ -2167,7 +2160,7 @@ describe("Policy", () => {
 	})
 
 	it("compares a principal field that is not a finite number", () => {
-		class Limited extends Principal.Class<Limited>("Limited")({
+		class Limited extends Schema.Class<Limited>("Limited")({
 			// The test needs Infinity in this field.
 			// @effect-diagnostics-next-line schemaNumber:off
 			limit: Schema.Number,
@@ -2190,7 +2183,7 @@ describe("Policy", () => {
 	})
 
 	it("does not take a path test with a principal field that is an object", () => {
-		class Member extends Principal.Class<Member>("Member")({
+		class Member extends Schema.Class<Member>("Member")({
 			group: Schema.Struct({ name: Schema.String }),
 		}) {}
 		const Members = Domain.make({ principal: Member, resources: [Bot] })
@@ -2247,7 +2240,7 @@ describe("Policy", () => {
 			fields: { count: Schema.Finite },
 			path: (f) => ["seq", f.count],
 		})
-		class User extends Principal.Class<User>("PathUser")({
+		class User extends Schema.Class<User>("PathUser")({
 			id: Schema.String,
 		}) {}
 		const Docs = Domain.make({ principal: User, resources: [Doc, Counter] })
@@ -2277,7 +2270,7 @@ describe("Policy", () => {
 			fields: { id: Schema.String },
 			path: () => ["team"],
 		})
-		class Scoped extends Principal.Class<Scoped>("ScopedUser")({
+		class Scoped extends Schema.Class<Scoped>("ScopedUser")({
 			scope: Schema.Literal("org"),
 		}) {}
 		const Both = Domain.make({ principal: Scoped, resources: [Reader, Writer] })
@@ -2307,7 +2300,7 @@ describe("Policy", () => {
 			fields: { number: Schema.Int },
 			path: (f) => ["invoice", f.number],
 		})
-		class User extends Principal.Class<User>("InvoiceUser")({
+		class User extends Schema.Class<User>("InvoiceUser")({
 			id: Schema.String,
 		}) {}
 		const Docs = Domain.make({ principal: User, resources: [Doc, Invoice] })
@@ -2407,7 +2400,7 @@ describe("Policy", () => {
 			fields: { id: Schema.Finite },
 			path: (f) => ["item", f.id, "other"],
 		})
-		class User extends Principal.Class<User>("PrefixUser")({
+		class User extends Schema.Class<User>("PrefixUser")({
 			id: Schema.String,
 		}) {}
 		const Items = Domain.make({ principal: User, resources: [Post, Other] })
@@ -2507,7 +2500,7 @@ describe("Policy", () => {
 		assert.throws(
 			() =>
 				Policy.rules(App, [
-					Rule.make({
+					Policy.rule({
 						_tag: "Allow",
 						actions: ["read"],
 						resources: ["Bot"],
@@ -2732,7 +2725,7 @@ describe("Policy", () => {
 		assert.throws(
 			() =>
 				Policy.rules(App, [
-					Rule.make({
+					Policy.rule({
 						_tag: "Deny",
 						actions: ["read"],
 						resources: ["Bot"],
@@ -2813,7 +2806,7 @@ describe("Policy", () => {
 	})
 
 	it("does not take a test with a principal field that is an object", () => {
-		class Timed extends Principal.Class<Timed>("Timed")({
+		class Timed extends Schema.Class<Timed>("Timed")({
 			until: Schema.Date,
 		}) {}
 		const Note = Resource.make("Note", {
@@ -2943,17 +2936,19 @@ describe("Policy", () => {
 	})
 
 	it("lets ** match no parts of a field path", () => {
-		assert.isTrue(Rule.matchesField("**.secret", "secret"))
-		assert.isTrue(Rule.matchesField("settings.**.secret", "settings.secret"))
-		assert.isTrue(Rule.matchesField("settings.**", "settings"))
+		assert.isTrue(RuleData.matchesField("**.secret", "secret"))
 		assert.isTrue(
-			Rule.matchesField("settings.**.secret", "settings.a.b.secret"),
+			RuleData.matchesField("settings.**.secret", "settings.secret"),
 		)
-		assert.isFalse(Rule.matchesField("**.secret", "notsecret"))
-		assert.isFalse(Rule.matchesField("settings.**", "settingsx"))
-		assert.isTrue(Rule.matchesField("secret.**.**", "secret"))
-		assert.isTrue(Rule.matchesField("**.**.secret", "secret"))
-		assert.isTrue(Rule.matchesField(`${"**.".repeat(14)}secret`, "secret"))
+		assert.isTrue(RuleData.matchesField("settings.**", "settings"))
+		assert.isTrue(
+			RuleData.matchesField("settings.**.secret", "settings.a.b.secret"),
+		)
+		assert.isFalse(RuleData.matchesField("**.secret", "notsecret"))
+		assert.isFalse(RuleData.matchesField("settings.**", "settingsx"))
+		assert.isTrue(RuleData.matchesField("secret.**.**", "secret"))
+		assert.isTrue(RuleData.matchesField("**.**.secret", "secret"))
+		assert.isTrue(RuleData.matchesField(`${"**.".repeat(14)}secret`, "secret"))
 		const policy = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot)
 			yield* _.deny("read", Bot, { fields: ["**.model"] })
@@ -3212,7 +3207,7 @@ describe("Policy", () => {
 
 	it("does not make a residual that would fill the stack", () => {
 		const Rules = Arr.map(Arr.range(0, 1999), (index) =>
-			Rule.make({
+			Policy.rule({
 				_tag: index % 2 === 0 ? "Allow" : "Deny",
 				actions: ["read"],
 				resources: ["Bot"],
@@ -3307,8 +3302,8 @@ describe("Policy", () => {
 			const Note = Resource.make("Note", { actions: ["read"], fields })
 			const Notes = Domain.make({ principal: Caller, resources: [Note] })
 			const policy = Policy.rules(Notes, [
-				Rule.builder(Notes).allow("read", Note),
-				Rule.make({
+				Policy.builder(Notes).allow("read", Note),
+				Policy.rule({
 					_tag: "Deny",
 					actions: ["read"],
 					resources: ["Note"],
@@ -3363,8 +3358,8 @@ describe("Policy", () => {
 	})
 
 	it("does not take a copy of a rule or a policy made with a spread", () => {
-		const rule = Rule.builder(App).allow("read", Bot)
-		assert.throws(() => Policy.rules(App, [{ ...rule } as Rule.Any]))
+		const rule = Policy.builder(App).allow("read", Bot)
+		assert.throws(() => Policy.rules(App, [{ ...rule } as Policy.AnyRule]))
 		const policy = Policy.empty(App)
 		assert.throws(() => Policy.any([{ ...policy } as Policy.Policy<App>]))
 	})
@@ -3392,14 +3387,14 @@ describe("Policy", () => {
 	})
 
 	it("says which name a name with a mistake may mean", () => {
-		const bind = (rule: Partial<Rule.Shape>) => () =>
+		const bind = (rule: Partial<Policy.RuleShape>) => () =>
 			Policy.rules(App, [
-				Rule.make({
+				Policy.rule({
 					_tag: "Allow",
 					actions: ["read"],
 					resources: ["Bot"],
 					...rule,
-				} as Rule.Shape),
+				} as Policy.RuleShape),
 			])
 		const $ = Condition.builder<{ readonly nmae: string }, unknown, unknown>()
 		assert.throws(
@@ -3446,7 +3441,7 @@ describe("Policy", () => {
 			(_, index) => `info.k${String(index)}`,
 		)
 		const policy = Policy.rules(Notes, [
-			Rule.make({
+			Policy.rule({
 				_tag: "Allow",
 				actions: ["read"],
 				resources: ["Note"],
@@ -3472,7 +3467,7 @@ describe("Policy", () => {
 		const coverage = (when: Condition.Ast) =>
 			Policy.coverage(
 				Policy.rules(Notes, [
-					Rule.make({
+					Policy.rule({
 						_tag: "Allow",
 						actions: ["read"],
 						resources: ["Note"],
@@ -3534,7 +3529,7 @@ describe("Policy", () => {
 		const Wides = Domain.make({ principal: Caller, resources: [Wide] })
 		const $ = Condition.builder<Record<string, null>, unknown, unknown>()
 		const policy = Policy.rules(Wides, [
-			Rule.make({
+			Policy.rule({
 				_tag: "Allow",
 				actions: ["read"],
 				resources: ["Wide"],
@@ -3566,7 +3561,7 @@ describe("Policy", () => {
 	})
 
 	it("searches a condition with shared branches in a short time", () => {
-		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
+		const $ = Condition.builder<Policy.DataFor<App, "Bot">, Bot, Caller>()
 		const shared = Arr.reduce(
 			Arr.range(0, 14),
 			$.eq("id", "a") as Condition.Test<Bot>,
@@ -3594,7 +3589,7 @@ describe("Policy", () => {
 	})
 
 	it("simplifies shared predicate branches in a short time", () => {
-		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
+		const $ = Condition.builder<Policy.DataFor<App, "Bot">, Bot, Caller>()
 		const shared = Arr.reduce(
 			Arr.range(0, 14),
 			$.predicate("never", () => false) as Condition.Condition<
@@ -3763,7 +3758,7 @@ describe("Policy", () => {
 	})
 
 	it("takes a principal field inside a record", () => {
-		class User extends Principal.Class<User>("User")({
+		class User extends Schema.Class<User>("User")({
 			claims: Schema.Record(Schema.String, Schema.String),
 		}) {}
 		const Claims = Domain.make({ principal: User, resources: [Bot] })
@@ -3819,7 +3814,7 @@ describe("Policy", () => {
 		assert.isFalse(hasField(Note, "settings.mode.x"))
 		assert.throws(() =>
 			Policy.rules(Notes, [
-				Rule.make({
+				Policy.rule({
 					_tag: "Allow",
 					actions: ["read"],
 					resources: ["Note"],
@@ -3893,8 +3888,8 @@ describe("Policy", () => {
 	it("matches long patterns in a short time", () => {
 		const start = Date.now()
 		// Only a whole part may be "**".
-		assert.throws(() => Rule.matchesField("*".repeat(10_000), "name"))
-		assert.isFalse(Rule.matchesField(`${"x".repeat(40_000)}*`, "name"))
+		assert.throws(() => RuleData.matchesField("*".repeat(10_000), "name"))
+		assert.isFalse(RuleData.matchesField(`${"x".repeat(40_000)}*`, "name"))
 		assert.isBelow(Date.now() - start, 1000)
 	})
 
@@ -3919,7 +3914,7 @@ describe("Policy", () => {
 	it("matches a pattern with many stars in a short time", () => {
 		const start = Date.now()
 		assert.isFalse(
-			Rule.matchesField(`${"*a".repeat(80)}Z`, "organizationIdentifier"),
+			RuleData.matchesField(`${"*a".repeat(80)}Z`, "organizationIdentifier"),
 		)
 		assert.isBelow(Date.now() - start, 1000)
 	})
@@ -3945,7 +3940,7 @@ describe("Policy", () => {
 	it("does not take a rule from the builder of a domain with the same types", () => {
 		const First = Domain.make({ principal: Caller, resources: [Bot] })
 		const Second = Domain.make({ principal: Caller, resources: [Bot] })
-		const rule = Rule.builder(First).allow("read", Bot)
+		const rule = Policy.builder(First).allow("read", Bot)
 		assert.throws(() => Policy.rules(Second, [rule]))
 		assert.doesNotThrow(() => Policy.rules(First, [rule]))
 	})
@@ -3956,10 +3951,10 @@ describe("Policy", () => {
 			fields: { id: Schema.String },
 		})
 		const Other = Domain.make({ principal: Caller, resources: [Small] })
-		const rule = Rule.builder(App).allow("read", Bot, {
+		const rule = Policy.builder(App).allow("read", Bot, {
 			when: ($) => $.eq("ownerUserId", null),
 		})
 		// The types stop this. The test casts the rule, to check the code too.
-		assert.throws(() => Policy.rules(Other, [rule as Rule.Any]))
+		assert.throws(() => Policy.rules(Other, [rule as Policy.AnyRule]))
 	})
 })

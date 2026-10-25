@@ -4,10 +4,8 @@ export default defineConfig({
 	entry: {
 		index: "src/index.ts",
 		Resource: "src/Resource.ts",
-		Principal: "src/Principal.ts",
 		Domain: "src/Domain.ts",
 		Condition: "src/Condition.ts",
-		Rule: "src/Rule.ts",
 		Policy: "src/Policy.ts",
 		Decision: "src/Decision.ts",
 		Authorizer: "src/Authorizer.ts",

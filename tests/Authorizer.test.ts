@@ -17,7 +17,6 @@ import {
 	Decision,
 	Domain,
 	Policy,
-	Principal,
 	Resource,
 } from "../src/index.ts"
 import {
@@ -675,7 +674,7 @@ describe("Authorizer", () => {
 
 	it.effect("does not give one cached policy to two principals", () =>
 		Effect.gen(function* () {
-			class User extends Principal.Class<User>("User")({
+			class User extends Schema.Class<User>("User")({
 				claims: Schema.ReadonlyMap(Schema.String, Schema.String),
 			}) {}
 			const Shop = Domain.make({ principal: User, resources: [Bot] })
@@ -716,7 +715,7 @@ describe("Authorizer", () => {
 
 	it.effect("keeps the types of principal values in the cache key", () =>
 		Effect.gen(function* () {
-			class User extends Principal.Class<User>("User")({
+			class User extends Schema.Class<User>("User")({
 				id: Schema.Union([Schema.BigInt, Schema.String]),
 			}) {}
 			const Shop = Domain.make({ principal: User, resources: [Bot] })
@@ -755,7 +754,7 @@ describe("Authorizer", () => {
 
 	it.effect("does not give one cached policy to two URL values", () =>
 		Effect.gen(function* () {
-			class Site extends Principal.Class<Site>("Site")({
+			class Site extends Schema.Class<Site>("Site")({
 				url: Schema.URL,
 			}) {}
 			const Web = Domain.make({ principal: Site, resources: [Bot] })
@@ -797,7 +796,7 @@ describe("Authorizer", () => {
 		() =>
 			Effect.gen(function* () {
 				const make = (identifier: string) =>
-					class User extends Principal.Class<User>(identifier)({
+					class User extends Schema.Class<User>(identifier)({
 						id: Schema.String,
 					}) {}
 				const Admin = make("Admin")
@@ -989,7 +988,7 @@ describe("Authorizer", () => {
 
 	it.effect("does not give one cached policy to two orders of a map", () =>
 		Effect.gen(function* () {
-			class Ranked extends Principal.Class<Ranked>("Ranked")({
+			class Ranked extends Schema.Class<Ranked>("Ranked")({
 				roles: Schema.ReadonlyMap(Schema.String, Schema.String),
 			}) {}
 			const Ranks = Domain.make({ principal: Ranked, resources: [Bot] })
@@ -1065,7 +1064,7 @@ describe("Authorizer", () => {
 
 	it.effect("does not give one cached policy to two orders of a record", () =>
 		Effect.gen(function* () {
-			class Holder extends Principal.Class<Holder>("Holder")({
+			class Holder extends Schema.Class<Holder>("Holder")({
 				roles: Schema.Record(Schema.String, Schema.String),
 			}) {}
 			const Holders = Domain.make({ principal: Holder, resources: [Bot] })
@@ -1108,7 +1107,7 @@ describe("Authorizer", () => {
 	it.effect("does not cache a principal with one object in two places", () =>
 		Effect.gen(function* () {
 			class Role extends Schema.Class<Role>("Role")({ name: Schema.String }) {}
-			class Chooser extends Principal.Class<Chooser>("Chooser")({
+			class Chooser extends Schema.Class<Chooser>("Chooser")({
 				selected: Role,
 				allowed: Schema.ReadonlySet(Role),
 			}) {}
@@ -1187,7 +1186,7 @@ describe("Authorizer", () => {
 		Effect.gen(function* () {
 			class Role extends Schema.Class<Role>("Role")({ name: Schema.String }) {}
 			const admin = Role.make({ name: "admin" })
-			class Member extends Principal.Class<Member>("Member")({
+			class Member extends Schema.Class<Member>("Member")({
 				roles: Schema.ReadonlySet(Role),
 			}) {}
 			const Members = Domain.make({ principal: Member, resources: [Bot] })
@@ -1231,7 +1230,7 @@ describe("Authorizer", () => {
 		Effect.gen(function* () {
 			class Role extends Schema.Class<Role>("Role")({ name: Schema.String }) {}
 			const admin = Role.make({ name: "admin" })
-			class Staff extends Principal.Class<Staff>("Staff")({
+			class Staff extends Schema.Class<Staff>("Staff")({
 				roles: Schema.Array(Role),
 			}) {}
 			const Staffs = Domain.make({ principal: Staff, resources: [Bot] })
@@ -1273,7 +1272,7 @@ describe("Authorizer", () => {
 
 	it.effect("keeps a principal with objects as the values of a map", () =>
 		Effect.gen(function* () {
-			class Holder extends Principal.Class<Holder>("MapHolder")({
+			class Holder extends Schema.Class<Holder>("MapHolder")({
 				roles: Schema.ReadonlyMap(
 					Schema.String,
 					Schema.Struct({ role: Schema.String }),
@@ -1326,7 +1325,7 @@ describe("Authorizer", () => {
 
 	it.effect("does not fill the stack with the key of a deep principal", () =>
 		Effect.gen(function* () {
-			class Deep extends Principal.Class<Deep>("Deep")({
+			class Deep extends Schema.Class<Deep>("Deep")({
 				info: Schema.Json,
 			}) {}
 			const Deeps = Domain.make({ principal: Deep, resources: [Bot] })
@@ -1359,7 +1358,7 @@ describe("Authorizer", () => {
 
 	it.effect("makes the cache key of a long list in a short time", () =>
 		Effect.gen(function* () {
-			class Many extends Principal.Class<Many>("Many")({
+			class Many extends Schema.Class<Many>("Many")({
 				roles: Schema.Array(Schema.String),
 			}) {}
 			const Manys = Domain.make({ principal: Many, resources: [Bot] })
@@ -1392,7 +1391,7 @@ describe("Authorizer", () => {
 
 	it.effect("makes the cache key of many objects in a short time", () =>
 		Effect.gen(function* () {
-			class Holder extends Principal.Class<Holder>("ManyHolder")({
+			class Holder extends Schema.Class<Holder>("ManyHolder")({
 				levels: Schema.Record(
 					Schema.String,
 					Schema.Struct({ level: Schema.Finite }),

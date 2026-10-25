@@ -36,9 +36,7 @@ import {
 	Decision,
 	Domain,
 	Policy,
-	Principal,
 	Resource,
-	Rule,
 } from "@nmnmcc/ability"
 import * as AbilityHttpApi from "@nmnmcc/ability/HttpApi"
 ```
@@ -46,13 +44,12 @@ import * as AbilityHttpApi from "@nmnmcc/ability/HttpApi"
 | Module       | What it is                                                                  |
 | ------------ | --------------------------------------------------------------------------- |
 | `Resource`   | A kind of thing to act on, with its actions, its Schema, and a path.        |
-| `Principal`  | The Schema of the one who asks.                                             |
-| `Domain`     | The principal and all the resources. Every other type comes from it.        |
+| `Domain`     | The principal Schema and all the resources. Every type comes from it.       |
 | `Condition`  | A test on a resource value, as plain data.                                  |
-| `Rule`       | An allow rule or a deny rule.                                               |
-| `Policy`     | A tree of rules that gives a decision, a residual condition, and fields.    |
+| `Policy`     | Rules, and a tree of rules that gives a decision, a residual and fields.    |
 | `Decision`   | `Allow`, `Deny` or `NotApplicable`.                                         |
 | `Authorizer` | An Effect service that checks the principal of the current request.         |
+| `Limits`     | The limits that keep every walk and every decoder small.                    |
 | `HttpApi`    | Annotations and a middleware for `effect/http-api`. A separate entry point. |
 
 ## First Steps
@@ -63,9 +60,9 @@ the same time:
 
 ```ts
 import { Effect, Schema } from "effect"
-import { Decision, Domain, Policy, Principal, Resource } from "@nmnmcc/ability"
+import { Decision, Domain, Policy, Resource } from "@nmnmcc/ability"
 
-class User extends Principal.Class<User>("User")({
+class User extends Schema.Class<User>("User")({
 	id: Schema.String,
 }) {}
 

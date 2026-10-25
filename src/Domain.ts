@@ -20,8 +20,10 @@ import * as HashMap from "effect/HashMap"
 import * as Option from "effect/Option"
 import type * as Schema from "effect/Schema"
 import * as Catalog from "./internal/catalog.ts"
-import type * as PrincipalSchema from "./Principal.ts"
 import * as Resource from "./Resource.ts"
+
+/** The Schema of a principal: a Schema of objects, such as a `Schema.Class`. */
+type PrincipalSchema = Schema.Top & { readonly Type: object }
 
 /**
  * A domain. `P` is the type of the principal, `Resources` is the union of the
@@ -36,7 +38,7 @@ export interface Domain<
 	Resources extends Resource.Any,
 	Meta,
 > {
-	readonly principal: PrincipalSchema.Any
+	readonly principal: PrincipalSchema
 	/** The catalog of the data fields of the principal. */
 	readonly principalCatalog: Catalog.Catalog
 	/** The descriptor of each resource, by its kind name. */
@@ -172,7 +174,7 @@ export type AnyValue<D> = Resource.Value<Resources<D>>
  * The class of every domain value. {@link isDomain} uses it to know a domain.
  */
 class DomainData extends Data.Class<{
-	readonly principal: PrincipalSchema.Any
+	readonly principal: PrincipalSchema
 	readonly principalCatalog: Catalog.Catalog
 	readonly resources: HashMap.HashMap<string, Resource.Descriptor>
 	readonly meta: Schema.Top | undefined
@@ -189,7 +191,7 @@ class DomainData extends Data.Class<{
  * @since 0.3.0
  */
 export const make: <
-	P extends PrincipalSchema.Any,
+	P extends PrincipalSchema,
 	const Resources extends ReadonlyArray<Resource.Any>,
 	M extends Schema.Codec<any, any, never, never> = Schema.Never,
 >(options: {
