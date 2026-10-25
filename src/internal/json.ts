@@ -67,17 +67,28 @@ export const spend = (
 
 /**
  * Reads a field of the input at the place `at`. A field that is not plain
- * data is a problem.
+ * data is a problem. JSON has no hidden fields, so a field that a loop over
+ * the keys does not see is a problem too.
  */
 export const read = (
 	input: unknown,
 	name: string,
 	at: Place.Place | undefined,
 ): unknown => {
+	const problem = () =>
+		problemAt(Place.at(at, name), `The field "${name}" is not plain data`)
+	if (
+		typeof input === "object" &&
+		input !== null &&
+		Object.hasOwn(input, name) &&
+		!Object.prototype.propertyIsEnumerable.call(input, name)
+	) {
+		throw problem()
+	}
 	try {
 		return readPart(input, name)
 	} catch {
-		throw problemAt(Place.at(at, name), `The field "${name}" is not plain data`)
+		throw problem()
 	}
 }
 

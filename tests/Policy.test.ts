@@ -4439,6 +4439,41 @@ describe("Policy", () => {
 		)
 	})
 
+	it("reads the message of a Schema error in a decision, as the residual does", () => {
+		class Problem extends Schema.TaggedError<Problem>(
+			"@nmnmcc/ability/tests/Policy.test/Problem",
+		)("Problem", { message: Schema.String }) {}
+		const Report = Resource.make("Report", {
+			actions: ["read"],
+			fields: { problem: Problem },
+		})
+		const Reports = Domain.make({ principal: Caller, resources: [Report] })
+		const policy = Policy.define(Reports)(function* (_) {
+			yield* _.deny("read", Report, {
+				when: ($) => $.eq("problem.message", "secret"),
+			})
+			yield* _.allow("read", Report, {
+				when: ($) => $.exists("problem.message"),
+			})
+		})
+		const kind = { principal: alice, action: "read", kind: "Report" } as const
+		const residual = Policy.residual(policy, kind)
+		Arr.forEach(["secret", "open"], (message) => {
+			// An `Error` keeps its message in a field that a loop does not see.
+			const value = Report.make({ problem: Problem.make({ message }) })
+			const decision = Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: value,
+			})._tag
+			assert.strictEqual(decision, message === "secret" ? "Deny" : "Allow")
+			assert.strictEqual(
+				Condition.evaluateSync(residual, { value }),
+				decision === "Allow",
+			)
+		})
+	})
+
 	it("tests a field pattern that a rule names many times one time on a long field", () => {
 		interface Node {
 			readonly a: Node | null

@@ -209,13 +209,14 @@ A rule does not fit the domain: The field "titel" is not a field of every
 resource of the rule. Did you mean "title"?
 ```
 
-A condition reads only the data fields of a value: an own field that a loop over
-the keys sees. A rule that names a getter of a class is a `PolicyError`. Use a
-predicate for a value that comes from code. A condition may not read a field, of
-a resource or of the principal, below a value that may not be plain data: a
-union with a struct or a class that does not have the field, a list, a date, or
-a value of `Schema.Unknown`. A decision may get a value made by hand, and such a
-value may have the field with any value, as a list. Such a rule is a
+A condition reads only the data fields of a value: an own field with a value and
+no getter. A loop over the keys may not see it, as the `message` of a
+`Schema.TaggedError`. A rule that names a getter of a class is a `PolicyError`.
+Use a predicate for a value that comes from code. A condition may not read a
+field, of a resource or of the principal, below a value that may not be plain
+data: a union with a struct or a class that does not have the field, a list, a
+date, or a value of `Schema.Unknown`. A decision may get a value made by hand,
+and such a value may have the field with any value, as a list. Such a rule is a
 `PolicyError` too. A string in a union is fine: the field reads `null` for it. A
 test reads only the fields that the simple form of its condition needs, as the
 residual does: in `x AND False`, it does not read `x`.

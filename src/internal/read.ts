@@ -1,8 +1,10 @@
 /**
  * How a condition reads a field of a value. A condition reads only plain
- * data: an own data field that a loop over the keys sees. This is the data
- * that a Schema describes, and that every value from Effect has, so the
- * catalog of the Schema holds every value that a read can give.
+ * data: an own data field, with a value and no getter. This is the data that
+ * a Schema describes, and that every value from Effect has, so the catalog of
+ * the Schema holds every value that a read can give. A loop over the keys may
+ * not see such a field: a value of a `Schema.TaggedError` keeps `message` in
+ * a hidden field, as every `Error` does.
  */
 import * as Arr from "effect/Array"
 import * as Option from "effect/Option"
@@ -17,14 +19,13 @@ const prototypesOf = (value: object): ReadonlyArray<object> =>
 
 /**
  * Reads one part of a value:
- * - an own data field that a loop over the keys sees gives its value, with
- *   `null` for `undefined`;
+ * - an own data field gives its value, with `null` for `undefined`;
  * - a part of `null`, of a scalar, or a missing field gives `null`;
  * - a name that the value has only from `Object.prototype`, such as
  *   `constructor`, gives `null`.
  *
- * Any other field, such as a getter, a hidden field, or a field from the
- * prototype of a class, is a defect. Its value is not data that the Schema
+ * Any other field, such as a getter or a field from the prototype of a class,
+ * is a defect. Its value is not data that the Schema
  * describes, and a read of it as `null` could let a value pass a deny rule.
  */
 export const readPart = (value: unknown, name: string): unknown => {
@@ -41,7 +42,7 @@ export const readPart = (value: unknown, name: string): unknown => {
 		}
 		throw new Error(`The field "${name}" of the value is not plain data`)
 	}
-	if (!("value" in property) || property.enumerable !== true) {
+	if (!("value" in property)) {
 		throw new Error(`The field "${name}" of the value is not plain data`)
 	}
 	return property.value === undefined ? null : property.value

@@ -349,13 +349,13 @@ describe("read", () => {
 		assert.strictEqual(readPart(Owner.make({ id: "o" }), "id"), "o")
 	})
 
-	it("does not read a getter or a field that a loop does not see", () => {
+	it("reads a field that a loop does not see, but not a getter", () => {
 		assert.throws(
 			() => readPart(Owner.make({ id: "o" }), "label"),
 			/not plain data/,
 		)
 		const hidden = Object.defineProperty({}, "a", { value: 1 })
-		assert.throws(() => readPart(hidden, "a"), /not plain data/)
+		assert.strictEqual(readPart(hidden, "a"), 1)
 		const accessor = Object.defineProperty({}, "a", {
 			get: () => 1,
 			enumerable: true,

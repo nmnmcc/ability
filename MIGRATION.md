@@ -18,6 +18,9 @@ change.
   `policyNodes`.
 - `JSON.stringify` of the JSON form of a very deep policy, with many thousands
   of levels, may fail. The engine writes JSON text with a walk of its own.
+- A condition reads an own field that a loop over the keys does not see, as the
+  `message` of a `Schema.TaggedError`. Before 2.1.8, such a read was a defect,
+  but the residual and the coverage took the field as data.
 - The cache key of the Authorizer is only the JSON text of the principal, and
   the loader gets the value that the Schema decodes from the text. Before 2.1.7,
   a key compared the decoded values too. Data that a Schema makes when it
@@ -174,10 +177,9 @@ The Schema of a policy gives the same problems at their JSON paths.
 
 ### A condition reads only data fields
 
-A condition reads an own field that a loop over the keys sees. A getter, a field
-that a loop does not see, or a field from the prototype of a class is a defect
-when a check runs, and a rule that names one is a `PolicyError`. Use a predicate
-for a value that comes from code.
+A condition reads an own field with a value and no getter. A getter or a field
+from the prototype of a class is a defect when a check runs, and a rule that
+names one is a `PolicyError`. Use a predicate for a value that comes from code.
 
 ### Field patterns
 
