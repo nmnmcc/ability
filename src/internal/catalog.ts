@@ -333,6 +333,14 @@ const textOf = (path: ReadonlyArray<Segment>): string =>
 		typeof segment === "string" ? segment : "*",
 	).join(".")
 
+/**
+ * The name of a property as a part of a path. A key of an object is a string,
+ * so a number key, as from `Schema.Record(Schema.Literal(1), ...)`, has the
+ * name `"1"`. A symbol key is not a field.
+ */
+const nameOf = (signature: SchemaAST.PropertySignature): string | undefined =>
+	typeof signature.name === "symbol" ? undefined : String(signature.name)
+
 /** Gives the property of a struct with a name, if it has one. */
 const propertyOf = (
 	struct: SchemaAST.Objects,
@@ -341,7 +349,7 @@ const propertyOf = (
 	Option.getOrUndefined(
 		Arr.findFirst(
 			struct.propertySignatures,
-			(signature) => signature.name === name,
+			(signature) => nameOf(signature) === name,
 		),
 	)
 
@@ -352,8 +360,8 @@ const namesOf = (
 	Arr.dedupe(
 		Arr.flatMap(structs, (struct) =>
 			Arr.flatMap(struct.propertySignatures, (signature) => {
-				const name = signature.name
-				if (typeof name !== "string") {
+				const name = nameOf(signature)
+				if (name === undefined) {
 					return []
 				}
 				// A dot in a path is the step into a nested field. A field name with

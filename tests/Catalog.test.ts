@@ -127,6 +127,15 @@ describe("Catalog", () => {
 		assert.isUndefined(Catalog.lookup(catalogOf(schema), "entries.y1.secret"))
 	})
 
+	it("names a number key of a struct with its text", () => {
+		const schema = Schema.Struct({
+			data: Schema.Record(Schema.Literal(1), Schema.String),
+		})
+		assert.deepStrictEqual(texts(schema), ["data", "data.1"])
+		assert.isTrue(fieldOf(schema, "data.1").kinds.string)
+		assert.isTrue(fieldOf(schema, "data.1").listed)
+	})
+
 	it("stops a recursive Schema at the most parts of a path", () => {
 		const schema = Schema.Struct({ root: Link })
 		assert.isDefined(Catalog.lookup(catalogOf(schema), "root.next.next.value"))

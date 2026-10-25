@@ -3087,6 +3087,36 @@ describe("Policy", () => {
 		assert.throws(() => decide(Owner.make({ id: "o" })), /not plain data/)
 	})
 
+	it("takes a field with a number key", () => {
+		const Sheet = Resource.make("NumberSheet", {
+			actions: ["read"],
+			fields: { data: Schema.Record(Schema.Literal(1), Schema.String) },
+		})
+		const Sheets = Domain.make({ principal: Caller, resources: [Sheet] })
+		const request = {
+			principal: alice,
+			action: "read",
+			resource: Sheet.make({ data: { 1: "a" } }),
+			field: "data.1",
+		} as const
+		const open = Policy.define(Sheets)(function* (_) {
+			yield* _.allow("read", Sheet)
+		})
+		assert.strictEqual(Policy.decideSync(open, request)._tag, "Allow")
+		const granted = Policy.define(Sheets)(function* (_) {
+			yield* _.allow("read", Sheet, { fields: ["data.1"] })
+		})
+		assert.strictEqual(Policy.decideSync(granted, request)._tag, "Allow")
+		assert.deepStrictEqual(
+			Policy.permittedFields(granted, {
+				principal: alice,
+				action: "read",
+				resource: request.resource,
+			}).pipe(Effect.runSync),
+			["data.1"],
+		)
+	})
+
 	it("does not read a field that the simple form of a condition leaves out", () => {
 		class Owner extends Schema.Class<Owner>("SimpleOwner")({
 			id: Schema.String,
