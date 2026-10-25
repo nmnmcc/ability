@@ -92,14 +92,47 @@ const readOptional = <A>(
 	read: () => A,
 ): A | undefined => (Object.hasOwn(input, name) ? read() : undefined)
 
+/** Counts the objects and items of a value, as the other parts count. */
+const spendValue = (
+	value: unknown,
+	path: ReadonlyArray<PropertyKey>,
+	depth: number,
+	budget: Json.Budget,
+): void => {
+	if (typeof value !== "object" || value === null) {
+		return
+	}
+	if (depth > Limits.conditionDepth) {
+		throw Json.problem(
+			path,
+			`The value has more than ${String(Limits.conditionDepth)} levels. The most is ${String(Limits.conditionDepth)}.`,
+		)
+	}
+	const names = Array.isArray(value)
+		? Arr.map(value as ReadonlyArray<unknown>, (_, index) => String(index))
+		: Object.keys(value)
+	Json.spend(budget, 1 + names.length, path)
+	Arr.forEach(names, (name) =>
+		spendValue(
+			Json.read(value, name, path),
+			[...path, name],
+			depth + 1,
+			budget,
+		),
+	)
+}
+
 const decodeMeta = (
 	value: unknown,
 	meta: Schema.Top | undefined,
 	path: ReadonlyArray<PropertyKey>,
+	budget: Json.Budget,
 ): unknown => {
 	if (meta === undefined) {
 		throw Json.problem(path, "The domain has no Schema for meta")
 	}
+	// The Schema of `meta` reads all of it, so its size counts too.
+	spendValue(value, path, 1, budget)
 	return Result.getOrThrowWith(
 		Schema.decodeUnknownResult(meta as Schema.Codec<unknown, unknown>)(value),
 		(error) =>
@@ -164,7 +197,12 @@ const decodeRule = (
 	)
 	const id = readOptional(input, "id", () => Json.readString(input, "id", path))
 	const meta = readOptional(input, "meta", () =>
-		decodeMeta(Json.read(input, "meta", path), domain.meta, [...path, "meta"]),
+		decodeMeta(
+			Json.read(input, "meta", path),
+			domain.meta,
+			[...path, "meta"],
+			budget,
+		),
 	)
 	// Each rule gets the domain of the Schema, as a rule from the builder of
 	// the domain has it.

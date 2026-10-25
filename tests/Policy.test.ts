@@ -1889,6 +1889,31 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 2000)
 	})
 
+	it("counts the meta of a rule in the budget of a decode", () => {
+		const Metas = Domain.make({
+			principal: Caller,
+			resources: [Bot],
+			meta: Schema.Array(Schema.Finite),
+		})
+		const exit = Schema.decodeExit(Policy.schema(Metas))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Bot"],
+					meta: Array.from({ length: 1_000_001 }, () => 1),
+				},
+			],
+		})
+		assert.isTrue(Exit.isFailure(exit))
+		assert.include(
+			String(Exit.isFailure(exit) ? exit.cause : ""),
+			"The most is 1000000",
+		)
+	})
+
 	it("lets a name that a union branch does not have hold any value", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],
