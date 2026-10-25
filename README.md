@@ -657,17 +657,17 @@ const Deep = Domain.make({
 })
 ```
 
-| Limit            | Default  | Ceiling    | What it limits                                                                                                                                               |
-| ---------------- | -------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `fieldPathParts` | 1000     | 10000      | The parts of a field path, as in `settings.model`.                                                                                                           |
-| `patternParts`   | 1000     | 10000      | The parts of a field pattern.                                                                                                                                |
-| `conditionNodes` | 1000000  | 100000000  | The nodes of a condition, with each value of an `In` test, and a shared part for each place.                                                                 |
-| `residualNodes`  | 100000   | 100000000  | The nodes of a residual condition.                                                                                                                           |
-| `policyNodes`    | 1000000  | 100000000  | The nodes of a policy tree, with its rules and the nodes and values of their conditions.                                                                     |
-| `jsonNodes`      | 10000000 | 1000000000 | The objects and items that a decoder reads.                                                                                                                  |
-| `catalogFields`  | 100000   | 10000000   | The fields in the list of the fields of the Schema of a resource or of the principal.                                                                        |
-| `searchSteps`    | 1000000  | 1000000000 | The steps of one search, as in `Policy.coverage`, and of the checks of the field patterns of a policy. A tree of policies counts the steps of all its parts. |
-| `searchFields`   | 1000     | 100000     | The fields that one search may test.                                                                                                                         |
+| Limit            | Default  | Ceiling    | What it limits                                                                                                                                                                                                                                              |
+| ---------------- | -------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fieldPathParts` | 1000     | 10000      | The parts of a field path, as in `settings.model`.                                                                                                                                                                                                          |
+| `patternParts`   | 1000     | 10000      | The parts of a field pattern.                                                                                                                                                                                                                               |
+| `conditionNodes` | 1000000  | 100000000  | The nodes of a condition, with each value of an `In` test, and a shared part for each place.                                                                                                                                                                |
+| `residualNodes`  | 100000   | 100000000  | The nodes of a residual condition.                                                                                                                                                                                                                          |
+| `policyNodes`    | 1000000  | 100000000  | The nodes of a policy tree, with its rules and the nodes and values of their conditions.                                                                                                                                                                    |
+| `jsonNodes`      | 10000000 | 1000000000 | The objects and items that a decoder reads.                                                                                                                                                                                                                 |
+| `catalogFields`  | 100000   | 10000000   | The fields in the list of the fields of the Schema of a resource or of the principal.                                                                                                                                                                       |
+| `searchSteps`    | 1000000  | 1000000000 | The steps of one search, as in `Policy.coverage`, and of the checks of the field patterns of a policy. A pattern counts its parts times `fieldPathParts`, its work on the longest field of a request. A tree of policies counts the steps of all its parts. |
+| `searchFields`   | 1000     | 100000     | The fields that one search may test.                                                                                                                                                                                                                        |
 
 ## Examples
 

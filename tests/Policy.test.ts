@@ -4867,6 +4867,51 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 500)
 	})
 
+	it("counts the work of each field pattern on the longest field of a request", () => {
+		interface Node {
+			readonly a: Node | null
+			readonly x: string
+			readonly y: string
+		}
+		const Node: Schema.Codec<Node> = Schema.Struct({
+			a: Schema.NullOr(Schema.suspend((): Schema.Codec<Node> => Node)),
+			x: Schema.String,
+			y: Schema.String,
+		})
+		const Tree = Resource.make("Tree", {
+			actions: ["read"],
+			fields: { a: Node },
+		})
+		const Trees = Domain.make({ principal: Caller, resources: [Tree] })
+		// 400 other patterns of 202 parts. A decision on a field of 1000 parts
+		// tests each one on each part, which took about six seconds.
+		const patterns = Arr.makeBy(
+			400,
+			(index) =>
+				`a.${Arr.makeBy(9, (bit) => (((index >> bit) & 1) === 1 ? "a*" : "a")).join(".")}.${"**.a.".repeat(100)}x`,
+		)
+		const start = Date.now()
+		const exit = Schema.decodeExit(Policy.schema(Trees))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Deny",
+					actions: ["read"],
+					resources: ["Tree"],
+					fields: patterns,
+				},
+				{ _tag: "Allow", actions: ["read"], resources: ["Tree"] },
+			],
+		})
+		assert.isTrue(Exit.isFailure(exit))
+		assert.include(
+			String(Exit.isFailure(exit) ? exit.cause : ""),
+			"steps to check",
+		)
+		assert.isBelow(Date.now() - start, 2000)
+	})
+
 	it("tests a field pattern that a rule names many times one time on a long field", () => {
 		interface Node {
 			readonly a: Node | null
@@ -4885,7 +4930,8 @@ describe("Policy", () => {
 		const Trees = Domain.make({
 			principal: Caller,
 			resources: [Tree],
-			limits: { searchSteps: 10_000 },
+			// One pattern of 201 parts on a field of up to 1000 parts.
+			limits: { searchSteps: 300_000 },
 		})
 		const pattern = `root.${"**.a.".repeat(100)}allowed`
 		const policy = Schema.decodeSync(Policy.schema(Trees))({

@@ -51,6 +51,11 @@ interface Memo {
 	 * patterns with one hash. The engine hashes a string with a random seed.
 	 */
 	readonly fits: Map<string, boolean>
+	/**
+	 * The patterns whose work on the field of a request is counted. A native
+	 * set, as `fits` is a native map.
+	 */
+	readonly matched: Set<string>
 	/** The count of the issues of conditions so far. It belongs to one binding. */
 	readonly issues: { count: number; noted: boolean }
 	/** The steps of the checks of patterns so far. It belongs to one binding. */
@@ -62,6 +67,7 @@ interface Memo {
 const makeMemo = (limits: Limits.Limits): Memo => ({
 	suggestions: new Map(),
 	fits: new Map(),
+	matched: new Set(),
 	issues: { count: 0, noted: false },
 	work: { steps: 0, noted: false },
 	limits,
@@ -288,6 +294,16 @@ const patternIssues = (
 	Result.match(Patterns.parse(pattern, memo.limits.patternParts), {
 		onFailure: (issue) => [{ path: at, issue }],
 		onSuccess: (parsed) => {
+			// A decision on a field tests each pattern on the names of the field,
+			// with at most one step for each part of the pattern on each name. A
+			// field has at most `fieldPathParts` names, so that is the work of a
+			// pattern in a decision. It counts one time for each pattern, as a
+			// decision tests each pattern one time.
+			if (!memo.matched.has(pattern)) {
+				memo.matched.add(pattern)
+				memo.work.steps +=
+					Math.max(parsed.length, 1) * memo.limits.fieldPathParts
+			}
 			// A rule with no known resource has an issue for that already. The
 			// pattern is checked on every kind, not only up to the first that it
 			// fits: a decision on a kind does this check, so the limit of the
