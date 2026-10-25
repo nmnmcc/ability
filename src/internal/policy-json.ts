@@ -287,14 +287,30 @@ const decodeMeta = (
 		(found) =>
 			found === undefined
 				? Effect.void
-				: Effect.mapError(
-						Schema.decodeUnknownEffect(metaCodec(found.schema))(found.value),
-						(error) =>
-							new Json.Problem({
-								path: Place.pathOf(at),
-								message: error.message,
-								issue: error.issue,
-							}),
+				: Schema.decodeUnknownEffect(metaCodec(found.schema))(found.value).pipe(
+						Effect.mapError(
+							(error) =>
+								new Json.Problem({
+									path: Place.pathOf(at),
+									message: error.message,
+									issue: error.issue,
+								}),
+						),
+						// The decoder of a Schema in Effect calls itself for each level of
+						// the value, so a deep value that the budget takes, as 5,000 levels
+						// of a recursive `meta` Schema, fills its stack. That is a defect
+						// of the decoder, not of the policy, so it is a problem of the
+						// input here, and the policy does not load.
+						Effect.catchDefect((defect) =>
+							defect instanceof RangeError
+								? Effect.fail(
+										Json.problemAt(
+											at,
+											"The meta of the rule has too many levels for the Schema of meta",
+										),
+									)
+								: Effect.die(defect),
+						),
 					),
 	)
 }

@@ -2538,6 +2538,37 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 100)
 	})
 
+	it("fails, and does not die, on a meta too deep for its Schema", () => {
+		interface Meta {
+			readonly next: Meta | null
+		}
+		const Meta: Schema.Codec<Meta | null> = Schema.suspend(
+			(): Schema.Codec<Meta | null> =>
+				Schema.NullOr(Schema.Struct({ next: Meta })),
+		)
+		const Metas = Domain.make({
+			principal: Caller,
+			resources: [Bot],
+			meta: Meta,
+		})
+		const meta = Arr.reduce(
+			Arr.range(1, 5000),
+			null as Meta | null,
+			(next): Meta => ({ next }),
+		)
+		const exit = Schema.decodeExit(Policy.schema(Metas))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [{ _tag: "Allow", actions: ["read"], resources: ["Bot"], meta }],
+		})
+		assert.isTrue(Exit.isFailure(exit))
+		assert.isFalse(Exit.hasDies(exit))
+		assert.include(
+			String(Exit.isFailure(exit) ? exit.cause : ""),
+			"too many levels for the Schema of meta",
+		)
+	})
+
 	it("counts the meta of a rule in the budget of a decode", () => {
 		const Metas = Domain.make({
 			principal: Caller,
