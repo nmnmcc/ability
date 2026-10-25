@@ -31,6 +31,7 @@ import type * as Cause from "effect/Cause"
 import type * as Chunk from "effect/Chunk"
 import type * as DateTime from "effect/DateTime"
 import type * as Duration from "effect/Duration"
+import type * as Exit from "effect/Exit"
 import type * as HashMap from "effect/HashMap"
 import type * as HashSet from "effect/HashSet"
 import type * as Option from "effect/Option"
@@ -338,13 +339,18 @@ type Whole =
 	| Chunk.Chunk<unknown>
 	| Cause.Cause<unknown>
 	| Result.Result<unknown, unknown>
+	| Exit.Exit<unknown, unknown>
 	| File
 	| FormData
 	| RegExp
+	| URLSearchParams
 type PreviousDepth = [never, 0, 1, 2, 3]
-type FieldPathInternal<T, Depth extends number, Arrays extends boolean> = [
-	Depth,
-] extends [never]
+type FieldPathInternal<
+	T,
+	Depth extends number,
+	Arrays extends boolean,
+	Parents extends boolean = false,
+> = [Depth] extends [never]
 	? never
 	: {
 			[K in keyof T & string]-?: NonNullable<T[K]> extends Leaf | Whole
@@ -356,7 +362,8 @@ type FieldPathInternal<T, Depth extends number, Arrays extends boolean> = [
 							? K
 							: never
 						: NonNullable<T[K]> extends object
-							? `${K}.${FieldPathInternal<NonNullable<T[K]>, PreviousDepth[Depth], Arrays>}`
+							? | (Parents extends true ? K : never)
+								| `${K}.${FieldPathInternal<NonNullable<T[K]>, PreviousDepth[Depth], Arrays, Parents>}`
 							: never
 		}[keyof T & string]
 
@@ -388,6 +395,19 @@ export type FieldPath<T> = [T] extends [object]
  */
 export type FieldSelector<T> = [T] extends [object]
 	? FieldPathInternal<T, 4, true>
+	: never
+
+/**
+ * The names that the `fields` of a rule may have: the paths of
+ * {@link FieldSelector}, and the paths of the structs above them. A name of a
+ * struct covers the fields below it.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 2.0.0
+ */
+export type FieldName<T> = [T] extends [object]
+	? FieldPathInternal<T, 4, true, true>
 	: never
 
 /**

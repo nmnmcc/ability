@@ -121,6 +121,35 @@ describe("Rule", () => {
 		expect(_.allow("read", Bot)).type.toBe<Policy.Rule<App>>()
 	})
 
+	it("takes the name of a struct in the fields of a rule", () => {
+		expect(_.allow).type.toBeCallableWith("read", Bot, {
+			fields: ["settings"],
+		})
+		expect(_.allow).type.toBeCallableWith("read", Bot, {
+			fields: ["settings.model"],
+		})
+		expect(_.allow).type.not.toBeCallableWith("read", Bot, {
+			fields: ["settings.color"],
+		})
+	})
+
+	it("keeps an Exit as one field, as the catalog does", () => {
+		const Job = Resource.make("Job", {
+			actions: ["read"],
+			fields: {
+				result: Schema.Exit(Schema.String, Schema.String, Schema.Defect()),
+			},
+		})
+		const Jobs = Domain.make({ principal: Caller, resources: [Job] })
+		const $ = Condition.builder<
+			Policy.DataFor<typeof Jobs, "Job">,
+			unknown,
+			Caller
+		>()
+		expect($.exists).type.toBeCallableWith("result")
+		expect($.exists).type.not.toBeCallableWith("result._tag")
+	})
+
 	it("checks the extra data", () => {
 		expect(_.allow).type.toBeCallableWith("read", Bot, {
 			meta: { scope: "once" },
