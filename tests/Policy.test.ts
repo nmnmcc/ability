@@ -2352,6 +2352,47 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 3000)
 	})
 
+	it("counts the work of Under tests on very many kinds", () => {
+		const kinds = Arr.makeBy(1000, (index) =>
+			Resource.make(`PathKind${String(index)}`, {
+				actions: ["read"],
+				fields: { key: Schema.String },
+				path: (f) => [f.key],
+			}),
+		)
+		const Keyed = Schema.Struct({ key: Schema.String })
+		const Kinds = Domain.make({
+			principal: Keyed,
+			resources: kinds,
+			limits: { searchSteps: 100_000 },
+		})
+		const start = Date.now()
+		const result = Schema.decodeUnknownResult(Policy.schema(Kinds))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["*"],
+					when: {
+						_tag: "And",
+						conditions: Arr.makeBy(10_000, () => ({
+							_tag: "Under",
+							prefix: [{ _tag: "Principal", path: "key" }],
+						})),
+					},
+				},
+			],
+		})
+		assert.isTrue(Result.isFailure(result))
+		assert.include(
+			String(Result.isFailure(result) ? result.failure : ""),
+			"steps to check",
+		)
+		assert.isBelow(Date.now() - start, 2000)
+	})
+
 	it("checks the values of a test one time for kinds with one field type", () => {
 		const kinds = Arr.makeBy(1000, (index) =>
 			Resource.make(`Kind${String(index)}`, {

@@ -638,7 +638,15 @@ const conditionIssues = (
 				case "Exists":
 					return room(0) ? here(readIssues(context, node.field, ["field"])) : []
 				case "Under":
-					return here(underIssues(context, node.prefix, []))
+					// The check reads the path of each resource of the rule for each
+					// part of the prefix, so it counts that work first.
+					return spendChecks(
+						context.memo,
+						1 + node.prefix.length,
+						context.paths.length,
+					)
+						? here(underIssues(context, node.prefix, []))
+						: []
 				default:
 					return []
 			}
