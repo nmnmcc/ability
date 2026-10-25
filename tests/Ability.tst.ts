@@ -349,6 +349,18 @@ describe("Policy", () => {
 		})
 	})
 
+	it("does not take a copy of a rule made with a spread", () => {
+		const rule = Policy.builder(App).allow("read", Bot)
+		const copy = { ...rule }
+		expect(Policy.define(App)).type.not.toBeCallableWith(function* () {
+			yield copy
+		})
+		expect(Policy.define(App)).type.toBeCallableWith(function* () {
+			yield rule
+		})
+		expect<Policy.AnyRule>().type.not.toBeAssignableFrom(copy)
+	})
+
 	it("takes only rules of its own domain", () => {
 		const Other = Domain.make({ principal: Caller, resources: [Trigger] })
 		const rule = Policy.builder(App).allow("read", Bot)

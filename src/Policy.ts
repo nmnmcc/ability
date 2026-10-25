@@ -37,7 +37,6 @@
 import type * as Context from "effect/Context"
 import type * as Data from "effect/Data"
 import type * as Effect from "effect/Effect"
-import type * as Pipeable from "effect/Pipeable"
 import type * as Schema from "effect/Schema"
 import type * as Condition from "./Condition.ts"
 import * as Analysis from "./internal/analysis.ts"
@@ -301,12 +300,7 @@ export interface Explanation {
  * @category models
  * @since 0.3.0
  */
-export interface Rule<D = any, I = unknown, X = never>
-	extends RuleShape<I, X>, Pipeable.Pipeable {
-	readonly "~Opaque": () => X
-	readonly "~Domain": (domain: D) => D
-	[Symbol.iterator](): Generator<Rule<D, I, X>, Rule<D, I, X>, unknown>
-}
+export type Rule<D = any, I = unknown, X = never> = RuleData.Rule<D, I, X>
 
 /**
  * The data of a rule.

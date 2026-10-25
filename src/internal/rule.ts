@@ -11,6 +11,7 @@ import * as MutableHashMap from "effect/MutableHashMap"
 import * as Option from "effect/Option"
 import * as Condition from "../Condition.ts"
 import type * as Domain from "../Domain.ts"
+import type * as Policy from "../Policy.ts"
 import type * as Resource from "../Resource.ts"
 import * as Catalog from "./catalog.ts"
 import * as Nodes from "./nodes.ts"
@@ -35,17 +36,42 @@ export interface Shape {
 	readonly domain?: Domain.Any
 }
 
-/** The class of every rule value. */
-export class Rule extends Data.Class<Shape> {
-	*[Symbol.iterator](): Generator<this, this, unknown> {
+/**
+ * The class of every rule value. The types are those of `Policy.Rule`: `D` is
+ * the domain, `I` is what the tests of the condition read, and `X` is the
+ * mark of the condition. With no types, as in the nodes of a policy, a rule
+ * fits no domain, its condition fits no other rule, and it may have a
+ * predicate.
+ */
+export class Rule<D = never, I = never, X = unknown> extends Data.Class<
+	Policy.RuleShape<I, X>
+> {
+	/** Only in the types. */
+	declare readonly "~Opaque": () => X
+	/** Only in the types. */
+	declare readonly "~Domain": (domain: D) => D
+	// A private field makes the type of a rule its own, as for a policy: a
+	// spread of a rule, or an object made by hand, is not a rule. `Equal` does
+	// not read it. It comes last, so its `;` stays: the generator method below
+	// needs one after a field. Node.js takes the `declare` fields out of the
+	// code, and a `;` after one of them would go with it.
+	readonly #rule = true;
+
+	*[Symbol.iterator](): Generator<Rule<D, I, X>, Rule<D, I, X>, unknown> {
 		yield this
 		return this
+	}
+
+	/** Tests if a value is a rule, by its private field. */
+	static is(u: unknown): u is Rule {
+		return typeof u === "object" && u !== null && #rule in u
 	}
 }
 
 /** Makes a rule from its data. It does not check the data against a domain. */
 export const make = (data: Shape): Rule =>
 	// A missing option is left out, so two rules with the same data are equal.
+	// The data has no types here, as the code below works with no types.
 	new Rule({
 		_tag: data._tag,
 		actions: [...data.actions],
@@ -56,7 +82,7 @@ export const make = (data: Shape): Rule =>
 		...(data.id === undefined ? {} : { id: data.id }),
 		...(data.meta === undefined ? {} : { meta: data.meta }),
 		...(data.domain === undefined ? {} : { domain: data.domain }),
-	})
+	} as never)
 
 /**
  * Makes a rule from its data, as `Policy.rule` does. A condition with a
@@ -73,7 +99,7 @@ export const makePlain = (data: Shape): Rule => {
 }
 
 /** Tests if a value is a rule. */
-export const isRule = (u: unknown): u is Rule => u instanceof Rule
+export const isRule = (u: unknown): u is Rule => Rule.is(u)
 
 const toArray = <A>(value: A | ReadonlyArray<A>): ReadonlyArray<A> =>
 	Array.isArray(value) ? value : [value as A]

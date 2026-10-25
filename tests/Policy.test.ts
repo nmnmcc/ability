@@ -3928,7 +3928,9 @@ describe("Policy", () => {
 
 	it("does not take a copy of a rule or a policy made with a spread", () => {
 		const rule = Policy.builder(App).allow("read", Bot)
-		assert.throws(() => rulesOf(App, [{ ...rule } as Policy.AnyRule]))
+		assert.throws(() =>
+			rulesOf(App, [{ ...rule } as unknown as Policy.AnyRule]),
+		)
 		const policy = emptyOf(App)
 		assert.throws(() => Policy.any([{ ...policy } as Policy.Policy<App>]))
 	})
