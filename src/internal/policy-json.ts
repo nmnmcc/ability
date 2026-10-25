@@ -16,6 +16,15 @@ import * as PolicyNodes from "./policy-nodes.ts"
 
 type Node = PolicyNodes.Node
 
+/**
+ * The codec of the `meta` Schema of a domain to and from JSON. The JSON form
+ * of a policy must stay the same through `JSON.stringify` and `JSON.parse`, so
+ * a `Date` in `meta`, for one, becomes a string in it, and a string again
+ * when it is decoded.
+ */
+const metaCodec = (meta: Schema.Top): Schema.Codec<unknown, unknown> =>
+	Schema.toCodecJson(meta) as unknown as Schema.Codec<unknown, unknown>
+
 /** Gives the JSON form of the `meta` of a rule, or `undefined` for none. */
 export type MetaJson = (rule: Rule.Rule) => unknown
 
@@ -29,9 +38,7 @@ export const syncMeta =
 	(rule) =>
 		rule.meta === undefined || meta === undefined
 			? undefined
-			: Schema.encodeUnknownSync(meta as Schema.Codec<unknown, unknown>)(
-					rule.meta,
-				)
+			: Schema.encodeUnknownSync(metaCodec(meta))(rule.meta)
 
 /** The JSON form of the condition of each rule, by the rule. */
 type WhenJson = (rule: Rule.Rule) => unknown
@@ -118,9 +125,7 @@ export const encode = (
 				? []
 				: yield* Effect.forEach(rules, (rule) =>
 						Effect.map(
-							Schema.encodeUnknownEffect(
-								meta as Schema.Codec<unknown, unknown>,
-							)(rule.meta),
+							Schema.encodeUnknownEffect(metaCodec(meta))(rule.meta),
 							(json) => [rule, json] as const,
 						),
 					)
@@ -264,16 +269,14 @@ const decodeMeta = (
 							)
 						}
 						spendValue(value, [...path, "meta"], 1, budget)
-						return { value }
+						return { value, schema: domain.meta }
 					}),
 		),
 		(found) =>
 			found === undefined
 				? Effect.void
 				: Effect.mapError(
-						Schema.decodeUnknownEffect(
-							domain.meta as Schema.Codec<unknown, unknown>,
-						)(found.value),
+						Schema.decodeUnknownEffect(metaCodec(found.schema))(found.value),
 						(error) =>
 							new Json.Problem({
 								path: [...path, "meta"],

@@ -2055,6 +2055,29 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 1000)
 	})
 
+	it("keeps a Date in meta through the JSON text of a policy", () => {
+		const Dated = Domain.make({
+			principal: Caller,
+			resources: [Bot],
+			meta: Schema.Struct({ expiresAt: Schema.Date }),
+		})
+		const policy = Policy.define(Dated)(function* (_) {
+			yield* _.allow("read", Bot, {
+				meta: { expiresAt: new Date("2030-01-01T00:00:00.000Z") },
+			})
+		})
+		const DatedSchema = Policy.schema(Dated)
+		const fromJson = (text: string) =>
+			Schema.decodeUnknownSync(DatedSchema)(JSON.parse(text))
+		assert.isTrue(
+			Equal.equals(
+				fromJson(JSON.stringify(Schema.encodeSync(DatedSchema)(policy))),
+				policy,
+			),
+		)
+		assert.isTrue(Equal.equals(fromJson(JSON.stringify(policy)), policy))
+	})
+
 	it.effect("decodes and encodes a meta Schema with an async step", () =>
 		Effect.gen(function* () {
 			const Later = Schema.String.pipe(
