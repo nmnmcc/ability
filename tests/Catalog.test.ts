@@ -8,7 +8,10 @@ import { readPart, readPath } from "../src/internal/read.ts"
 const catalogOf = (schema: Schema.Top) => Catalog.catalogOf(schema.ast)
 
 const texts = (schema: Schema.Top) =>
-	Arr.map(catalogOf(schema).fields, (field) => field.text)
+	Arr.map(
+		schema.pipe(catalogOf, (catalog) => Catalog.fieldsOf(catalog)),
+		(field) => field.text,
+	)
 
 const fieldOf = (schema: Schema.Top, path: string): Catalog.Field => {
 	const field = Catalog.lookup(catalogOf(schema), path)
@@ -223,6 +226,31 @@ describe("Catalog", () => {
 			() => catalogOf(Schema.Struct({ "": Schema.String })),
 			/may not be empty/,
 		)
+	})
+
+	it("stops the list of a Schema with very many shared parts at the limit", () => {
+		// Each level holds the level below two times, so 23 levels have about
+		// 2 ** 24 paths of fields.
+		const shared = Arr.reduce(
+			Arr.range(1, 23),
+			Schema.String as Schema.Top,
+			(child) => Schema.Struct({ a: child, b: child }),
+		)
+		const Tree = Resource.make("SharedTree", {
+			actions: ["read"],
+			fields: { root: shared as Schema.Struct.Fields[string] },
+		})
+		const start = Date.now()
+		assert.throws(
+			() =>
+				Domain.make({
+					principal: Caller,
+					resources: [Tree],
+					limits: { catalogFields: 100 },
+				}),
+			/has 101 fields. The most is 100./,
+		)
+		assert.isBelow(Date.now() - start, 1000)
 	})
 
 	it("makes the catalog of a union very many levels deep", () => {

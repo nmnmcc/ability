@@ -390,7 +390,11 @@ export const permittedFields = (
 	const listed = Arr.filter(
 		// The list for the limit of the parts of a path of the domain, as the
 		// decision of each field reads it.
-		Catalog.fieldsOf(descriptor.catalog, policy.domain.limits.fieldPathParts),
+		Catalog.fieldsOf(
+			descriptor.catalog,
+			policy.domain.limits.fieldPathParts,
+			policy.domain.limits.catalogFields,
+		),
 		(field) =>
 			field.listed &&
 			Arr.every(field.path, (segment) => typeof segment === "string"),

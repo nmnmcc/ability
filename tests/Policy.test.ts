@@ -1080,7 +1080,7 @@ describe("Policy", () => {
 				// Each listed field that holds no parts is in the list when
 				// decide allows it.
 				const plain = Arr.filter(
-					ResourceData.descriptor(Bot).catalog.fields,
+					Catalog.fieldsOf(ResourceData.descriptor(Bot).catalog),
 					(field) => field.listed && !field.open,
 				)
 				return (

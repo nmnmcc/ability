@@ -153,11 +153,20 @@ const orderedMeet = (left: Catalog.Kinds, right: Catalog.Kinds): boolean =>
 	(hasStrings(left) && hasStrings(right)) ||
 	(hasNumbers(left) && hasNumbers(right))
 
-/** The texts of the fields of a catalog that have only names, for suggestions. */
-const namesOf = (catalog: Catalog.Catalog): ReadonlyArray<string> =>
+/**
+ * The texts of the fields of a catalog that have only names, for
+ * suggestions, with the limits of the domain. The domain checked the size of
+ * the list when it was made.
+ */
+const namesOf = (
+	catalog: Catalog.Catalog,
+	limits: Limits.Limits,
+): ReadonlyArray<string> =>
 	Arr.map(
-		Arr.filter(catalog.fields, (field) =>
-			Arr.every(field.path, (segment) => typeof segment === "string"),
+		Arr.filter(
+			Catalog.fieldsOf(catalog, limits.fieldPathParts, limits.catalogFields),
+			(field) =>
+				Arr.every(field.path, (segment) => typeof segment === "string"),
 		),
 		(field) => field.text,
 	)
@@ -192,7 +201,7 @@ const fieldIssue = (
 				{
 					path: at,
 					issue: suggestIn(context.memo, message, field, without[0]!.kind, () =>
-						namesOf(without[0]!.catalog),
+						namesOf(without[0]!.catalog, context.memo.limits),
 					),
 				},
 			]
@@ -332,7 +341,7 @@ const principalField = (
 					`The principal has no field "${ref}"`,
 					ref,
 					"~principal",
-					() => namesOf(context.domain.principalCatalog),
+					() => namesOf(context.domain.principalCatalog, context.memo.limits),
 				),
 			}
 }

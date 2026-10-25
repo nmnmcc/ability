@@ -175,12 +175,6 @@ export interface Branch {
 
 /** The catalog of the fields of a Schema. */
 export interface Catalog {
-	/**
-	 * The fields that a list shows, a field before the fields below it. For a
-	 * recursive Schema, the list goes into each recursive place one time on
-	 * each path, so it is finite.
-	 */
-	readonly fields: ReadonlyArray<Field>
 	/** The places, by id. The root is the place with the id 0. */
 	readonly branches: ReadonlyArray<Branch>
 	/**
@@ -651,13 +645,18 @@ const fieldAt = (
  * The fields that a list shows, a field before the fields below it, down to
  * `parts` parts. A path goes into a place that is on it already one time
  * only, so the list of a recursive Schema is finite. The walk keeps a stack
- * of the places to visit, so a deep Schema does not fill the stack. The
- * stack belongs to this walk.
+ * of the places to visit, so a deep Schema does not fill the stack. A Schema
+ * that shares one part in many places may have very many fields, so the
+ * walk counts the fields that it makes, and it stops at the first one past
+ * `most`. The stack and the count belong to this walk.
  */
 const listOf = (
 	branches: ReadonlyArray<Branch>,
 	parts: number,
+	most: number,
+	thing: string,
 ): ReadonlyArray<Field> => {
+	const count = { fields: 0 }
 	interface Visit {
 		readonly branch: Branch
 		readonly path: ReadonlyArray<Segment>
@@ -708,13 +707,14 @@ const listOf = (
 				visit.path.length === 0
 					? []
 					: [fieldAt(visit.branch, visit.path, parts)]
-			if (field.length > 0 && rest.length + 1 > Limits.ceilings.catalogFields) {
+			count.fields += field.length
+			if (count.fields > most) {
 				throw Limits.exceeded(
-					"A Schema",
+					thing,
 					"catalogFields",
 					"fields",
-					rest.length + 1,
-					Limits.ceilings.catalogFields,
+					count.fields,
+					most,
 				)
 			}
 			return Option.some([field, rest] as const)
@@ -723,22 +723,25 @@ const listOf = (
 }
 
 /**
- * The fields that a list shows for paths of at most `parts` parts, as for a
- * domain with that limit. See `Catalog.fields`.
+ * The fields that a list shows, a field before the fields below it, for
+ * paths of at most `parts` parts. For a recursive Schema, the list goes into
+ * each recursive place one time on each path, so it is finite. A list with
+ * more than `most` fields is an error, as for a domain with these limits.
+ * Each call makes the list again: a domain checks its size one time, and a
+ * list of permitted fields reads it.
  */
 export const fieldsOf = (
 	catalog: Catalog,
-	parts: number,
-): ReadonlyArray<Field> =>
-	parts === Limits.fieldPathParts
-		? catalog.fields
-		: listOf(catalog.branches, parts)
+	parts: number = Limits.fieldPathParts,
+	most: number = Limits.ceilings.catalogFields,
+	thing: string = "A Schema",
+): ReadonlyArray<Field> => listOf(catalog.branches, parts, most, thing)
 
 /**
- * Makes the catalog of a Schema, with the list of its fields for the default
- * limit of the parts of a path. It throws when a field name has a dot or is
- * empty, and when the Schema has more places or fields than the ceiling of
- * `catalogFields`. A domain checks the size of the list with its own limit.
+ * Makes the catalog of a Schema. It throws when a field name has a dot or is
+ * empty, and when the Schema has more places than the ceiling of
+ * `catalogFields`. A domain checks the size of the list of the fields with
+ * its own limit: see {@link fieldsOf}.
  */
 export const catalogOf = (ast: SchemaAST.AST): Catalog => {
 	const branches = branchesOf({
@@ -748,7 +751,6 @@ export const catalogOf = (ast: SchemaAST.AST): Catalog => {
 		plain: true,
 	})
 	return {
-		fields: listOf(branches, Limits.fieldPathParts),
 		branches,
 		edges: Arr.reduce(
 			branches,

@@ -21,22 +21,17 @@ class DomainData extends Data.Class<{
 	readonly limits: Limits.Limits
 }> {}
 
-/** Stops a catalog with more fields in its list than the domain takes. */
+/**
+ * Stops a catalog with more fields in its list than the domain takes. The
+ * list stops at the first field past the limit, so a Schema with very many
+ * fields does not take very much memory first.
+ */
 const checkCatalog = (
 	catalog: Catalog.Catalog,
 	limits: Limits.Limits,
 	name: string,
 ): void => {
-	const fields = Catalog.fieldsOf(catalog, limits.fieldPathParts).length
-	if (fields > limits.catalogFields) {
-		throw Limits.exceeded(
-			name,
-			"catalogFields",
-			"fields",
-			fields,
-			limits.catalogFields,
-		)
-	}
+	Catalog.fieldsOf(catalog, limits.fieldPathParts, limits.catalogFields, name)
 }
 
 /**

@@ -130,7 +130,7 @@ describe("Patterns properties", () => {
 		{ parts: Parts },
 		({ parts }) =>
 			Patterns.fitsCatalog(parse(parts.join(".")), catalog) ===
-			Arr.some(catalog.fields, (field) =>
+			Arr.some(Catalog.fieldsOf(catalog), (field) =>
 				reference(parts.join(".").split("."), field.text.split(".")),
 			),
 	)
