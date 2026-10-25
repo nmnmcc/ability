@@ -594,6 +594,43 @@ describe("Authorizer", () => {
 			}),
 	)
 
+	it.effect("keeps no policy of a principal with no JSON form", () =>
+		Effect.gen(function* () {
+			const role = Symbol.for("@nmnmcc/ability/tests/role")
+			const Symbolic = Schema.Struct({ [role]: Schema.String })
+			const Symbolics = Domain.make({ principal: Symbolic, resources: [Bot] })
+			class CurrentSymbol extends Context.Service<
+				CurrentSymbol,
+				typeof Symbolic.Type
+			>()("@nmnmcc/ability/tests/Authorizer.test/CurrentSymbol") {}
+			class SymbolAuth extends Authorizer.Service<SymbolAuth>()(
+				"test/SymbolAuth",
+				{ domain: Symbolics, principal: CurrentSymbol },
+			) {}
+			const loads = yield* Ref.make(0)
+			const layer = Authorizer.layer(SymbolAuth, {
+				policy: () =>
+					Ref.update(loads, (n) => n + 1).pipe(
+						Effect.as(
+							Policy.define(Symbolics)(function* (_) {
+								yield* _.allow("read", Bot)
+							}),
+						),
+					),
+			})
+			const check = SymbolAuth.check({ action: "read", resource: aliceBot })
+			yield* Effect.gen(function* () {
+				yield* check
+				yield* check
+			}).pipe(
+				Effect.provideService(CurrentSymbol, { [role]: "admin" }),
+				Effect.provide(layer),
+			)
+			// With no key, each check loads the policy.
+			assert.strictEqual(yield* Ref.get(loads), 2)
+		}),
+	)
+
 	it.effect("needs no JSON form of the principal with no cache", () =>
 		Effect.gen(function* () {
 			const role = Symbol.for("@nmnmcc/ability/tests/role")

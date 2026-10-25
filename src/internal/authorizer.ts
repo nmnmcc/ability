@@ -121,13 +121,31 @@ class PrincipalKey implements Equal.Equal {
  * tells them apart. So two principals with one key are equal, and the cache
  * can not give one the policy of the other.
  */
+/**
+ * Gives the JSON codec of a Schema, or `undefined` when the Schema has no JSON
+ * form, as a struct with a symbol key has none.
+ */
+const jsonCodecOf = (
+	schema: Schema.Top,
+): Schema.Codec<unknown, unknown> | undefined => {
+	try {
+		return Schema.toCodecJson(schema) as unknown as Schema.Codec<
+			unknown,
+			unknown
+		>
+	} catch {
+		return undefined
+	}
+}
+
 const jsonKey = (
 	schema: Schema.Top,
 ): ((principal: object) => PrincipalKey | undefined) => {
-	const codec = Schema.toCodecJson(schema) as unknown as Schema.Codec<
-		unknown,
-		unknown
-	>
+	const codec = jsonCodecOf(schema)
+	// A principal with no JSON form is never kept.
+	if (codec === undefined) {
+		return () => undefined
+	}
 	const encode = Schema.encodeUnknownResult(codec)
 	const decode = Schema.decodeUnknownResult(codec)
 	const keyOf = (principal: object): PrincipalKey | undefined =>
