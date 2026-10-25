@@ -491,6 +491,18 @@ describe("Policy", () => {
 			assert.strictEqual(output.trim(), "failed")
 		}, 60_000)
 
+		it("makes the catalog of a union that holds one union in many places, in a small heap", () => {
+			const output = execFileSync(
+				process.execPath,
+				[
+					"--max-old-space-size=128",
+					new URL("./scripts/shared-union.ts", import.meta.url).pathname,
+				],
+				{ encoding: "utf8" },
+			)
+			assert.strictEqual(output.trim(), "made")
+		}, 60_000)
+
 		it("does not decode a shared input that would be too large", () => {
 			// A domain with small limits, so the test is short. A decoder stops
 			// at the first node past a limit, so the time grows with the limit,

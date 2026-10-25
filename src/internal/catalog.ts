@@ -221,39 +221,42 @@ const classStruct = (
 
 /**
  * Gives the Schemas that a value at one place may fit: it opens unions and
- * `Schema.suspend`. A class stays a class: see {@link structOf}. The open suspend nodes are in a native `Set`,
- * because the walk must find a node by the node itself: `Equal` compares
- * Schema nodes by structure, and a recursive Schema has no end. A suspend
- * node that gives itself again, with no step on the path, gives nothing.
+ * `Schema.suspend`, and gives each Schema one time, in the order that it
+ * first comes. A class stays a class: see {@link structOf}.
+ *
+ * A union may hold one union in many places, as `Schema.Union([s, s])` many
+ * levels down does, so the walk opens each union and each suspend node one
+ * time: a second visit gives nothing new. So a suspend node that gives
+ * itself again ends too. The nodes that it has met, and the Schemas that it
+ * has found, are in native sets, because the walk must find a node by the
+ * node itself: `Equal` compares Schema nodes by structure, and a recursive
+ * Schema has no end. The sets and the list belong to one walk. A union may
+ * hold a union very many levels down, so it is a walk of the trampoline for
+ * an input of an unknown depth.
  */
-const alternatives = (
-	ast: SchemaAST.AST,
-	open: ReadonlySet<SchemaAST.AST>,
-): ReadonlyArray<SchemaAST.AST> => alternativesOf({ ast, open })
-
-/**
- * The walk of {@link alternatives}. A union may hold a union, very many
- * levels down, so it is a walk of the trampoline for an input of an unknown
- * depth.
- */
-const alternativesOf = Trampoline.adaptive<
-	{ readonly ast: SchemaAST.AST; readonly open: ReadonlySet<SchemaAST.AST> },
-	ReadonlyArray<SchemaAST.AST>
->((R, child) => ({ ast, open }, depth) => {
-	switch (ast._tag) {
-		case "Union":
-			return R.map(
-				R.forEach(ast.types, (type) => child({ ast: type, open }, depth + 1)),
-				Arr.flatten,
-			)
-		case "Suspend":
-			return open.has(ast)
-				? R.succeed([])
-				: child({ ast: ast.thunk(), open: new Set([...open, ast]) }, depth + 1)
-		default:
-			return R.succeed([ast])
-	}
-})
+const alternatives = (ast: SchemaAST.AST): ReadonlyArray<SchemaAST.AST> => {
+	const met = new Set<SchemaAST.AST>()
+	const found: Array<SchemaAST.AST> = []
+	Trampoline.adaptive<SchemaAST.AST, undefined>((R, child) => (node, depth) => {
+		if (met.has(node)) {
+			return R.succeed(undefined)
+		}
+		met.add(node)
+		switch (node._tag) {
+			case "Union":
+				return R.map(
+					R.forEach(node.types, (type) => child(type, depth + 1)),
+					() => undefined,
+				)
+			case "Suspend":
+				return child(node.thunk(), depth + 1)
+			default:
+				found.push(node)
+				return R.succeed(undefined)
+		}
+	})(ast)
+	return found
+}
 
 /** The struct of a Schema: a struct, or the struct of a class. */
 const structOf = (ast: SchemaAST.AST): SchemaAST.Objects | undefined =>
@@ -515,7 +518,7 @@ const placeOf = (place: Place): Made => {
 		const top = place.top || objects || properties.length < structs.length
 		const below: Place = {
 			schemas: Arr.flatMap(properties, (property) =>
-				alternatives(property.type, new Set()),
+				alternatives(property.type),
 			),
 			// A field below a value that is not a struct reads `null`, and so
 			// does a field that may be missing.
@@ -573,7 +576,7 @@ const placeOf = (place: Place): Made => {
 				? undefined
 				: {
 						schemas: Arr.flatMap(signatures, (signature) =>
-							alternatives(signature.type, new Set()),
+							alternatives(signature.type),
 						),
 						// A record may not have a given key.
 						missing: true,
@@ -770,7 +773,7 @@ export const fieldsOf = (
  */
 export const catalogOf = (ast: SchemaAST.AST): Catalog => {
 	const branches = branchesOf({
-		schemas: alternatives(ast, new Set()),
+		schemas: alternatives(ast),
 		missing: false,
 		top: false,
 		plain: true,
