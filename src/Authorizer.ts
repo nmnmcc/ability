@@ -707,13 +707,23 @@ const makeLayer = (
 				return { principal, policy: value }
 			})
 
-			const decide = Effect.fnUntraced(function* (target: AnyTarget) {
-				const { principal, policy: value } = yield* current
+			// The principal and its policy, loaded one time. A check that asks
+			// the policy two times, such as `guard`, uses one snapshot for both,
+			// so the two answers come from one principal.
+			type Snapshot = Effect.Success<typeof current>
+
+			const decideWith = Effect.fnUntraced(function* (
+				{ principal, policy: value }: Snapshot,
+				target: AnyTarget,
+			) {
 				const decision: Decision.Decision = yield* withServices(
 					Policy.decide(value, { ...target, principal } as never),
 				)
 				return decision
 			})
+
+			const decide = (target: AnyTarget) =>
+				Effect.flatMap(current, (snapshot) => decideWith(snapshot, target))
 
 			const kindDecision = (
 				value: Policy.Any,
@@ -752,8 +762,10 @@ const makeLayer = (
 				return Decision.Deny({})
 			}
 
-			const check = Effect.fnUntraced(function* (target: AnyTarget) {
-				const { principal, policy: value } = yield* current
+			const checkWith = Effect.fnUntraced(function* (
+				{ principal, policy: value }: Snapshot,
+				target: AnyTarget,
+			) {
 				const kind =
 					target.resource === undefined
 						? (target.kind ?? "")
@@ -780,6 +792,9 @@ const makeLayer = (
 				}
 			})
 
+			const check = (target: AnyTarget) =>
+				Effect.flatMap(current, (snapshot) => checkWith(snapshot, target))
+
 			const guard = Effect.fnUntraced(function* (
 				target: AnyTarget,
 				guardOptions: {
@@ -787,9 +802,10 @@ const makeLayer = (
 					readonly hide: () => unknown
 				},
 			) {
+				const snapshot = yield* current
 				const read = guardOptions.read ?? "read"
 				const { field: _field, ...rest } = target
-				const visible: Decision.Decision = yield* decide({
+				const visible: Decision.Decision = yield* decideWith(snapshot, {
 					...rest,
 					action: read,
 				})
@@ -797,7 +813,7 @@ const makeLayer = (
 					return yield* Effect.fail(guardOptions.hide())
 				}
 				if (target.action !== read || target.field !== undefined) {
-					yield* check(target)
+					yield* checkWith(snapshot, target)
 				}
 			})
 

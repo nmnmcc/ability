@@ -159,6 +159,40 @@ describe("Authorizer", () => {
 		}),
 	)
 
+	it.effect("guards with one principal for both of its questions", () =>
+		Effect.gen(function* () {
+			const turns = yield* Ref.make(0)
+			const reader = Caller.make({ ...alice, role: "guest" })
+			const writer = Caller.make({ ...alice, role: "member" })
+			const layer = Authorizer.layer(Auth, {
+				// Each load gives the other principal.
+				principal: Ref.getAndUpdate(turns, (n) => n + 1).pipe(
+					Effect.map((n) => (n % 2 === 0 ? reader : writer)),
+				),
+				policy: (caller) =>
+					Effect.succeed(
+						Policy.define(App)(function* (_) {
+							if (caller.role === "guest") {
+								yield* _.allow("read", Bot)
+							}
+							if (caller.role === "member") {
+								yield* _.allow("update", Bot)
+							}
+						}),
+					),
+			})
+			const exit = yield* Auth.guard(
+				{ action: "update", resource: aliceBot },
+				{ hide: () => ({ _tag: "BotNotFound" as const }) },
+			).pipe(
+				Effect.provide(layer),
+				Effect.provideService(Identity, alice),
+				Effect.exit,
+			)
+			assert.isTrue(Exit.isFailure(exit))
+		}),
+	)
+
 	it.effect("gives a filter for queries", () =>
 		Effect.gen(function* () {
 			const { exit } = yield* run(
