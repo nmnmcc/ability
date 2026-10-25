@@ -251,6 +251,43 @@ describe("Rule", () => {
 		})
 	})
 
+	it("takes a struct at the last part of a path as one field of a request", () => {
+		const Deep = Resource.make("DeepNote", {
+			actions: ["read"],
+			fields: {
+				a: Schema.Struct({
+					b: Schema.Struct({
+						c: Schema.Struct({
+							d: Schema.Struct({
+								e: Schema.Struct({ secret: Schema.String }),
+							}),
+						}),
+					}),
+				}),
+			},
+		})
+		const Deeps = Domain.make({ principal: Caller, resources: [Deep] })
+		const policy = Policy.define(Deeps)(function* (_) {
+			yield* _.allow("read", Deep, { fields: ["a.b.c.d.e"] })
+		})
+		expect(Policy.decideSync).type.toBeCallableWith(policy, {
+			principal: alice,
+			action: "read",
+			resource: Deep.make({
+				a: { b: { c: { d: { e: { secret: "s" } } } } },
+			}),
+			field: "a.b.c.d.e",
+		})
+		expect(Policy.decideSync).type.not.toBeCallableWith(policy, {
+			principal: alice,
+			action: "read",
+			resource: Deep.make({
+				a: { b: { c: { d: { e: { secret: "s" } } } } },
+			}),
+			field: "a.b.c.d",
+		})
+	})
+
 	it("takes a record as one field of a request", () => {
 		const Tagged = Resource.make("Tagged", {
 			actions: ["read"],

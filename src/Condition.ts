@@ -412,7 +412,8 @@ type ObjectPaths<
 > = [O] extends [never]
 	? never
 	: // A record is one field to a rule or a request, as `permittedFields`
-		// lists it.
+		// lists it. So is a struct at the last part that a path may have, since
+		// a path does not go below it.
 		| (Parents extends true
 				? K
 				: Arrays extends true
@@ -420,7 +421,9 @@ type ObjectPaths<
 						? K
 						: number extends keyof O
 							? K
-							: never
+							: [Depth] extends [0]
+								? K
+								: never
 					: never)
 		| `${K}.${FieldPathInternal<O, PreviousDepth[Depth], Arrays, Parents>}`
 
