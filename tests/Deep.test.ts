@@ -188,6 +188,37 @@ describe("Deep inputs", () => {
 		assert.isFalse(Equal.equals(policy, tree(nots("m"))))
 	})
 
+	it("compares policies with very deep meta", () => {
+		const Noted = Domain.make({
+			principal: App.principal,
+			resources: [Bot],
+			meta: Schema.Unknown,
+		})
+		const meta = (value: string): unknown =>
+			Arr.reduce(Arr.range(1, levels), { value } as unknown, (inner) => ({
+				inner,
+			}))
+		const policy = (value: string) =>
+			Schema.decodeSync(Policy.schema(Noted))({
+				_tag: "Rules",
+				algorithm: "denyOverrides",
+				rules: [
+					{
+						_tag: "Allow",
+						actions: ["read"],
+						resources: ["Bot"],
+						meta: meta(value),
+					},
+				],
+			})
+		assert.isTrue(Equal.equals(policy("a"), policy("a")))
+		assert.isFalse(Equal.equals(policy("a"), policy("b")))
+		assert.strictEqual(
+			HashSet.size(HashSet.make(policy("a"), policy("a"), policy("b"))),
+			2,
+		)
+	})
+
 	it("runs a very deep tree with a predicate, and gives it services", () => {
 		class Gate extends Context.Service<Gate, boolean>()(
 			"@nmnmcc/ability/tests/Deep.test/Gate",

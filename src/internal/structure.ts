@@ -14,7 +14,8 @@ import * as Trampoline from "./trampoline.ts"
 /** The nodes of one kind of tree. */
 export interface Kind {
 	readonly isNode: (u: unknown) => u is Hash.Hash & Equal.Equal
-	readonly depthOf: (node: object) => number
+	/** Tests if a value is a record of the kind that the test of equality walks into. */
+	readonly isRecord?: (u: unknown) => boolean
 }
 
 /**
@@ -52,46 +53,80 @@ export const hashOf = (kind: Kind, tag: string, props: object): number =>
 	)
 
 /**
- * Tests if two nodes have the same data. Two nodes with other hashes are not
- * equal, so most tests end at once. The walk takes the steps of a trampoline,
- * so a deep tree does not fill the stack.
+ * Tests if a value is a record that {@link equals} walks into: a plain object,
+ * as the `meta` of a rule from JSON, or a record of the kind, as a rule.
  */
-export const equals = (kind: Kind, self: object, that: unknown): boolean =>
-	Trampoline.run(kind.depthOf(self), (R) => {
-		const nodes = (
-			a: Hash.Hash & Equal.Equal,
-			b: Hash.Hash & Equal.Equal,
-		): Trampoline.Step<boolean> => {
-			if (a === b) {
-				return R.succeed(true)
-			}
-			if (
-				a.constructor !== b.constructor ||
-				a[Hash.symbol]() !== b[Hash.symbol]()
-			) {
-				return R.succeed(false)
-			}
-			const keys = Object.keys(a)
-			return keys.length !== Object.keys(b).length
-				? R.succeed(false)
-				: R.every(keys, (key) =>
-						part(
-							(a as unknown as Record<string, unknown>)[key],
-							(b as unknown as Record<string, unknown>)[key],
-						),
-					)
-		}
-		const part = (x: unknown, y: unknown): Trampoline.Step<boolean> =>
-			kind.isNode(x) && kind.isNode(y)
-				? R.suspend(() => nodes(x, y))
-				: Array.isArray(x) && Array.isArray(y)
-					? x.length === y.length
-						? R.every(Arr.zip(x as ReadonlyArray<unknown>, y), ([a, b]) =>
-								part(a, b),
+const isRecord = (kind: Kind, u: unknown): u is object => {
+	if (typeof u !== "object" || u === null) {
+		return false
+	}
+	const prototype: unknown = Object.getPrototypeOf(u)
+	return (
+		prototype === Object.prototype ||
+		prototype === null ||
+		(kind.isRecord?.(u) ?? false)
+	)
+}
+
+/**
+ * Tests if two nodes have the same data. Two nodes with other hashes are not
+ * equal, so most tests end at once. The walk goes into the nodes, the lists
+ * and the records, as the `meta` of a rule, which may have very many levels
+ * too. It is a walk of the trampoline for an input of an unknown depth, so a
+ * deep tree does not fill the stack. Other values are tested with `Equal`.
+ *
+ * The pairs of objects that the walk has met are in a native `Map` of native
+ * sets, because the walk must find an object by the object itself. A pair
+ * that it meets again is taken as equal, so a part that two places share is
+ * tested one time, and a loop ends. The map belongs to one test.
+ */
+export const equals = (kind: Kind, self: object, that: unknown): boolean => {
+	const met = new Map<object, Set<object>>()
+	return Trampoline.adaptive<readonly [unknown, unknown], boolean>(
+		(R, child) =>
+			([x, y], depth) => {
+				if (x === y) {
+					return R.succeed(true)
+				}
+				const pairs = (
+					xs: ReadonlyArray<unknown>,
+					ys: ReadonlyArray<unknown>,
+				) =>
+					xs.length === ys.length
+						? R.every(Arr.zip(xs, ys), (pair) => child(pair, depth + 1))
+						: R.succeed(false)
+				const fields = (a: object, b: object) => {
+					const seen = met.get(a)
+					if (seen?.has(b) ?? false) {
+						return R.succeed(true)
+					}
+					met.set(a, (seen ?? new Set()).add(b))
+					const keys = Object.keys(a)
+					return keys.length === Object.keys(b).length &&
+						Arr.every(keys, (key) => Object.hasOwn(b, key))
+						? pairs(
+								Arr.map(keys, (key) => (a as Record<string, unknown>)[key]),
+								Arr.map(keys, (key) => (b as Record<string, unknown>)[key]),
 							)
 						: R.succeed(false)
-					: R.succeed(Equal.equals(x, y))
-		return kind.isNode(self) && kind.isNode(that)
-			? nodes(self, that)
-			: R.succeed(false)
-	})
+				}
+				if (kind.isNode(x) && kind.isNode(y)) {
+					return x.constructor === y.constructor &&
+						x[Hash.symbol]() === y[Hash.symbol]()
+						? fields(x, y)
+						: R.succeed(false)
+				}
+				if (Array.isArray(x) && Array.isArray(y)) {
+					return pairs(x, y)
+				}
+				if (
+					isRecord(kind, x) &&
+					isRecord(kind, y) &&
+					Object.getPrototypeOf(x) === Object.getPrototypeOf(y)
+				) {
+					return fields(x, y)
+				}
+				return R.succeed(Equal.equals(x, y))
+			},
+	)([self, that])
+}

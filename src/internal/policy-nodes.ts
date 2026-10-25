@@ -113,7 +113,8 @@ abstract class Base extends Data.Class {
 
 const kind: Structure.Kind = {
 	isNode: (u): u is Base => u instanceof Base,
-	depthOf: (node) => (node as Base).depth,
+	// A rule holds its `meta`, which may have very many levels.
+	isRecord: Rule.isRule,
 }
 
 /**
