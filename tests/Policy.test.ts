@@ -1893,10 +1893,17 @@ describe("Policy", () => {
 		)
 		assert.strictEqual(Policy.coverage(policy, request)._tag, "All")
 		assert.strictEqual(Policy.residual(policy, request)._tag, "Exists")
-		assert.deepStrictEqual(Schema.encodeSync(PolicySchemaOfApp)(policy), json)
-		assert.deepStrictEqual(JSON.parse(JSON.stringify(policy)), json)
-		assert.isTrue(
-			Equal.equals(Policy.provideContext(policy, Context.empty()), policy),
+		// The JSON texts are compared, not the objects: a deep compare of the
+		// assert library would itself fill the stack on 1500 levels of objects.
+		const text = JSON.stringify(json)
+		assert.strictEqual(
+			JSON.stringify(Schema.encodeSync(PolicySchemaOfApp)(policy)),
+			text,
+		)
+		assert.strictEqual(JSON.stringify(policy), text)
+		assert.strictEqual(
+			JSON.stringify(Policy.provideContext(policy, Context.empty())),
+			text,
 		)
 	})
 
