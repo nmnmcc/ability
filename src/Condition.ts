@@ -675,7 +675,13 @@ type PathEnd<
 				Count["length"] extends 999 ? true : false
 			> extends true
 			? true
-			: NextNames<O, Done>
+			: // The name is a field, but a path may not end at it, as at a struct
+				// for a condition: the paths below it may come next. The names of
+				// this place would hold the name itself.
+				NextNames<
+					ObjectsBelow<NonNullable<ChildOf<O, Name>>, R["arrays"]>,
+					`${Done}${Name}.`
+				>
 		: NextNames<O, Done>
 
 /**
@@ -687,7 +693,9 @@ type PathEnd<
 type PathCheck<T, F extends string, R extends PathRules> = [T] extends [object]
 	? PathWalk<T, F, "", R, []> extends true
 		? F
-		: PathWalk<T, F, "", R, []>
+		: // The names come from parts of `F`. Inference must not find `F` in
+			// them, so a call gets its `F` from the path that it gives.
+			NoInfer<PathWalk<T, F, "", R, []>>
 	: never
 
 /**
