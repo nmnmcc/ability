@@ -49,6 +49,7 @@ const expected: Record<string, ReadonlyArray<string>> = {
 		"patternParts",
 		"policyDepth",
 		"policyNodes",
+		"principalNodes",
 		"residualNodes",
 		"searchFields",
 		"searchSteps",

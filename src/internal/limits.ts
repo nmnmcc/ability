@@ -32,6 +32,12 @@ export interface Limits {
 	readonly searchSteps: number
 	/** The most fields that one search for a value may test. */
 	readonly searchFields: number
+	/**
+	 * The most objects and items of a principal that the Authorizer makes the
+	 * JSON form of, for its cache key. A part that the principal uses in many
+	 * places is counted for each place, as its JSON form has it there.
+	 */
+	readonly principalNodes: number
 }
 
 /**
@@ -52,6 +58,7 @@ export const defaults: Limits = {
 	// its steps are a limit of the time of one request.
 	searchSteps: 1_000_000,
 	searchFields: 1000,
+	principalNodes: 100_000,
 }
 
 /**
@@ -69,6 +76,7 @@ export const ceilings: Limits = {
 	catalogFields: 10_000_000,
 	searchSteps: 1_000_000_000,
 	searchFields: 100_000,
+	principalNodes: 100_000_000,
 }
 
 /** The Schema of one limit: a whole number from 1 up to its ceiling. */
@@ -92,6 +100,7 @@ export const Options = Schema.Struct({
 	catalogFields: limit("catalogFields"),
 	searchSteps: limit("searchSteps"),
 	searchFields: limit("searchFields"),
+	principalNodes: limit("principalNodes"),
 })
 
 /**
@@ -115,6 +124,7 @@ export const jsonNodes = defaults.jsonNodes
 export const catalogFields = defaults.catalogFields
 export const searchSteps = defaults.searchSteps
 export const searchFields = defaults.searchFields
+export const principalNodes = defaults.principalNodes
 
 /**
  * The error when an input goes past a limit. It names the limit, the size of

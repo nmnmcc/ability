@@ -1,3 +1,17 @@
+# From 2.1 to 2.2
+
+Version 2.2 has a new limit. No code needs a change.
+
+- `principalNodes` puts a limit on the objects and items of a principal that the
+  Authorizer makes the JSON form of, for its cache key, with a shared part for
+  each place. It is 100000 by default. A principal past it is not kept in the
+  cache, and the loader gets it as it is.
+- A field pattern counts its parts times `fieldPathParts` in `searchSteps`, and
+  a field name of a rule counts one step for each of its kinds. A policy with
+  very many field patterns may need a higher `searchSteps`.
+- `Authorizer.DeciderRequest` has a field of the type `string`, as a check takes
+  a field of any length. A decider must take any field.
+
 # From 2.0 to 2.1
 
 Version 2.1 has higher limits, and a domain may set its own. No code needs a

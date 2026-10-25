@@ -157,6 +157,18 @@ export const searchSteps: number = Internal.searchSteps
 export const searchFields: number = Internal.searchFields
 
 /**
+ * The most objects and items of a principal that the Authorizer makes the
+ * JSON form of, for its cache key. A part that the principal uses in many
+ * places is counted for each place. A principal past it is not kept in the
+ * cache, and the loader gets it as it is.
+ *
+ * @stability stable
+ * @category constants
+ * @since 2.2.0
+ */
+export const principalNodes: number = Internal.principalNodes
+
+/**
  * The error when an input goes past a limit.
  *
  * @stability stable

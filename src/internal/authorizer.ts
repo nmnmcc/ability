@@ -6,6 +6,7 @@
 // principals and deciders to `unknown`. The public types keep them, so the
 // language service check for `unknown` in an Effect is off here.
 // @effect-diagnostics anyUnknownInErrorContext:off
+import * as Arr from "effect/Array"
 import * as Cache from "effect/Cache"
 import * as Context from "effect/Context"
 import type * as Duration from "effect/Duration"
@@ -13,6 +14,7 @@ import * as Effect from "effect/Effect"
 import * as Equal from "effect/Equal"
 import * as Hash from "effect/Hash"
 import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import type * as Authorizer from "../Authorizer.ts"
@@ -144,6 +146,7 @@ const jsonCodecOf = (
  */
 const jsonKey = (
 	schema: Schema.Top,
+	most: number,
 ): ((principal: object) => PrincipalKey | undefined) => {
 	const codec = jsonCodecOf(schema)
 	// A principal with no JSON form is never kept.
@@ -170,6 +173,12 @@ const jsonKey = (
 			},
 		})
 	return (principal) => {
+		// The JSON form has a shared part at each place, so a principal of few
+		// objects may have a very large form. A principal past the limit is
+		// not kept: a try can not stop a heap that fills up.
+		if (!fitsNodes(principal, most)) {
+			return undefined
+		}
 		// A very deep principal may fill the stack of the encoder or of
 		// `Equal`. Such a principal is not kept.
 		try {
@@ -178,6 +187,56 @@ const jsonKey = (
 			return undefined
 		}
 	}
+}
+
+/**
+ * Tells if a value has at most `most` objects and items, with a part that it
+ * uses in many places counted for each place, as its JSON form has it. The
+ * walk keeps a stack of the parts to visit, so a deep value does not fill the
+ * stack, and it stops at the first part past `most`. A value with a loop has
+ * no end of places, so it goes past `most` too. The stack and the count
+ * belong to this call.
+ */
+const fitsNodes = (root: unknown, most: number): boolean => {
+	const stack: Array<unknown> = [root]
+	const count = { nodes: 0 }
+	const partsOf = (value: object): ReadonlyArray<unknown> | undefined => {
+		const size =
+			value instanceof Map || value instanceof Set
+				? value.size
+				: Array.isArray(value)
+					? value.length
+					: undefined
+		// A list past the limit is past it with no copy of its items.
+		if (size !== undefined && count.nodes + size > most) {
+			return undefined
+		}
+		return value instanceof Map
+			? [...value.keys(), ...value.values()]
+			: value instanceof Set || Array.isArray(value)
+				? Array.from(value as Iterable<unknown>)
+				: Object.values(value)
+	}
+	Arr.unfold(0, (step) => {
+		if (stack.length === 0 || count.nodes > most) {
+			return Option.none()
+		}
+		const value = stack.pop()
+		if (typeof value === "object" && value !== null) {
+			count.nodes += 1
+			const parts = partsOf(value)
+			if (parts === undefined) {
+				count.nodes = most + 1
+			} else {
+				count.nodes += parts.length
+				Arr.forEach(parts, (part) => {
+					stack.push(part)
+				})
+			}
+		}
+		return Option.some([step, step + 1] as const)
+	})
+	return count.nodes <= most
 }
 
 const forbidden = (
@@ -216,7 +275,7 @@ export const makeLayer = (
 	// it. The loader always gets the copy, with a cache or not, so a cache can
 	// not change an answer: a form may lose data that `Equal` does not see,
 	// as `-0` becomes `0`. A principal with no such form gives `undefined`.
-	const canonicalOf = jsonKey(domain.principal)
+	const canonicalOf = jsonKey(domain.principal, domain.limits.principalNodes)
 	const custom = options.cache === false ? undefined : options.cache?.key
 	// It gives `undefined` when the principal has no key. Such a principal does
 	// not use the cache.

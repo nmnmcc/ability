@@ -1,6 +1,7 @@
 // Each test gives its own layer, so it uses Effect.provide.
 // @effect-diagnostics strictEffectProvide:off
 import { assert, describe, it } from "@effect/vitest"
+import { execFileSync } from "node:child_process"
 import {
 	Array as Arr,
 	Context,
@@ -717,6 +718,18 @@ describe("Authorizer", () => {
 				assert.deepStrictEqual(yield* later(false), ["Forbidden", "Forbidden"])
 			}),
 	)
+
+	it("checks a principal whose JSON form would be very large, in a small heap", () => {
+		const output = execFileSync(
+			process.execPath,
+			[
+				"--max-old-space-size=64",
+				new URL("./scripts/shared-principal.ts", import.meta.url).pathname,
+			],
+			{ encoding: "utf8" },
+		)
+		assert.strictEqual(output.trim(), "checked")
+	}, 60_000)
 
 	it.effect("checks a principal with a loop back to itself", () =>
 		Effect.gen(function* () {

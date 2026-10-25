@@ -668,6 +668,7 @@ const Deep = Domain.make({
 | `catalogFields`  | 100000   | 10000000   | The fields in the list of the fields of the Schema of a resource or of the principal.                                                                                                                                                                       |
 | `searchSteps`    | 1000000  | 1000000000 | The steps of one search, as in `Policy.coverage`, and of the checks of the field patterns of a policy. A pattern counts its parts times `fieldPathParts`, its work on the longest field of a request. A tree of policies counts the steps of all its parts. |
 | `searchFields`   | 1000     | 100000     | The fields that one search may test.                                                                                                                                                                                                                        |
+| `principalNodes` | 100000   | 100000000  | The objects and items of a principal that the Authorizer makes the JSON form of, for its cache key, with a shared part for each place. A principal past it is not kept, and the loader gets it as it is.                                                    |
 
 ## Examples
 
