@@ -337,8 +337,8 @@ predicate with the name `"policy"`. It runs the whole policy for each value, so
 it gives the same answers and the same failures as `Policy.decide`.
 
 A deep policy tree may give a very large residual. When it would have more than
-10000 nodes, `Policy.residual` throws an error, and a check in an `Authorizer`
-fails.
+`residualNodes` nodes of its domain, 100000 by default, `Policy.residual` throws
+an error, and a check in an `Authorizer` fails.
 
 ### Scopes
 

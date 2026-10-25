@@ -910,8 +910,8 @@ export type ResidualReads<D, K> = Condition.Reads<
  *
  * A policy tree may use the condition of a child two times, so a small policy
  * may give a very large condition. When the condition would have more than
- * 10000 nodes, this function throws an error. In an `Authorizer`, the error
- * is a defect, so the check fails.
+ * the `residualNodes` of the domain, 100000 by default, this function throws
+ * an error. In an `Authorizer`, the error is a defect, so the check fails.
  *
  * @stability stable
  * @category evaluation
@@ -1036,10 +1036,11 @@ export type EncodedNode =
  * every kind, action, field and principal field against the domain, and the
  * `meta` of each rule against the `meta` Schema of the domain.
  *
- * The decoder takes at most 256 levels of policies and 500 levels of
- * conditions, and at most 1000000 objects and array items, with a shared
- * object counted for each place. It reads only the own data fields of the
- * input.
+ * The decoder takes the limits of the domain: at most `policyNodes` nodes
+ * of the tree, `conditionNodes` nodes of each condition, and `jsonNodes`
+ * objects and array items, with a shared object counted for each place. It
+ * stops at the first one past a limit. It takes any number of levels, and it
+ * reads only the own data fields of the input.
  *
  * @stability stable
  * @category schemas

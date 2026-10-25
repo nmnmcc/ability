@@ -1449,9 +1449,11 @@ export type PlainCondition = Condition<any>
  * The Schema of a condition with no predicate. It checks the shape only. Use
  * `Policy.schema` to check the field names against a domain too.
  *
- * The decoder takes at most 500 levels of conditions, and at most 1000000
- * objects and array items, with a shared object counted for each place. It
- * reads only the own data fields of the input.
+ * The decoder takes the default limits: at most `conditionNodes` nodes,
+ * 1000000, and `jsonNodes` objects and array items, 10000000, with a shared
+ * object counted for each place. It stops at the first one past a limit. It
+ * takes any number of levels, and it reads only the own data fields of the
+ * input. Use `Policy.schema` for the limits of a domain.
  *
  * @stability stable
  * @category schemas
