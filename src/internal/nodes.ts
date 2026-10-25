@@ -124,24 +124,39 @@ const checkOperands = (values: unknown): ReadonlyArray<Operand> => {
 
 interface Facts {
 	readonly size: number
+	readonly weight: number
 	readonly depth: number
 	readonly opaque: boolean
 }
 
-const leaf: Facts = { size: 1, depth: 1, opaque: false }
+const leaf: Facts = { size: 1, weight: 1, depth: 1, opaque: false }
+
+/**
+ * The facts of a test with values, as `In` and `Under`. Each value counts in
+ * the weight, since a walk that reads the test reads its values too. It stops
+ * a test past the limits.
+ */
+const valuesFacts = (values: ReadonlyArray<Operand>): Facts =>
+	checkWeight({ ...leaf, weight: 1 + values.length })
+
+const checkWeight = (facts: Facts): Facts => {
+	if (facts.weight > Limits.conditionNodes) {
+		throw Limits.exceeded(
+			"A condition",
+			"conditionNodes",
+			"nodes and values",
+			facts.weight,
+			Limits.conditionNodes,
+		)
+	}
+	return facts
+}
 
 /** The facts of a node with children. It stops a node past the limits. */
 const factsOf = (children: ReadonlyArray<Node>): Facts => {
 	const size = Arr.reduce(children, 1, (total, child) => total + child.size)
-	if (size > Limits.conditionNodes) {
-		throw Limits.exceeded(
-			"A condition",
-			"conditionNodes",
-			"nodes",
-			size,
-			Limits.conditionNodes,
-		)
-	}
+	const weight = Arr.reduce(children, 1, (total, child) => total + child.weight)
+	checkWeight({ ...leaf, weight })
 	const depth =
 		1 + Arr.reduce(children, 0, (top, child) => Math.max(top, child.depth))
 	if (depth > Limits.conditionDepth) {
@@ -155,6 +170,7 @@ const factsOf = (children: ReadonlyArray<Node>): Facts => {
 	}
 	return {
 		size,
+		weight,
 		depth,
 		opaque: Arr.some(children, (child) => child.opaque),
 	}
@@ -181,6 +197,15 @@ abstract class Base extends Data.Class {
 	/** The number of nodes, with a shared child counted for each place. */
 	get size(): number {
 		return this.#facts.size
+	}
+
+	/**
+	 * The number of nodes and of the values of their `In` and `Under` tests,
+	 * with a shared child counted for each place. A walk that reads the tests
+	 * does this much work, so the limits of the nodes count it.
+	 */
+	get weight(): number {
+		return this.#facts.weight
 	}
 
 	/** The number of levels. */
@@ -244,10 +269,8 @@ export class In extends Base {
 		readonly field: string
 		readonly values: ReadonlyArray<Operand>
 	}) {
-		super(
-			{ field: checkPath(props.field), values: checkOperands(props.values) },
-			leaf,
-		)
+		const values = checkOperands(props.values)
+		super({ field: checkPath(props.field), values }, valuesFacts(values))
 	}
 }
 
@@ -265,7 +288,8 @@ export class Under extends Base {
 	readonly _tag = "Under"
 	declare readonly prefix: ReadonlyArray<Operand>
 	constructor(props: { readonly prefix: ReadonlyArray<Operand> }) {
-		super({ prefix: checkOperands(props.prefix) }, leaf)
+		const prefix = checkOperands(props.prefix)
+		super({ prefix }, valuesFacts(prefix))
 	}
 }
 
@@ -333,7 +357,7 @@ export class Predicate extends Base {
 		}
 		super(
 			{ name: props.name, run: props.run },
-			{ size: 1, depth: 1, opaque: true },
+			{ size: 1, weight: 1, depth: 1, opaque: true },
 		)
 	}
 }

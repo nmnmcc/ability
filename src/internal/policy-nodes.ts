@@ -130,7 +130,8 @@ export class Rules extends Base {
 				size: Arr.reduce(
 					conditions,
 					1,
-					(total, when) => total + 1 + (when?.size ?? 0),
+					// A condition counts its nodes and the values of its tests.
+					(total, when) => total + 1 + (when?.weight ?? 0),
 				),
 				depth: 1,
 				opaque: Arr.some(conditions, (when) => when?.opaque ?? false),

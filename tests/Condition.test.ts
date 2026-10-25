@@ -264,7 +264,10 @@ describe("Condition", () => {
 		Effect.runSync(visit(doubled(15)))
 		assert.strictEqual(calls.true, 2 ** 15)
 		const start = Date.now()
-		assert.throws(() => doubled(16), /131071 nodes. The most is 100000/)
+		assert.throws(
+			() => doubled(16),
+			/131071 nodes and values. The most is 100000/,
+		)
 		assert.isBelow(Date.now() - start, 100)
 	})
 

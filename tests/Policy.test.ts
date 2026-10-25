@@ -1948,16 +1948,31 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 1000)
 	})
 
+	it("counts the values of a shared In test in the limit of a policy", () => {
+		const values = Arr.makeBy(1000, (index) => `b${String(index)}`)
+		const wide = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot, { when: ($) => $.in("id", values) })
+		})
+		// Each copy counts its 1,000 values, so 200 copies are past the limit.
+		assert.doesNotThrow(() => Policy.all(Arr.makeBy(50, () => wide) as never))
+		assert.throws(
+			() => Policy.all(Arr.makeBy(200, () => wide) as never),
+			/The most is 100000/,
+		)
+	})
+
 	it("tests many values of one In test in a short time", () => {
 		const Counter = Resource.make("Counter", {
 			actions: ["read"],
 			fields: { x: Schema.Int },
 		})
 		const Counters = Domain.make({ principal: Caller, resources: [Counter] })
-		const values = Array.from({ length: 100_000 }, (_, index) => index)
+		// Each value counts as a node, so the test has as many as the limit
+		// takes.
+		const values = Array.from({ length: 90_000 }, (_, index) => index)
 		const policy = Policy.define(Counters)(function* (_) {
 			yield* _.allow("read", Counter, {
-				when: ($) => $.or($.lt("x", 0), $.gte("x", 100_000), $.in("x", values)),
+				when: ($) => $.or($.lt("x", 0), $.gte("x", 90_000), $.in("x", values)),
 			})
 		})
 		const start = Date.now()
@@ -4471,7 +4486,7 @@ describe("Policy", () => {
 					{
 						_tag: "In",
 						field: "level",
-						values: Arr.makeBy(300_000, () => ({
+						values: Arr.makeBy(90_000, () => ({
 							_tag: "Literal",
 							value: 0,
 						})),

@@ -51,6 +51,8 @@ interface Build {
 }
 
 const limit = (node: Nodes.Node): Ast => {
+	// A residual grows by its nodes, as the conditions of the rules come
+	// together. Its values come from the policy, which has a limit of them.
 	if (node.size > Limits.residualNodes) {
 		throw Limits.exceeded(
 			"A residual condition",
