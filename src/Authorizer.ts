@@ -118,13 +118,16 @@ export type Target<D> = Policy.Target<D> | Policy.KindTarget<D>
 export type DeepTarget<D> = Policy.DeepTarget<D> | Policy.DeepKindTarget<D>
 
 /**
- * A request to the decider.
+ * A request to the decider. A check takes a field of any length, so the
+ * field of a request to the decider may be any string, as in
+ * {@link DeepTarget}.
  *
  * @stability stable
  * @category models
  * @since 0.3.0
  */
-export type DeciderRequest<D> = Policy.Request<D> | Policy.KindRequest<D>
+export type DeciderRequest<D> =
+	Policy.DeepRequest<D> | Policy.DeepKindRequest<D>
 
 /**
  * The options of a guard.

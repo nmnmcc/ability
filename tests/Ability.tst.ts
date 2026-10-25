@@ -675,6 +675,17 @@ describe("Policy", () => {
 		}
 	})
 
+	it("gives the decider a field of any length, as a check takes", () => {
+		type Request = Authorizer.DeciderRequest<App>
+		expect<Exclude<Request["field"], undefined>>().type.toBe<string>()
+		expect<Request>().type.toBeAssignableFrom({
+			principal: alice,
+			action: "read" as const,
+			resource: aliceBot,
+			field: "a.b.c.d.e.f",
+		})
+	})
+
 	it("keeps what a predicate reads when it goes with a decoded condition", () => {
 		const _ = Policy.builder(App)
 		const leveled = Condition.builder<
