@@ -1819,6 +1819,42 @@ describe("Policy", () => {
 		)
 	})
 
+	it("checks a deep tree with deep conditions without filling the stack", () => {
+		const condition = Arr.reduce(
+			Arr.range(1, 499),
+			{ _tag: "Exists", field: "id" } as unknown,
+			(inner) => ({ _tag: "And", conditions: [inner] }),
+		)
+		const json = Arr.reduce(
+			Arr.range(1, 255),
+			{
+				_tag: "Rules",
+				algorithm: "denyOverrides",
+				rules: [
+					{
+						_tag: "Allow",
+						actions: ["read"],
+						resources: ["Bot"],
+						when: condition,
+					},
+				],
+			} as unknown,
+			(inner) => ({ _tag: "All", policies: [inner] }),
+		)
+		const policy = Schema.decodeUnknownSync(PolicySchemaOfApp)(json)
+		const request = { principal: alice, action: "read", kind: "Bot" } as const
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: aliceBot,
+			})._tag,
+			"Allow",
+		)
+		assert.strictEqual(Policy.coverage(policy, request)._tag, "All")
+		assert.deepStrictEqual(Schema.encodeSync(PolicySchemaOfApp)(policy), json)
+	})
+
 	it("binds a policy with very many wrong names in a short time", () => {
 		const Wide = Resource.make("Wide", {
 			actions: ["read"],

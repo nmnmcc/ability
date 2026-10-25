@@ -552,11 +552,14 @@ export const treeIssues = (
 	domain: Domain.Any,
 	root: TreeNode,
 ): ReadonlyArray<Issue> => {
-	const issuesOf = (
+	// The rules come out of the tree first, and each one is checked after.
+	// A check of a condition goes down its levels, so a check inside the walk
+	// of the tree would go down the levels of both.
+	const rulesOf = (
 		node: TreeNode,
 		path: ReadonlyArray<PropertyKey>,
 		level: number,
-	): ReadonlyArray<Issue> => {
+	): ReadonlyArray<Issue | readonly [RuleData, ReadonlyArray<PropertyKey>]> => {
 		if (level > Limits.policyDepth) {
 			return [
 				{
@@ -567,21 +570,27 @@ export const treeIssues = (
 		}
 		switch (node._tag) {
 			case "Rules":
-				return Arr.flatMap(node.rules, (rule, index) =>
-					ruleIssues(domain, rule, [...path, "rules", index]),
+				return Arr.map(
+					node.rules,
+					(rule, index) => [rule, [...path, "rules", index]] as const,
 				)
 			case "All":
 			case "Any":
 			case "FirstOf":
 				return Arr.flatMap(node.policies, (child, index) =>
-					issuesOf(child, [...path, "policies", index], level + 1),
+					rulesOf(child, [...path, "policies", index], level + 1),
 				)
 			case "Ceiling":
 				return [
-					...issuesOf(node.cap, [...path, "cap"], level + 1),
-					...issuesOf(node.policy, [...path, "policy"], level + 1),
+					...rulesOf(node.cap, [...path, "cap"], level + 1),
+					...rulesOf(node.policy, [...path, "policy"], level + 1),
 				]
 		}
 	}
-	return issuesOf(root, [], 1)
+	const memo = makeMemo()
+	return Arr.flatMap(rulesOf(root, [], 1), (found) =>
+		Array.isArray(found)
+			? ruleIssues(domain, found[0], found[1], memo)
+			: [found as Issue],
+	)
 }

@@ -107,9 +107,41 @@ const decodeMeta = (
 	)
 }
 
+/** A rule in the input, with its place, to decode after the tree. */
+interface RuleInput {
+	readonly input: unknown
+	readonly path: ReadonlyArray<PropertyKey>
+}
+
+/**
+ * The shape of a tree, with the place of each rule in a flat list. `size`
+ * counts the nodes and the rules, as the nodes do, so a shared input stops
+ * at `policyNodes` before the decoder reads all of it.
+ */
+type Plan =
+	| {
+			readonly _tag: "Rules"
+			readonly path: ReadonlyArray<PropertyKey>
+			readonly size: number
+			readonly algorithm: PolicyNodes.Algorithm
+			readonly rules: ReadonlyArray<number>
+	  }
+	| {
+			readonly _tag: "All" | "Any" | "FirstOf"
+			readonly path: ReadonlyArray<PropertyKey>
+			readonly size: number
+			readonly policies: ReadonlyArray<Plan>
+	  }
+	| {
+			readonly _tag: "Ceiling"
+			readonly path: ReadonlyArray<PropertyKey>
+			readonly size: number
+			readonly cap: Plan
+			readonly policy: Plan
+	  }
+
 const decodeRule = (
-	input: unknown,
-	path: ReadonlyArray<PropertyKey>,
+	{ input, path }: RuleInput,
 	domain: Domain.Any,
 	budget: Json.Budget,
 ): Rule.Rule => {
@@ -149,13 +181,19 @@ const decodeRule = (
 	})
 }
 
-const decodeTree = (
+/**
+ * Reads the shape of a tree, and puts each rule in `rules`. The rules are
+ * decoded after the walk: a condition has levels of its own, and a decode
+ * inside the walk would go down the levels of both.
+ */
+const readTree = (
 	input: unknown,
 	path: ReadonlyArray<PropertyKey>,
 	depth: number,
-	domain: Domain.Any,
 	budget: Json.Budget,
-): Node => {
+	// The rules of one decode. The list belongs to that decode.
+	rules: Array<RuleInput>,
+): Plan => {
 	if (depth > Limits.policyDepth) {
 		throw Json.problem(
 			path,
@@ -167,49 +205,99 @@ const decodeTree = (
 	}
 	Json.spend(budget, 1, path)
 	const child = (value: unknown, at: ReadonlyArray<PropertyKey>) =>
-		decodeTree(value, at, depth + 1, domain, budget)
-	const children = () =>
-		Arr.map(Json.readList(input, "policies", path, budget), (value, index) =>
-			child(value, [...path, "policies", index]),
-		)
-	try {
-		const tag = Json.read(input, "_tag", path)
-		switch (tag) {
-			case "Rules": {
-				const algorithm = Json.readString(input, "algorithm", path)
-				if (!algorithms.includes(algorithm)) {
-					throw Json.problem(
-						[...path, "algorithm"],
-						`"${algorithm}" is not a combining algorithm`,
-					)
-				}
-				return new PolicyNodes.Rules({
-					algorithm: algorithm as PolicyNodes.Algorithm,
-					rules: Arr.map(
-						Json.readList(input, "rules", path, budget),
-						(rule, index) =>
-							decodeRule(rule, [...path, "rules", index], domain, budget),
-					),
-				})
+		readTree(value, at, depth + 1, budget, rules)
+	const tag = Json.read(input, "_tag", path)
+	switch (tag) {
+		case "Rules": {
+			const algorithm = Json.readString(input, "algorithm", path)
+			if (!algorithms.includes(algorithm)) {
+				throw Json.problem(
+					[...path, "algorithm"],
+					`"${algorithm}" is not a combining algorithm`,
+				)
 			}
+			const found = Arr.map(
+				Json.readList(input, "rules", path, budget),
+				(rule, index) =>
+					rules.push({ input: rule, path: [...path, "rules", index] }) - 1,
+			)
+			return sized({
+				_tag: "Rules",
+				path,
+				size: 1 + found.length,
+				algorithm: algorithm as PolicyNodes.Algorithm,
+				rules: found,
+			})
+		}
+		case "All":
+		case "Any":
+		case "FirstOf": {
+			const policies = Arr.map(
+				Json.readList(input, "policies", path, budget),
+				(value, index) => child(value, [...path, "policies", index]),
+			)
+			return sized({
+				_tag: tag,
+				path,
+				size: Arr.reduce(policies, 1, (total, plan) => total + plan.size),
+				policies,
+			})
+		}
+		case "Ceiling": {
+			const cap = child(Json.read(input, "cap", path), [...path, "cap"])
+			const policy = child(Json.read(input, "policy", path), [
+				...path,
+				"policy",
+			])
+			return sized({
+				_tag: "Ceiling",
+				path,
+				size: 1 + cap.size + policy.size,
+				cap,
+				policy,
+			})
+		}
+		default:
+			throw Json.problem([...path, "_tag"], "The node has no known tag")
+	}
+}
+
+/** Stops a plan past `policyNodes`, with the message of the nodes. */
+const sized = (plan: Plan): Plan => {
+	if (plan.size > Limits.policyNodes) {
+		throw Json.problem(
+			plan.path,
+			`A policy tree has ${String(plan.size)} nodes. The most is ${String(Limits.policyNodes)}.`,
+		)
+	}
+	return plan
+}
+
+/** Makes the nodes of a plan, with the decoded rules. */
+const build = (plan: Plan, rules: ReadonlyArray<Rule.Rule>): Node => {
+	try {
+		switch (plan._tag) {
+			case "Rules":
+				return new PolicyNodes.Rules({
+					algorithm: plan.algorithm,
+					rules: Arr.map(plan.rules, (index) => rules[index]!),
+				})
 			case "All":
-				return new PolicyNodes.All(children())
 			case "Any":
-				return new PolicyNodes.Any(children())
 			case "FirstOf":
-				return new PolicyNodes.FirstOf(children())
+				return new PolicyNodes[plan._tag](
+					Arr.map(plan.policies, (child) => build(child, rules)),
+				)
 			case "Ceiling":
 				return new PolicyNodes.Ceiling({
-					cap: child(Json.read(input, "cap", path), [...path, "cap"]),
-					policy: child(Json.read(input, "policy", path), [...path, "policy"]),
+					cap: build(plan.cap, rules),
+					policy: build(plan.policy, rules),
 				})
-			default:
-				throw Json.problem([...path, "_tag"], "The node has no known tag")
 		}
 	} catch (error) {
 		// A node past a limit is a problem at its place.
 		if (error instanceof Limits.LimitExceeded) {
-			throw Json.problem(path, error.message)
+			throw Json.problem(plan.path, error.message)
 		}
 		throw error
 	}
@@ -221,7 +309,11 @@ export const decode = (
 	domain: Domain.Any,
 ): Result.Result<Node, Json.Problem> => {
 	try {
-		return Result.succeed(decodeTree(input, [], 1, domain, { used: 0 }))
+		const budget: Json.Budget = { used: 0 }
+		const inputs: Array<RuleInput> = []
+		const plan = readTree(input, [], 1, budget, inputs)
+		const rules = Arr.map(inputs, (rule) => decodeRule(rule, domain, budget))
+		return Result.succeed(build(plan, rules))
 	} catch (error) {
 		if (error instanceof Json.Problem) {
 			return Result.fail(error)
