@@ -2384,6 +2384,46 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 3000)
 	})
 
+	it("checks a pattern with many stars on a recursive Schema in a short time", () => {
+		interface Tree {
+			readonly a: Tree | null
+			readonly b: Tree | null
+		}
+		const Tree: Schema.Codec<Tree> = Schema.Struct({
+			a: Schema.NullOr(Schema.suspend((): Schema.Codec<Tree> => Tree)),
+			b: Schema.NullOr(Schema.suspend((): Schema.Codec<Tree> => Tree)),
+		})
+		const Forest = Resource.make("Forest", {
+			actions: ["read"],
+			fields: { root: Tree },
+		})
+		const Forests = Domain.make({ principal: Caller, resources: [Forest] })
+		const start = Date.now()
+		const result = Schema.decodeResult(Policy.schema(Forests))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Forest"],
+					// A set of the places of the match for each place of the
+					// catalog has very many forms here. One place of the match
+					// at a time has few.
+					fields: [
+						["**", "a", ...Arr.makeBy(18, () => "*"), "missing"].join("."),
+					],
+				},
+			],
+		})
+		assert.isTrue(Result.isFailure(result))
+		assert.include(
+			String(Result.isFailure(result) ? result.failure : ""),
+			"matches no field",
+		)
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
 	it("binds a very long wrong name in a short time", () => {
 		const Wide = Resource.make("Wide", {
 			actions: ["read"],
