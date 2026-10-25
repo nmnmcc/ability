@@ -386,13 +386,21 @@ type PathsOf<
 			: Arrays extends true
 				? K
 				: never)
-	| ObjectPaths<
-			K,
-			Exclude<V, Leaf | Whole | Function | ReadonlyArray<unknown>>,
-			Depth,
-			Arrays,
-			Parents
-	  >
+	// A condition reads a field below `K` only when `K` holds plain data: a
+	// list, a whole value such as a date, or a function may have a getter or a
+	// method with the name, so the binding does not take such a read. A rule
+	// or a request names a field and does not read it, so it may.
+	| (Arrays extends true
+			? ObjectPaths<
+					K,
+					Exclude<V, Leaf | Whole | Function | ReadonlyArray<unknown>>,
+					Depth,
+					Arrays,
+					Parents
+				>
+			: [Extract<V, Whole | Function | ReadonlyArray<unknown>>] extends [never]
+				? ObjectPaths<K, Exclude<V, Leaf>, Depth, Arrays, Parents>
+				: never)
 
 /** The paths of a field `K` that holds the objects `O`, and of the fields below. */
 type ObjectPaths<
@@ -420,9 +428,10 @@ type ObjectPaths<
  * The paths of the fields of `T` that hold one value, with dots for nested
  * fields. Arrays are left out. A map, a set, a date, a URL, a byte array, an
  * `Option` and the other value types of Effect, such as `BigDecimal` and
- * `Duration`, are one field, and a path does not go into them. The type goes down four levels, so type
- * checking stays fast. For a union of types, only the common fields are
- * paths.
+ * `Duration`, are one field, and a path does not go into them. A path does
+ * not go into a field that may hold one of them or a list either. The type
+ * goes down four levels, so type checking stays fast. For a union of types,
+ * only the common fields are paths.
  *
  * @stability stable
  * @category utility types

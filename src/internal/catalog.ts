@@ -129,6 +129,15 @@ export interface Field {
 	readonly listed: boolean
 	/** The field may hold parts that the Schema does not name, as a record may. */
 	readonly open: boolean
+	/**
+	 * A read of the field finds only plain data. It is `false` when a value
+	 * above the field may be an object that does not have it as a data field:
+	 * a class without the field, which may have a getter of that name, a
+	 * value such as a date or a list, or any object, as of `Schema.Unknown`.
+	 * A decode or a `make` copies a struct or a record into a plain object,
+	 * so a struct without the field gives `null` for it.
+	 */
+	readonly plain: boolean
 }
 
 /** A place in the tree of a catalog, with the places below it. */
@@ -185,8 +194,8 @@ const classStruct = (
 }
 
 /**
- * Gives the Schemas that a value at one place may fit: it opens unions,
- * `Schema.suspend` and classes. The open suspend nodes are in a native `Set`,
+ * Gives the Schemas that a value at one place may fit: it opens unions and
+ * `Schema.suspend`. A class stays a class: see {@link structOf}. The open suspend nodes are in a native `Set`,
  * because the walk must find a node by the node itself: `Equal` compares
  * Schema nodes by structure, and a recursive Schema has no end. A suspend
  * node that gives itself again, with no step on the path, gives nothing.
@@ -202,14 +211,18 @@ const alternatives = (
 			return open.has(ast)
 				? []
 				: alternatives(ast.thunk(), new Set([...open, ast]))
-		case "Declaration": {
-			const inner = classStruct(ast)
-			return inner === undefined ? [ast] : alternatives(inner, open)
-		}
 		default:
 			return [ast]
 	}
 }
+
+/** The struct of a Schema: a struct, or the struct of a class. */
+const structOf = (ast: SchemaAST.AST): SchemaAST.Objects | undefined =>
+	ast._tag === "Objects"
+		? ast
+		: ast._tag === "Declaration"
+			? classStruct(ast)
+			: undefined
 
 const hasCheck = (
 	checks: ReadonlyArray<SchemaAST.Check<never>>,
@@ -223,8 +236,10 @@ const hasCheck = (
 	)
 
 /** A struct with named fields, or with the keys of a record. */
-const isStruct = (ast: SchemaAST.AST): ast is SchemaAST.Objects =>
-	ast._tag === "Objects" &&
+const isStruct = (
+	ast: SchemaAST.Objects | undefined,
+): ast is SchemaAST.Objects =>
+	ast !== undefined &&
 	(ast.propertySignatures.length > 0 || ast.indexSignatures.length > 0)
 
 /** The kinds of the values of a Schema that is not a struct. */
@@ -326,6 +341,8 @@ interface Place {
 	readonly missing: boolean
 	/** The value may be anything, as an extra field of a struct may be. */
 	readonly top: boolean
+	/** A read here finds only plain data: see {@link Field.plain}. */
+	readonly plain: boolean
 }
 
 const textOf = (path: ReadonlyArray<Segment>): string =>
@@ -385,10 +402,22 @@ const namesOf = (
  * very many fields before the walk is done.
  */
 const branchOf = (place: Place, count: { size: number }): Branch => {
-	const structs = Arr.filter(place.schemas, isStruct)
-	const values = Arr.filter(place.schemas, (schema) => !isStruct(schema))
+	const structs = Arr.filter(Arr.map(place.schemas, structOf), isStruct)
+	// The structs of classes. A value of a class is not copied into a plain
+	// object, so it keeps its getters and methods.
+	const classes = Arr.filter(
+		Arr.map(
+			Arr.filter(place.schemas, (schema) => schema._tag === "Declaration"),
+			structOf,
+		),
+		isStruct,
+	)
+	const values = Arr.filter(
+		place.schemas,
+		(schema) => !isStruct(structOf(schema)),
+	)
 	const valueKinds = Arr.reduce(values, noKinds, (kinds, schema) =>
-		joinKinds(kinds, kindsOf(schema)),
+		joinKinds(kinds, kindsOf(structOf(schema) ?? schema)),
 	)
 	const kinds = place.top
 		? anyKinds
@@ -420,6 +449,7 @@ const branchOf = (place: Place, count: { size: number }): Branch => {
 						structs.length > 0 ||
 						valueKinds.object ||
 						place.top,
+					plain: place.plain,
 				}
 	if (field !== undefined) {
 		count.size += 1
@@ -466,6 +496,10 @@ const branchOf = (place: Place, count: { size: number }): Branch => {
 				place.top ||
 				valueKinds.object ||
 				Arr.some(structs, (struct) => propertyOf(struct, name) === undefined),
+			plain:
+				place.plain &&
+				!valueKinds.object &&
+				Arr.every(classes, (struct) => propertyOf(struct, name) !== undefined),
 		}
 		return [name, branchOf(below, count)] as const
 	})
@@ -487,6 +521,10 @@ const branchOf = (place: Place, count: { size: number }): Branch => {
 			// A record may not have a given key.
 			missing: true,
 			top: place.top || valueKinds.object || records.length < structs.length,
+			plain:
+				place.plain &&
+				!valueKinds.object &&
+				Arr.every(classes, (struct) => struct.indexSignatures.length > 0),
 		},
 		count,
 	)
@@ -510,6 +548,7 @@ export const catalogOf = (ast: SchemaAST.AST): Catalog => {
 			schemas: alternatives(ast, new Set()),
 			missing: false,
 			top: false,
+			plain: true,
 		},
 		{ size: 0 },
 	)

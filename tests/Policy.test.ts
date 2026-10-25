@@ -1842,7 +1842,7 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 5000)
 	})
 
-	it("lets a name below a union branch of any value hold any value", () => {
+	it("does not read a name below a union branch of any value", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],
 			fields: {
@@ -1853,27 +1853,23 @@ describe("Policy", () => {
 			},
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
-		const policy = rulesOf(Notes, [
-			Policy.rule({
-				_tag: "Allow",
-				actions: ["read"],
-				resources: ["Note"],
-				when: Condition.builder<
-					{ readonly info: { readonly owner: string | null } },
-					unknown,
-					unknown
-				>().in("info.owner", ["public", null]),
-			}),
-		])
-		// `{ info: { owner: "secret" } }` is a value of the Schema, and the
-		// policy does not allow it.
-		assert.notStrictEqual(
-			Policy.coverage(policy, {
-				principal: alice,
-				action: "read",
-				kind: "Note",
-			})._tag,
-			"All",
+		// A value of `Schema.Unknown` may be any object, so `info.owner` may be
+		// a getter. A residual could leave the read out where a decision fails.
+		assert.throws(
+			() =>
+				rulesOf(Notes, [
+					Policy.rule({
+						_tag: "Allow",
+						actions: ["read"],
+						resources: ["Note"],
+						when: Condition.builder<
+							{ readonly info: { readonly owner: string | null } },
+							unknown,
+							unknown
+						>().in("info.owner", ["public", null]),
+					}),
+				]),
+			/A condition may not read the field "info.owner"/,
 		)
 	})
 
@@ -3074,7 +3070,7 @@ describe("Policy", () => {
 		)
 	})
 
-	it("reads a getter in a branch of a union as a defect", () => {
+	it("does not read a field that a class in a union does not have", () => {
 		class Owner extends Schema.Class<Owner>("UnionOwner")({
 			id: Schema.String,
 		}) {
@@ -3089,19 +3085,147 @@ describe("Policy", () => {
 			},
 		})
 		const Boxes = Domain.make({ principal: Caller, resources: [Box] })
+		// The types see the getter as a field, but the Schema of the class has
+		// no field `flag`.
+		assert.throws(
+			() =>
+				Policy.define(Boxes)(function* (_) {
+					yield* _.allow("read", Box, {
+						when: ($) => $.eq("box.flag", "yes"),
+					})
+				}),
+			/A condition may not read the field "box.flag"/,
+		)
+		// A deny rule in another policy may not read it either, also where the
+		// residual would not need it.
+		assert.throws(() =>
+			Policy.any([
+				Policy.define(Boxes)(function* (_) {
+					yield* _.deny("read", Box, {
+						when: ($) => $.eq("box.flag", "closed"),
+					})
+				}),
+				Policy.define(Boxes)(function* (_) {
+					yield* _.allow("read", Box)
+				}),
+			]),
+		)
+		// A rule that does not read the field still works on a class value.
 		const policy = Policy.define(Boxes)(function* (_) {
-			yield* _.allow("read", Box, {
-				when: ($) => $.eq("box.flag", "yes"),
-			})
+			yield* _.allow("read", Box)
 		})
+		assert.strictEqual(
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: Box.make({ box: Owner.make({ id: "o" }) }),
+			})._tag,
+			"Allow",
+		)
+	})
+
+	it("does not read below a field that may hold a list or a date", () => {
+		const Item = Resource.make("MixedItem", {
+			actions: ["read"],
+			fields: {
+				dated: Schema.Union([
+					Schema.Date,
+					Schema.Struct({ flag: Schema.String }),
+				]),
+			},
+		})
+		const Items = Domain.make({ principal: Caller, resources: [Item] })
+		const load = (rule: unknown) =>
+			Schema.decodeUnknownResult(Policy.schema(Items))({
+				_tag: "Rules",
+				algorithm: "denyOverrides",
+				rules: [rule],
+			})
+		const read = load({
+			_tag: "Allow",
+			actions: ["read"],
+			resources: ["MixedItem"],
+			when: { _tag: "Exists", field: "dated.flag" },
+		})
+		assert.isTrue(Result.isFailure(read))
+		assert.include(
+			String(Result.isFailure(read) ? read.failure : ""),
+			'A condition may not read the field "dated.flag"',
+		)
+		// A rule may still name the field, since it does not read it.
+		assert.isTrue(
+			Result.isSuccess(
+				load({
+					_tag: "Deny",
+					actions: ["read"],
+					resources: ["MixedItem"],
+					fields: ["dated.flag"],
+				}),
+			),
+		)
+	})
+
+	it("reads a field that one struct of a union does not have", () => {
+		class Owner extends Schema.Class<Owner>("NamedOwner")({
+			flag: Schema.String,
+			open: Schema.Boolean,
+		}) {}
+		const Box = Resource.make("PlainBox", {
+			actions: ["read"],
+			fields: {
+				box: Schema.Union([
+					Owner,
+					Schema.Struct({ open: Schema.Boolean }),
+					Schema.Struct({ kind: Schema.Literal("empty") }),
+					Schema.String,
+				]),
+			},
+		})
+		const Boxes = Domain.make({ principal: Caller, resources: [Box] })
+		// A decode or a make copies a struct into a plain object, so a struct
+		// without `flag` or `open` gives `null` for it.
+		const policy = rulesOf(Boxes, [
+			Policy.rule({
+				_tag: "Allow",
+				actions: ["read"],
+				resources: ["PlainBox"],
+				when: Condition.builder<
+					{
+						readonly box: {
+							readonly flag: string | null
+							readonly open: boolean | null
+						}
+					},
+					unknown,
+					unknown
+				>().or(
+					Condition.builder<
+						{ readonly box: { readonly flag: string | null } },
+						unknown,
+						unknown
+					>().eq("box.flag", "yes"),
+					Condition.builder<
+						{ readonly box: { readonly open: boolean | null } },
+						unknown,
+						unknown
+					>().eq("box.open", true),
+				),
+			}),
+		])
 		const decide = (box: Resource.Data<typeof Box>["box"]) =>
 			Policy.decideSync(policy, {
 				principal: alice,
 				action: "read",
 				resource: Box.make({ box }),
 			})._tag
-		assert.strictEqual(decide({ flag: "yes" }), "Allow")
-		assert.throws(() => decide(Owner.make({ id: "o" })), /not plain data/)
+		assert.strictEqual(
+			decide(Owner.make({ flag: "yes", open: false })),
+			"Allow",
+		)
+		assert.strictEqual(decide({ open: true }), "Allow")
+		assert.strictEqual(decide({ open: false }), "NotApplicable")
+		assert.strictEqual(decide({ kind: "empty" }), "NotApplicable")
+		assert.strictEqual(decide("text"), "NotApplicable")
 	})
 
 	it("takes a field with a number key", () => {
@@ -3135,49 +3259,40 @@ describe("Policy", () => {
 	})
 
 	it("does not read a field that the simple form of a condition leaves out", () => {
-		class Owner extends Schema.Class<Owner>("SimpleOwner")({
-			id: Schema.String,
-		}) {
-			get flag(): string {
-				throw new globalThis.Error("no")
-			}
-		}
-		const Box = Resource.make("SimpleBox", {
-			actions: ["read"],
-			fields: {
-				box: Schema.Union([Owner, Schema.Struct({ flag: Schema.String })]),
+		const value = {
+			box: {
+				get flag(): string {
+					throw new globalThis.Error("no")
+				},
 			},
-		})
-		const Boxes = Domain.make({ principal: Caller, resources: [Box] })
-		const policy = Policy.define(Boxes)(function* (_) {
-			yield* _.allow("read", Box)
-			yield* _.deny("read", Box, {
-				when: ($) => $.and($.eq("box.flag", "blocked"), Condition.never),
-			})
-			yield* _.deny("read", Box, {
-				when: ($) =>
-					$.and(
-						$.eq("box.flag", "blocked"),
-						$.eq("box.flag", $.principal("userId")),
-					),
-			})
-		})
-		// The guest has no user id, so the second deny rule never applies.
-		const request = {
-			principal: guest,
-			action: "read",
-			resource: Box.make({ box: Owner.make({ id: "o" }) }),
-		} as const
-		// The residual leaves out both deny rules, and so does the decision.
-		assert.deepStrictEqual(
-			Policy.residual(policy, {
-				principal: guest,
-				action: "read",
-				kind: "SimpleBox",
-			}),
-			Condition.always,
+		}
+		const $ = Condition.builder<
+			{ readonly box: { readonly flag: string } },
+			unknown,
+			Caller
+		>()
+		assert.isFalse(
+			Condition.evaluateSync(
+				$.and($.eq("box.flag", "blocked"), Condition.never),
+				{
+					value,
+				},
+			),
 		)
-		assert.strictEqual(Policy.decideSync(policy, request)._tag, "Allow")
+		// The guest has no user id, so the test of the user id is false.
+		assert.isFalse(
+			Condition.evaluateSync(
+				$.and(
+					$.eq("box.flag", "blocked"),
+					$.eq("box.flag", $.principal("userId")),
+				),
+				{ value, principal: guest },
+			),
+		)
+		assert.throws(
+			() => Condition.evaluateSync($.eq("box.flag", "blocked"), { value }),
+			/not plain data/,
+		)
 	})
 
 	it("does not take a scope that reads a getter", () => {

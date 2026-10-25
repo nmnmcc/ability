@@ -136,6 +136,39 @@ describe("Catalog", () => {
 		assert.isTrue(fieldOf(schema, "data.1").listed)
 	})
 
+	it("marks the fields where a read may find data that is not plain", () => {
+		class Named extends Schema.Class<Named>("CatalogNamed")({
+			flag: Schema.String,
+		}) {}
+		const schema = Schema.Struct({
+			owner: Schema.Union([Owner, Schema.Struct({ label: Schema.String })]),
+			named: Schema.Union([Named, Schema.Struct({ other: Schema.String })]),
+			dated: Schema.Union([
+				Schema.Date,
+				Schema.Struct({ flag: Schema.String }),
+			]),
+			text: Schema.Union([
+				Schema.String,
+				Schema.Struct({ flag: Schema.String }),
+			]),
+			any: Schema.Union([
+				Schema.Unknown,
+				Schema.Struct({ flag: Schema.String }),
+			]),
+		})
+		// The class `Owner` has a getter `label`, and no field of that name.
+		assert.isFalse(fieldOf(schema, "owner.label").plain)
+		assert.isTrue(fieldOf(schema, "owner.id").plain)
+		// A struct without the field is copied into a plain object, but a
+		// class without the field may have a getter of that name.
+		assert.isTrue(fieldOf(schema, "named.flag").plain)
+		assert.isFalse(fieldOf(schema, "named.other").plain)
+		assert.isFalse(fieldOf(schema, "dated.flag").plain)
+		assert.isTrue(fieldOf(schema, "text.flag").plain)
+		assert.isFalse(fieldOf(schema, "any.flag").plain)
+		assert.isTrue(fieldOf(schema, "dated").plain)
+	})
+
 	it("stops a recursive Schema at the most parts of a path", () => {
 		const schema = Schema.Struct({ root: Link })
 		assert.isDefined(Catalog.lookup(catalogOf(schema), "root.next.next.value"))

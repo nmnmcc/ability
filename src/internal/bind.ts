@@ -178,6 +178,36 @@ const fieldIssue = (
 }
 
 /**
+ * The issues of a field that a condition reads: a field that is not a field
+ * of every resource of the rule, or a field that is not plain data in one of
+ * them. A read of a value that is not plain data, as a getter of a class, is
+ * a defect in a decision. A residual may leave the read out, so the residual
+ * would say "yes" where the decision fails. So the binding does not take
+ * such a read: see `Catalog.Field.plain`.
+ */
+const readIssues = (
+	context: Context,
+	field: string,
+	at: ReadonlyArray<PropertyKey>,
+): ReadonlyArray<Issue> => {
+	const exists = fieldIssue(context, field, at)
+	if (exists.length > 0) {
+		return exists
+	}
+	return Arr.some(
+		context.named,
+		(descriptor) => !(Catalog.lookup(descriptor.catalog, field)?.plain ?? true),
+	)
+		? [
+				{
+					path: at,
+					issue: `A condition may not read the field "${field}". A value above it may be an object that does not have it as a data field, as a class with a getter, a date or a list. Use a predicate for it.`,
+				},
+			]
+		: []
+}
+
+/**
  * The issues of a field pattern: a pattern that does not parse, or that
  * matches no field of the resources of the rule, as a pattern with a mistake
  * in a name does.
@@ -477,7 +507,7 @@ const conditionIssues = (
 	const here = (issues: ReadonlyArray<Issue>) => under(context.memo, at, issues)
 	switch (node._tag) {
 		case "Compare": {
-			const exists = fieldIssue(context, node.field, ["field"])
+			const exists = readIssues(context, node.field, ["field"])
 			return here(
 				exists.length > 0
 					? exists
@@ -491,7 +521,7 @@ const conditionIssues = (
 			)
 		}
 		case "In": {
-			const exists = fieldIssue(context, node.field, ["field"])
+			const exists = readIssues(context, node.field, ["field"])
 			return here(
 				exists.length > 0
 					? exists
@@ -504,7 +534,7 @@ const conditionIssues = (
 			)
 		}
 		case "Exists":
-			return here(fieldIssue(context, node.field, ["field"]))
+			return here(readIssues(context, node.field, ["field"]))
 		case "Under":
 			return here(underIssues(context, node.prefix, []))
 		case "And":

@@ -179,6 +179,32 @@ describe("Rule", () => {
 		expect($.eq).type.not.toBeCallableWith("level", $.principal("counts.1"))
 	})
 
+	it("does not read below a field that may hold a list or a date", () => {
+		const Item = Resource.make("MixedItem", {
+			actions: ["read"],
+			fields: {
+				listed: Schema.Union([
+					Schema.Array(Schema.String),
+					Schema.Struct({ flag: Schema.String }),
+				]),
+				dated: Schema.Union([
+					Schema.Date,
+					Schema.Struct({ flag: Schema.String }),
+				]),
+			},
+		})
+		const $ = Condition.builder<Resource.Data<typeof Item>, unknown, Caller>()
+		expect($.eq).type.not.toBeCallableWith("listed.flag", "a")
+		expect($.eq).type.not.toBeCallableWith("dated.flag", "a")
+		expect($.exists).type.toBeCallableWith("dated")
+		const _ = Policy.builder(
+			Domain.make({ principal: Caller, resources: [Item] }),
+		)
+		expect(_.deny).type.toBeCallableWith("read", Item, {
+			fields: ["dated.flag"],
+		})
+	})
+
 	it("gives the value type of a field in each branch of a union", () => {
 		const Item = Resource.make("FlagItem", {
 			actions: ["read"],

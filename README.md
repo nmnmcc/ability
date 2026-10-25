@@ -211,9 +211,12 @@ resource of the rule. Did you mean "title"?
 
 A condition reads only the data fields of a value: an own field that a loop over
 the keys sees. A rule that names a getter of a class is a `PolicyError`. Use a
-predicate for a value that comes from code. A read of a field that is not data,
-as a getter in one branch of a union, is a defect. A test reads only the fields
-that the simple form of its condition needs, as the residual does: in
+predicate for a value that comes from code. A condition may not read a field
+below a value that may not be plain data: a class in a union that does not have
+the field, a list, a date, or a value of `Schema.Unknown`. Such a rule is a
+`PolicyError` too. A struct without the field is fine: a decode or a `make`
+copies it into a plain object, so the field reads `null`. A test reads only the
+fields that the simple form of its condition needs, as the residual does: in
 `x AND False`, it does not read `x`.
 
 ## Conditions
