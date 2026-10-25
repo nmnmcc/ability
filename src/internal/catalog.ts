@@ -136,34 +136,57 @@ export interface Field {
 	 * above the field may be an object that does not have it as a data field:
 	 * a class without the field, which may have a getter of that name, a
 	 * value such as a date or a list, or any object, as of `Schema.Unknown`.
-	 * A decode or a `make` copies a struct or a record into a plain object,
-	 * so a struct without the field gives `null` for it.
+	 * A struct of a union without the field makes it not plain too, since a
+	 * value made by hand may have it with any value.
 	 */
 	readonly plain: boolean
 }
 
-/** A place in the tree of a catalog, with the places below it. */
+/**
+ * A place in the graph of a catalog. A path of a field leads to a place, and
+ * many paths may lead to one place, as in a recursive Schema: `next` and
+ * `next.next` of a list of links are one place. A place keeps the ids of the
+ * places below it, so the graph has no loop of objects.
+ */
 export interface Branch {
-	/** The field at this place. The root has none. */
-	readonly field: Field | undefined
-	/** The places below, by name, in the order of the Schema. */
-	readonly children: ReadonlyArray<readonly [string, Branch]>
+	readonly id: number
+	/** The kinds of the values of the field at this place. */
+	readonly kinds: Kinds
+	/** The field holds a scalar, a record or a list: see `Field.listed`. */
+	readonly values: boolean
+	/** The field may hold a struct. */
+	readonly structs: boolean
+	readonly open: boolean
+	readonly plain: boolean
+	/** The ids of the places below, by name, in the order of the Schema. */
+	readonly children: ReadonlyArray<readonly [string, number]>
 	/**
 	 * The places below, by name. A lookup gets each name from `split`, as a
 	 * new string, and a `HashMap` finds a new string about 20% faster than a
 	 * native `Map`. The names come from the Schema, so a name from a policy
 	 * can not make a long list of names with one hash here.
 	 */
-	readonly names: HashMap.HashMap<string, Branch>
+	readonly names: HashMap.HashMap<string, number>
 	/** The place for the keys of a record, when the value may be a record. */
 	readonly key: Key | undefined
-	readonly keyBranch: Branch | undefined
+	readonly keyBranch: number | undefined
 }
 
 /** The catalog of the fields of a Schema. */
 export interface Catalog {
-	/** Every field, a field before the fields below it. */
+	/**
+	 * The fields that a list shows, a field before the fields below it. For a
+	 * recursive Schema, the list goes into each recursive place one time on
+	 * each path, so it is finite.
+	 */
 	readonly fields: ReadonlyArray<Field>
+	/** The places, by id. The root is the place with the id 0. */
+	readonly branches: ReadonlyArray<Branch>
+	/**
+	 * The number of steps from a place to a place below it. A search of the
+	 * catalog, as for a field pattern, reads each one, so this is its work.
+	 */
+	readonly edges: number
 	readonly root: Branch
 }
 
@@ -341,9 +364,8 @@ const declarationId = (ast: SchemaAST.Declaration): string | undefined => {
 		: undefined
 }
 
-/** The things that a walk of the catalog knows at one place. */
+/** The things that the walk of a catalog knows at one place. */
 interface Place {
-	readonly path: ReadonlyArray<Segment>
 	readonly schemas: ReadonlyArray<SchemaAST.AST>
 	/** The value may be missing. */
 	readonly missing: boolean
@@ -411,12 +433,15 @@ const namesOf = (
 		),
 	)
 
-/**
- * Makes the branch of a place, with the branches below it. `count` is the
- * number of fields so far. It belongs to one walk, and it stops a Schema with
- * very many fields before the walk is done.
- */
-const branchOf = (place: Place, count: { size: number }): Branch => {
+/** A place of the walk, and the places below it, before they have ids. */
+interface Made {
+	readonly branch: Omit<Branch, "id" | "children" | "names" | "keyBranch">
+	readonly children: ReadonlyArray<readonly [string, Place]>
+	readonly keyPlace: Place | undefined
+}
+
+/** Works out the facts of a place, and the places below it. */
+const placeOf = (place: Place): Made => {
 	const structs = Arr.filter(Arr.map(place.schemas, structOf), isStruct)
 	const values = Arr.filter(
 		place.schemas,
@@ -435,49 +460,6 @@ const branchOf = (place: Place, count: { size: number }): Branch => {
 		structs,
 		(struct) => struct.indexSignatures.length > 0,
 	)
-	// The last part that a path may have: the walk does not go below it.
-	const last = place.path.length === Limits.fieldPathParts
-	const field: Field | undefined =
-		place.path.length === 0
-			? undefined
-			: {
-					path: place.path,
-					text: textOf(place.path),
-					kinds,
-					listed:
-						values.length > 0 ||
-						records.length > 0 ||
-						(last && structs.length > 0),
-					// A field that is a scalar in one branch of a union and a struct
-					// in another holds parts too.
-					open:
-						records.length > 0 ||
-						structs.length > 0 ||
-						valueKinds.object ||
-						place.top,
-					plain: place.plain,
-				}
-	if (field !== undefined) {
-		count.size += 1
-		if (count.size > Limits.catalogFields) {
-			throw Limits.exceeded(
-				"A Schema",
-				"catalogFields",
-				"fields",
-				count.size,
-				Limits.catalogFields,
-			)
-		}
-	}
-	if (last) {
-		return {
-			field,
-			children: [],
-			names: HashMap.empty(),
-			key: undefined,
-			keyBranch: undefined,
-		}
-	}
 	const structProperties = Arr.map(structs, propertiesOf)
 	const children = Arr.map(namesOf(structs), (name) => {
 		const properties = Arr.flatMap(structProperties, (named) => {
@@ -492,7 +474,6 @@ const branchOf = (place: Place, count: { size: number }): Branch => {
 		const top =
 			place.top || valueKinds.object || properties.length < structs.length
 		const below: Place = {
-			path: [...place.path, name],
 			schemas: Arr.flatMap(properties, (property) =>
 				alternatives(property.type, new Set()),
 			),
@@ -507,80 +488,269 @@ const branchOf = (place: Place, count: { size: number }): Branch => {
 			// a read below it may not find plain data.
 			plain: place.plain && !top,
 		}
-		return [name, branchOf(below, count)] as const
+		return [name, below] as const
 	})
-	const names = HashMap.fromIterable(children)
 	const signatures = Arr.flatMap(records, (struct) => struct.indexSignatures)
-	if (signatures.length === 0) {
-		return { field, children, names, key: undefined, keyBranch: undefined }
-	}
 	const keyTop =
 		place.top || valueKinds.object || records.length < structs.length
-	const key: Key = {
-		_tag: "Key",
-		parameters: Arr.map(signatures, (signature) => signature.parameter),
-	}
-	const keyBranch = branchOf(
-		{
-			path: [...place.path, key],
-			schemas: Arr.flatMap(signatures, (signature) =>
-				alternatives(signature.type, new Set()),
-			),
-			// A record may not have a given key.
-			missing: true,
-			top: keyTop,
-			plain: place.plain && !keyTop,
+	return {
+		branch: {
+			kinds,
+			values: values.length > 0 || records.length > 0,
+			structs: structs.length > 0,
+			// A field that is a scalar in one branch of a union and a struct in
+			// another holds parts too.
+			open:
+				records.length > 0 ||
+				structs.length > 0 ||
+				valueKinds.object ||
+				place.top,
+			plain: place.plain,
+			key:
+				signatures.length === 0
+					? undefined
+					: {
+							_tag: "Key",
+							parameters: Arr.map(
+								signatures,
+								(signature) => signature.parameter,
+							),
+						},
 		},
-		count,
-	)
-	return { field, children, names, key, keyBranch }
+		children,
+		keyPlace:
+			signatures.length === 0
+				? undefined
+				: {
+						schemas: Arr.flatMap(signatures, (signature) =>
+							alternatives(signature.type, new Set()),
+						),
+						// A record may not have a given key.
+						missing: true,
+						top: keyTop,
+						plain: place.plain && !keyTop,
+					},
+	}
 }
 
-const fieldsOf = (branch: Branch): ReadonlyArray<Field> => [
-	...(branch.field === undefined ? [] : [branch.field]),
-	...Arr.flatMap(branch.children, ([, child]) => fieldsOf(child)),
-	...(branch.keyBranch === undefined ? [] : fieldsOf(branch.keyBranch)),
-]
+/**
+ * Makes the places of a Schema. Each place comes one time: two paths with the
+ * same Schemas and the same marks lead to one place. The walk keeps a queue
+ * of the places that it has found, and it makes them in order, so a deep
+ * Schema does not fill the stack.
+ */
+const branchesOf = (root: Place): ReadonlyArray<Branch> => {
+	// The id of each Schema node, and of each place, for this walk. The ids
+	// are in native maps, because the walk must find a Schema node by the node
+	// itself: `Equal` compares Schema nodes by structure, and a recursive
+	// Schema has no end. The maps and the queue belong to this walk.
+	const astIds = new Map<SchemaAST.AST, number>()
+	const placeIds = new Map<string, number>()
+	const queue: Array<Place> = []
+	const idOf = (place: Place): number => {
+		const ids = Arr.map(place.schemas, (schema) => {
+			const known = astIds.get(schema)
+			if (known !== undefined) {
+				return known
+			}
+			astIds.set(schema, astIds.size)
+			return astIds.size - 1
+		})
+		const key = `${Array.from(new Set(ids))
+			.sort((a, b) => a - b)
+			.join(
+				",",
+			)}|${String(place.missing)}|${String(place.top)}|${String(place.plain)}`
+		const known = placeIds.get(key)
+		if (known !== undefined) {
+			return known
+		}
+		if (queue.length >= Limits.catalogFields) {
+			throw Limits.exceeded(
+				"A Schema",
+				"catalogFields",
+				"places",
+				queue.length + 1,
+				Limits.catalogFields,
+			)
+		}
+		placeIds.set(key, queue.length)
+		queue.push(place)
+		return queue.length - 1
+	}
+	idOf(root)
+	return Arr.unfold(0, (id) => {
+		const place = queue[id]
+		if (place === undefined) {
+			return Option.none()
+		}
+		const made = placeOf(place)
+		const children = Arr.map(
+			made.children,
+			([name, below]) => [name, idOf(below)] as const,
+		)
+		const branch: Branch = {
+			...made.branch,
+			id,
+			children,
+			names: HashMap.fromIterable(children),
+			keyBranch: made.keyPlace === undefined ? undefined : idOf(made.keyPlace),
+		}
+		return Option.some([branch, id + 1] as const)
+	})
+}
+
+/** The field at a place, for a path. */
+const fieldAt = (
+	branch: Branch,
+	path: ReadonlyArray<Segment>,
+	parts: number,
+): Field => ({
+	path,
+	text: textOf(path),
+	kinds: branch.kinds,
+	// A struct at the last part that a path may have is one field, since a
+	// path does not go below it.
+	listed: branch.values || (path.length === parts && branch.structs),
+	open: branch.open,
+	plain: branch.plain,
+})
+
+/**
+ * The fields that a list shows, a field before the fields below it, down to
+ * `parts` parts. A path goes into a place that is on it already one time
+ * only, so the list of a recursive Schema is finite. The walk keeps a stack
+ * of the places to visit, so a deep Schema does not fill the stack. The
+ * stack belongs to this walk.
+ */
+const listOf = (
+	branches: ReadonlyArray<Branch>,
+	parts: number,
+): ReadonlyArray<Field> => {
+	interface Visit {
+		readonly branch: Branch
+		readonly path: ReadonlyArray<Segment>
+		/** The ids of the places on the path, as a set of Effect that shares its parts. */
+		readonly above: HashSet.HashSet<number>
+	}
+	const below = (visit: Visit): ReadonlyArray<Visit> => {
+		const { branch, path } = visit
+		if (
+			path.length === parts ||
+			(path.length > 0 && HashSet.has(visit.above, branch.id))
+		) {
+			return []
+		}
+		const above = HashSet.add(visit.above, branch.id)
+		const named = Arr.map(branch.children, ([name, id]) => ({
+			branch: branches[id]!,
+			path: [...path, name],
+			above,
+		}))
+		return branch.key === undefined || branch.keyBranch === undefined
+			? named
+			: [
+					...named,
+					{
+						branch: branches[branch.keyBranch]!,
+						path: [...path, branch.key],
+						above,
+					},
+				]
+	}
+	const stack: Array<Visit> = [
+		{ branch: branches[0]!, path: [], above: HashSet.empty() },
+	]
+	return Arr.flatten(
+		Arr.unfold(stack, (rest) => {
+			const visit = rest.pop()
+			if (visit === undefined) {
+				return Option.none()
+			}
+			rest.push(...Arr.reverse(below(visit)))
+			const field =
+				visit.path.length === 0
+					? []
+					: [fieldAt(visit.branch, visit.path, parts)]
+			if (field.length > 0 && rest.length + 1 > Limits.catalogFields) {
+				throw Limits.exceeded(
+					"A Schema",
+					"catalogFields",
+					"fields",
+					rest.length + 1,
+					Limits.catalogFields,
+				)
+			}
+			return Option.some([field, rest] as const)
+		}),
+	)
+}
 
 /**
  * Makes the catalog of a Schema. It throws when a field name has a dot or is
- * empty, and when the Schema has more fields than `catalogFields`.
+ * empty, and when the Schema has more places or fields than the ceiling of
+ * `catalogFields`. A domain checks the size of the list with its own limit.
  */
 export const catalogOf = (ast: SchemaAST.AST): Catalog => {
-	const root = branchOf(
-		{
-			path: [],
-			schemas: alternatives(ast, new Set()),
-			missing: false,
-			top: false,
-			plain: true,
-		},
-		{ size: 0 },
-	)
-	return { fields: fieldsOf(root), root }
+	const branches = branchesOf({
+		schemas: alternatives(ast, new Set()),
+		missing: false,
+		top: false,
+		plain: true,
+	})
+	return {
+		fields: listOf(branches, Limits.fieldPathParts),
+		branches,
+		edges: Arr.reduce(
+			branches,
+			0,
+			(total, branch) =>
+				total +
+				branch.children.length +
+				(branch.keyBranch === undefined ? 0 : 1),
+		),
+		root: branches[0]!,
+	}
 }
 
-/** Gives the field of a catalog at a path with dots, if the catalog has it. */
-export const lookup = (catalog: Catalog, path: string): Field | undefined => {
-	const names = path.split(".", Limits.fieldPathParts + 1)
-	if (names.length > Limits.fieldPathParts) {
+/**
+ * Gives the field of a catalog at a path with dots, if the catalog has it.
+ * A path has at most `parts` parts. The lookup follows one place for each
+ * part, in a loop.
+ */
+export const lookup = (
+	catalog: Catalog,
+	path: string,
+	parts: number = Limits.fieldPathParts,
+): Field | undefined => {
+	const names = path.split(".", parts + 1)
+	if (names.length > parts) {
 		return undefined
 	}
-	const branch = Arr.reduce(
+	const found = Arr.reduce(
 		names,
-		catalog.root as Branch | undefined,
+		{ branch: catalog.root, path: [] } as
+			| { readonly branch: Branch; readonly path: ReadonlyArray<Segment> }
+			| undefined,
 		(current, name) => {
 			if (current === undefined) {
 				return undefined
 			}
-			const named = HashMap.get(current.names, name)
+			const named = HashMap.get(current.branch.names, name)
 			if (Option.isSome(named)) {
-				return named.value
+				return {
+					branch: catalog.branches[named.value]!,
+					path: [...current.path, name],
+				}
 			}
-			return current.key !== undefined && keyFits(current.key, name)
-				? current.keyBranch
+			const key = current.branch.key
+			const keyBranch = current.branch.keyBranch
+			return key !== undefined && keyBranch !== undefined && keyFits(key, name)
+				? { branch: catalog.branches[keyBranch]!, path: [...current.path, key] }
 				: undefined
 		},
 	)
-	return branch?.field
+	return found === undefined
+		? undefined
+		: fieldAt(found.branch, found.path, parts)
 }

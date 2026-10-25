@@ -239,11 +239,12 @@ const patternIssues = (
 					const key = `${descriptor.kind}\u0000${pattern}`
 					return (
 						Option.getOrElse(Option.fromUndefinedOr(memo.fits.get(key)), () => {
-							// Each check of a pattern reads the fields of a catalog. The
+							// Each check of a pattern reads the steps of a catalog. The
 							// work of one binding has a limit, so very many patterns stop
 							// with one issue, and the policy does not load.
 							memo.work.steps +=
-								descriptor.catalog.fields.length * Math.max(parsed.length, 1)
+								Math.max(descriptor.catalog.edges, 1) *
+								Math.max(parsed.length, 1)
 							if (memo.work.steps > Limits.searchSteps) {
 								return true
 							}

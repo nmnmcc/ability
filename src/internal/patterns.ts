@@ -14,6 +14,7 @@
  * number of names times the number of parts.
  */
 import * as Arr from "effect/Array"
+import * as Option from "effect/Option"
 import * as Result from "effect/Result"
 import * as Catalog from "./catalog.ts"
 import * as Limits from "./limits.ts"
@@ -189,27 +190,64 @@ export const matchesBelow = (
 		(state) => state < pattern.length,
 	)
 
-/** Tests if a pattern matches some field of a catalog. */
+/**
+ * Tests if a pattern matches some field of a catalog, with at most `parts`
+ * parts. A recursive Schema has no end of fields, so the search goes over the
+ * pairs of a place of the catalog and the places of the match: each pair
+ * comes one time, a level after a level, so the search is short, and it
+ * keeps a queue, so a deep Schema does not fill the stack. The set of the
+ * pairs is native, with keys that are numbers, and the set and the queue
+ * belong to this call.
+ */
 export const fitsCatalog = (
 	pattern: Pattern,
 	catalog: Catalog.Catalog,
+	parts: number = Limits.fieldPathParts,
 ): boolean => {
-	const below = (branch: Catalog.Branch, states: States): boolean =>
-		states.length > 0 &&
-		(Arr.some(branch.children, ([name, child]) => visit(child, name, states)) ||
-			(branch.key !== undefined &&
-				branch.keyBranch !== undefined &&
-				visit(branch.keyBranch, branch.key, states)))
-	const visit = (
-		branch: Catalog.Branch,
-		segment: Catalog.Segment,
-		before: States,
-	): boolean => {
-		const states = step(pattern, before, segment)
-		return (
-			(branch.field !== undefined && isDone(pattern, states)) ||
-			below(branch, states)
-		)
+	interface Visit {
+		readonly branch: Catalog.Branch
+		readonly states: States
+		readonly depth: number
 	}
-	return below(catalog.root, start(pattern))
+	const seen = new Set<string>()
+	const next = (visit: Visit): ReadonlyArray<Visit> => {
+		if (visit.states.length === 0 || visit.depth === parts) {
+			return []
+		}
+		const steps: ReadonlyArray<readonly [Catalog.Segment, number]> = [
+			...visit.branch.children,
+			...(visit.branch.key === undefined || visit.branch.keyBranch === undefined
+				? []
+				: [[visit.branch.key, visit.branch.keyBranch] as const]),
+		]
+		return Arr.flatMap(steps, ([segment, id]) => {
+			const states = step(pattern, visit.states, segment)
+			const key = `${String(id)}|${states.join(",")}`
+			if (states.length === 0 || seen.has(key)) {
+				return []
+			}
+			seen.add(key)
+			return [{ branch: catalog.branches[id]!, states, depth: visit.depth + 1 }]
+		})
+	}
+	const queue: Array<Visit> = [
+		{ branch: catalog.root, states: start(pattern), depth: 0 },
+	]
+	// The walk stops at the first field that the pattern matches.
+	const found = (visit: Visit) =>
+		visit.depth > 0 && isDone(pattern, visit.states)
+	return Arr.some(
+		Arr.unfold(0, (index) => {
+			const visit = queue[index]
+			if (visit === undefined) {
+				return Option.none()
+			}
+			if (found(visit)) {
+				return Option.some([true, queue.length] as const)
+			}
+			queue.push(...next(visit))
+			return Option.some([false, index + 1] as const)
+		}),
+		(match) => match,
+	)
 }

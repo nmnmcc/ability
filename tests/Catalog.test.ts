@@ -248,15 +248,26 @@ describe("read", () => {
 	})
 })
 
-/** Gives each field of the catalog with a path of names for one value. */
+/** Gives each place of the catalog with a path of names for one value. */
 const placesOf = (
+	catalog: Catalog.Catalog,
 	branch: Catalog.Branch,
 	value: unknown,
 	names: ReadonlyArray<string>,
-): ReadonlyArray<readonly [Catalog.Field, ReadonlyArray<string>]> => {
-	const here =
-		branch.field === undefined ? [] : [[branch.field, names] as const]
+): ReadonlyArray<readonly [Catalog.Branch, ReadonlyArray<string>]> => {
+	const here = names.length === 0 ? [] : [[branch, names] as const]
 	const below = readPath(value, names)
+	// Below a part that is not an object, a read gives `null`. The walk checks
+	// one more level there and stops, since a recursive Schema has no end.
+	if (typeof below !== "object" || below === null) {
+		return [
+			...here,
+			...Arr.map(
+				branch.children,
+				([name, id]) => [catalog.branches[id]!, [...names, name]] as const,
+			),
+		]
+	}
 	const keys =
 		branch.key === undefined || typeof below !== "object" || below === null
 			? []
@@ -269,13 +280,16 @@ const placesOf = (
 				)
 	return [
 		...here,
-		...Arr.flatMap(branch.children, ([name, child]) =>
-			placesOf(child, value, [...names, name]),
+		...Arr.flatMap(branch.children, ([name, id]) =>
+			placesOf(catalog, catalog.branches[id]!, value, [...names, name]),
 		),
 		...(branch.keyBranch === undefined
 			? []
 			: Arr.flatMap(keys, (key) =>
-					placesOf(branch.keyBranch!, value, [...names, key]),
+					placesOf(catalog, catalog.branches[branch.keyBranch!]!, value, [
+						...names,
+						key,
+					]),
 				)),
 	]
 }
@@ -283,8 +297,9 @@ const placesOf = (
 /** Tests that each value that a read gives fits the kinds of its field. */
 const fitsCatalog = (ast: SchemaAST.AST, value: unknown): boolean => {
 	const catalog = Catalog.catalogOf(ast)
-	return Arr.every(placesOf(catalog.root, value, []), ([field, names]) =>
-		Catalog.accepts(field.kinds, readPath(value, names)),
+	return Arr.every(
+		placesOf(catalog, catalog.root, value, []),
+		([branch, names]) => Catalog.accepts(branch.kinds, readPath(value, names)),
 	)
 }
 
