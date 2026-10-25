@@ -156,6 +156,20 @@ export const equals = (kind: Kind, self: object, that: unknown): boolean => {
 				) {
 					return fields(x, y)
 				}
+				// A node, a list or a record of the walk is equal only to one of its
+				// own shape. `Equal` of such a pair would come back to this test
+				// with the same pair, and `Equal` takes a pair that it has met as
+				// equal, so the walk says no at once.
+				if (
+					kind.isNode(x) ||
+					kind.isNode(y) ||
+					Array.isArray(x) ||
+					Array.isArray(y) ||
+					isRecord(kind, x) ||
+					isRecord(kind, y)
+				) {
+					return R.succeed(false)
+				}
 				return R.succeed(Equal.equals(x, y))
 			},
 	)([self, that])

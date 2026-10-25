@@ -1,5 +1,13 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Array as Arr, Effect, Equal, Exit, Schema } from "effect"
+import {
+	Array as Arr,
+	Effect,
+	Equal,
+	Exit,
+	HashMap,
+	Option,
+	Schema,
+} from "effect"
 import { Condition, Limits, Resource } from "../src/index.ts"
 import * as Nodes from "../src/internal/nodes.ts"
 import { alice, aliceBot, Bot, Caller, sharedBot } from "./fixtures.ts"
@@ -579,6 +587,23 @@ describe("Condition", () => {
 			)
 			assert.throws(() => Condition.satisfiable($.under("org", "acme")))
 		})
+	})
+})
+
+describe("Condition equality", () => {
+	it("is not equal to a value of another type with the same hash", () => {
+		const condition = Condition.builder<
+			{ readonly id: string },
+			unknown,
+			unknown
+		>().eq("id", "1")
+		// With Effect 4.0.6, the two have the same hash.
+		const other = Option.some(-340028015)
+		assert.isFalse(Equal.equals(condition, other))
+		assert.isFalse(Equal.equals(other, condition))
+		const map = HashMap.make([condition as unknown, "condition"])
+		assert.isTrue(Option.isNone(HashMap.get(map, other)))
+		assert.isTrue(Option.isSome(HashMap.get(map, condition)))
 	})
 })
 
