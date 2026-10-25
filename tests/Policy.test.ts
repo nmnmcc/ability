@@ -1407,7 +1407,10 @@ describe("Policy", () => {
 			})._tag,
 			"Allow",
 		)
-		assert.isBelow(Date.now() - start, 1000)
+		// The tree has 2 ** 15 places, and a walk of it takes about 300 ms. A
+		// walk that went into each place again for each path would not end in
+		// this time, but a busy machine may need more than one second.
+		assert.isBelow(Date.now() - start, 3000)
 		// A shared child counts for each place, so one more level is too many.
 		assert.throws(() => Policy.all([all, all]), /The most is 100000/)
 	})
