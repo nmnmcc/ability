@@ -53,8 +53,12 @@ import * as Schema from "effect/Schema"
 import * as SchemaIssue from "effect/SchemaIssue"
 import * as SchemaTransformation from "effect/SchemaTransformation"
 import * as Condition from "./Condition.ts"
+import * as Algebra from "./internal/algebra.ts"
 import * as Bind from "./internal/bind.ts"
 import * as Catalog from "./internal/catalog.ts"
+import * as Limits from "./internal/limits.ts"
+import * as Nodes from "./internal/nodes.ts"
+import * as Search from "./internal/search.ts"
 import * as Decision from "./Decision.ts"
 import * as Domain from "./Domain.ts"
 import * as Resource from "./Resource.ts"
@@ -1467,32 +1471,11 @@ const always: Ast = Condition.always
 const never: Ast = Condition.never
 
 /**
- * The most nodes that a residual condition may have. A policy tree may use a
- * condition of a child two times, in its allow condition and in its deny
- * condition, so a small policy may give a very large condition. Past this
- * size, `residual` throws an error.
- */
-const maxResidualSize = 10_000
-
-/**
- * The most levels that a residual condition may have. The rules of an ordered
- * algorithm, such as `firstApplicable`, give one level for each run of rules
- * with one tag. A walk over a condition calls itself for each level, so a much
- * deeper condition could fill the stack. Past this depth, `residual` throws an
- * error.
- */
-const maxResidualDepth = 500
-
-/**
- * A residual condition is too large. See {@link maxResidualSize} and
- * {@link maxResidualDepth}.
- */
-class TooLarge {}
-
-/**
- * Makes conditions for one residual, with no types. Each step simplifies the
- * condition, and it stops the work when the condition is too large. The
- * steps keep their work for the parts they have seen, for this residual only.
+ * Makes conditions for one residual, with no types. Each step makes the
+ * condition simple, and it stops the work when the condition has more nodes
+ * than `residualNodes`. A policy tree may use a condition of a child two
+ * times, in its allow condition and in its deny condition, so a small policy
+ * may give a very large condition.
  */
 interface Build {
 	// A list goes in as an array, not as arguments: a call may take only so
@@ -1502,63 +1485,23 @@ interface Build {
 	readonly not: (value: Ast) => Ast
 }
 
-const makeBuild = (): Build => {
-	const simplify = Condition.simplifier()
-	const sizes = new Map<Ast, number>()
-	/** Gives the number of nodes in a condition, as JSON would have them. */
-	const sizeOf = (ast: Ast): number =>
-		remember(sizes, ast, () => {
-			switch (ast._tag) {
-				case "And":
-				case "Or":
-					return Arr.reduce(
-						ast.conditions,
-						1,
-						(size, child) => size + sizeOf(child),
-					)
-				case "Not":
-					return 1 + sizeOf(ast.condition)
-				default:
-					return 1
-			}
-		})
-	const depths = new Map<Ast, number>()
-	/**
-	 * Gives the number of levels in a condition. Each child went through
-	 * `limit`, so this walk is not deeper than `maxResidualDepth`.
-	 */
-	const depthOf = (ast: Ast): number =>
-		remember(depths, ast, () => {
-			switch (ast._tag) {
-				case "And":
-				case "Or":
-					return (
-						1 +
-						Arr.reduce(ast.conditions, 0, (top, child) =>
-							Math.max(top, depthOf(child)),
-						)
-					)
-				case "Not":
-					return 1 + depthOf(ast.condition)
-				default:
-					return 1
-			}
-		})
-	const limit = (ast: Ast): Ast => {
-		if (sizeOf(ast) > maxResidualSize || depthOf(ast) > maxResidualDepth) {
-			throw new TooLarge()
-		}
-		return ast
+const limit = (node: Nodes.Node): Ast => {
+	if (node.size > Limits.residualNodes) {
+		throw Limits.exceeded(
+			"A residual condition",
+			"residualNodes",
+			"nodes",
+			node.size,
+			Limits.residualNodes,
+		)
 	}
-	// These steps work on nodes with no types, so they leave out the type
-	// field of a condition.
-	return {
-		and: (values) =>
-			limit(simplify(Condition.andAll(values as ReadonlyArray<never>))),
-		or: (values) =>
-			limit(simplify(Condition.orAll(values as ReadonlyArray<never>))),
-		not: (value) => limit(simplify(Condition.not(value as never))),
-	}
+	return node
+}
+
+const build: Build = {
+	and: (values) => limit(Algebra.and(values as ReadonlyArray<Nodes.Node>)),
+	or: (values) => limit(Algebra.or(values as ReadonlyArray<Nodes.Node>)),
+	not: (value) => (value as Nodes.Node).pipe(Algebra.not, limit),
 }
 
 /** The two residual conditions of a node, with no types. */
@@ -1583,7 +1526,6 @@ interface ResidualContext {
 	 */
 	readonly pairs: Map<Node, Pair>
 	readonly predicates: Map<Node, boolean>
-	readonly build: Build
 }
 
 const ruleCondition = (value: Rule.Any, context: ResidualContext): Ast =>
@@ -1601,7 +1543,7 @@ const firstApplicableResidual = (
 	values: ReadonlyArray<Rule.Any>,
 	context: ResidualContext,
 ): Pair => {
-	const { and, not, or } = context.build
+	const { and, not, or } = build
 	// The rules go in runs of one tag, from the last run to the first. The
 	// conditions of a run go into one node at once. With one node for each
 	// rule, each step would flatten the whole condition again.
@@ -1630,7 +1572,7 @@ const residualNode = (node: Node, context: ResidualContext): Pair =>
 	remember(context.pairs, node, () => residualOnce(node, context))
 
 const residualOnce = (node: Node, context: ResidualContext): Pair => {
-	const { and, not, or } = context.build
+	const { and, not, or } = build
 	switch (node._tag) {
 		case "Rules": {
 			switch (node.algorithm) {
@@ -1879,7 +1821,6 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 	}
 	const input = { principal: request.principal, path: descriptor.path }
 	const scope = scopeOf(request, policy.domain, input)
-	const build = makeBuild()
 	const and = build.and
 	const inScope = (pair: Pair): Scoped => ({
 		scope,
@@ -1898,22 +1839,12 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 		descriptor,
 		pairs: new Map(),
 		predicates: new Map(),
-		build,
 	}
+	// The type of the residual of a plain policy says that it has no
+	// predicate, so it can not be the predicate below. A residual past the
+	// limit is a defect.
 	if (!usesPredicate(nodeOf(policy), context)) {
-		try {
-			return inScope(residualNode(nodeOf(policy), context))
-		} catch (error) {
-			// The type of the residual of a plain policy says that it has no
-			// predicate, so it can not be the predicate below. The policy is too
-			// large for a residual, and that is a defect.
-			if (error instanceof TooLarge) {
-				throw new globalThis.Error(
-					`The residual condition of this request would have more than ${String(maxResidualSize)} nodes or ${String(maxResidualDepth)} levels`,
-				)
-			}
-			throw error
-		}
+		return inScope(residualNode(nodeOf(policy), context))
 	}
 	// A predicate may fail, and it may give another answer each time it runs.
 	// A tree of `And` and `Or` nodes can not run the predicates in the same
@@ -1970,9 +1901,8 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
  *
  * A policy tree may use the condition of a child two times, so a small policy
  * may give a very large condition. When the condition would have more than
- * 10000 nodes or 500 levels, this function throws an error. In an
- * `Authorizer`, the error is
- * a defect, so the check fails.
+ * 10000 nodes, this function throws an error. In an `Authorizer`, the error
+ * is a defect, so the check fails.
  *
  * @stability stable
  * @category evaluation
@@ -2072,19 +2002,15 @@ const coverages = Data.taggedEnum<AnyCoverage>()
 
 /** Searches for a value of the kind of a scope that makes a condition true. */
 const search = (scoped: Scoped, ast: Ast): Condition.Satisfiability =>
-	ast._tag === "False"
-		? Condition.satisfiable(Condition.never)
-		: Condition.satisfiableIn(ast, Condition.kindsIn(scoped.catalog))
+	Search.satisfiable(ast as Nodes.Node, Search.kindsIn(scoped.catalog))
 
 /** The values in the scope that the policy does not allow. */
 const refusedOf = (scoped: Scoped): Ast =>
 	// Only two nodes more than the residual, so it needs no size limit.
-	Condition.simplify(
-		Condition.and(
-			scoped.scope as Condition.Condition,
-			Condition.not(scoped.allow as Condition.Condition),
-		),
-	)
+	Algebra.and([
+		scoped.scope as Nodes.Node,
+		Algebra.not(scoped.allow as Nodes.Node),
+	])
 
 const coverageAny = (policy: Any, request: ScopedRequest): AnyCoverage => {
 	const scoped = scopedResiduals(policy, request)

@@ -228,8 +228,12 @@ or a query, and the type system stops you when you try.
 
 A predicate also keeps the types of the value and the principal that it reads.
 So a predicate for a Document can not go into a rule for a Comment. Make
-conditions with the builder: a node made by hand is not a condition in the
-types.
+conditions with the builder: a node made by hand, or a spread of a node, is not
+a condition, in the types or when the code runs.
+
+A condition may have at most 100000 nodes and 1000 levels, with a shared part
+counted for each place. The builder throws an error for a larger condition. So
+no condition can make a check slow or fill the stack.
 
 ## Policies
 
@@ -264,7 +268,7 @@ A policy tree may have at most 256 levels. A combinator throws an error for a
 deeper tree, and the policy Schema does not decode one. A deeper tree could fill
 the stack of a check. The JSON form of a policy may have at most 1000 levels of
 objects and arrays, so a deep input fails to decode before it fills the stack. A
-field path may have at most 256 parts.
+field path may have at most 5 parts.
 
 For example, a user token may never do more than its member, and the platform
 has deny rules for everyone:
@@ -301,9 +305,7 @@ it gives the same answers and the same failures as `Policy.decide`.
 
 A deep policy tree may give a very large residual. When it would have more than
 10000 nodes, `Policy.residual` throws an error, and a check in an `Authorizer`
-fails. It throws an error too when a rule that the request may use reads a
-getter of a class: the read may fail when the policy runs, and a smaller
-condition could leave it out.
+fails.
 
 ### Scopes
 

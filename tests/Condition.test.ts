@@ -259,7 +259,7 @@ describe("Condition", () => {
 		)
 	})
 
-	it("folds a shared node one time, also when the result is undefined", () => {
+	it("stops a shared condition that is too large when it is made", () => {
 		const calls = { true: 0 }
 		const visit = Condition.fold<void>({
 			true: () => {
@@ -273,25 +273,35 @@ describe("Condition", () => {
 			or: () => undefined,
 			not: () => undefined,
 		})
-		const shared = Array.from({ length: 18 }).reduce<Condition.Condition>(
-			(condition) => Condition.and(condition, condition),
-			Condition.always,
-		)
-		Effect.runSync(visit(shared))
-		assert.strictEqual(calls.true, 1)
+		const doubled = (levels: number) =>
+			Array.from({ length: levels }).reduce<Condition.Condition>(
+				(condition) => Condition.and(condition, condition),
+				Condition.always,
+			)
+		// A shared child counts for each place: 15 levels have 65535 nodes.
+		Effect.runSync(visit(doubled(15)))
+		assert.strictEqual(calls.true, 2 ** 15)
+		const start = Date.now()
+		assert.throws(() => doubled(16), /131071 nodes. The most is 100000/)
+		assert.isBelow(Date.now() - start, 100)
 	})
 
-	it("does not search a field with a very long path", () => {
+	it("does not take a field path with more than 5 parts", () => {
 		const field = `${"x.".repeat(7000)}x`
-		const condition = Schema.decodeSync(Condition.schema)({
+		const exit = Schema.decodeExit(Condition.schema)({
 			_tag: "Compare",
 			op: "eq",
 			field,
 			value: { _tag: "Literal", value: "yes" },
 		})
-		assert.strictEqual(
-			Condition.satisfiable(condition, { budget: 10 })._tag,
-			"Unknown",
+		assert.isTrue(Exit.isFailure(exit))
+		assert.include(
+			String(Exit.isFailure(exit) ? exit.cause : ""),
+			"The most is 5",
+		)
+		assert.throws(
+			() => Condition.builder<any, unknown, unknown>().exists("a.b.c.d.e.f"),
+			/A field path has 6 parts/,
 		)
 	})
 
@@ -522,4 +532,82 @@ describe("Condition", () => {
 			assert.throws(() => Condition.satisfiable($.under("org", "acme")))
 		})
 	})
+})
+
+describe("Condition node properties", () => {
+	const Step = Schema.Literals(["and", "or", "not", "leaf"])
+
+	it.prop(
+		"stops a shared condition exactly when it goes past a limit",
+		{ steps: Schema.Array(Step).check(Schema.isMaxLength(40)) },
+		({ steps }) => {
+			const leaf = Condition.builder<
+				{ readonly a: number },
+				unknown,
+				unknown
+			>().eq("a", 1) as Condition.Condition
+			const tooLarge = (size: number, depth: number) =>
+				size > 100_000 || depth > 1000
+			// The size and the depth after each step, counted by hand. A step past
+			// a limit stops the work.
+			const sizes = steps.reduce<
+				ReadonlyArray<{ size: number; depth: number }>
+			>(
+				(all, step) => {
+					const { size, depth } = all[all.length - 1]!
+					return [
+						...all,
+						step === "and" || step === "or"
+							? { size: 2 * size + 1, depth: depth + 1 }
+							: { size: size + (step === "not" ? 1 : 2), depth: depth + 1 },
+					]
+				},
+				[{ size: 1, depth: 1 }],
+			)
+			const fails = sizes.some(({ size, depth }) => tooLarge(size, depth))
+			const make = () =>
+				steps.reduce(
+					(condition, step) =>
+						step === "and"
+							? Condition.and(condition, condition)
+							: step === "or"
+								? Condition.or(condition, condition)
+								: step === "not"
+									? Condition.not(condition)
+									: Condition.and(condition, leaf),
+					leaf,
+				)
+			if (fails) {
+				assert.throws(make, /The most is/)
+				return true
+			}
+			return Condition.fields(make()).length === 1
+		},
+	)
+
+	it.prop(
+		"decodes any JSON or fails, and never throws",
+		{ input: Schema.Json },
+		({ input }) => {
+			const exit = Schema.decodeUnknownExit(Condition.schema)(input)
+			return Exit.isSuccess(exit) || !Exit.hasDies(exit)
+		},
+	)
+
+	it.prop(
+		"decodes a chain of Not nodes only up to the most levels",
+		{
+			levels: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 3000 })),
+		},
+		({ levels }) => {
+			const chain = Array.from({ length: levels - 1 }).reduce<unknown>(
+				(condition) => ({ _tag: "Not", condition }),
+				{ _tag: "True" },
+			)
+			return (
+				Exit.isSuccess(Schema.decodeUnknownExit(Condition.schema)(chain)) ===
+				levels <= 1000
+			)
+		},
+	)
 })

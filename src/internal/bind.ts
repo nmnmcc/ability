@@ -7,14 +7,13 @@
  */
 import * as Arr from "effect/Array"
 import * as HashMap from "effect/HashMap"
-import * as HashSet from "effect/HashSet"
 import * as Option from "effect/Option"
 import * as Result from "effect/Result"
-import { hasProperty, isObject } from "effect/Predicate"
 import type * as Domain from "../Domain.ts"
 import type * as Resource from "../Resource.ts"
 import * as Catalog from "./catalog.ts"
 import * as Limits from "./limits.ts"
+import * as Nodes from "./nodes.ts"
 import * as Patterns from "./patterns.ts"
 import { withSuggestion } from "./suggest.ts"
 
@@ -48,26 +47,7 @@ interface Context {
 	readonly paths: ReadonlyArray<Resource.Descriptor>
 }
 
-type Operand =
-	| { readonly _tag: "Literal"; readonly value: unknown }
-	| { readonly _tag: "Principal"; readonly path: string }
-
-const compareOperators = HashSet.make("eq", "ne", "lt", "lte", "gt", "gte")
-
-const isOperand = (operand: unknown): operand is Operand =>
-	hasProperty(operand, "_tag") &&
-	(operand._tag === "Principal"
-		? hasProperty(operand, "path") && typeof operand.path === "string"
-		: operand._tag === "Literal" && hasProperty(operand, "value"))
-
-const isOperandList = (values: unknown): values is ReadonlyArray<Operand> =>
-	Array.isArray(values) && Arr.every(values, isOperand)
-
-const isScalar = (value: unknown): boolean =>
-	value === null ||
-	typeof value === "string" ||
-	typeof value === "number" ||
-	typeof value === "boolean"
+type Operand = Nodes.Operand
 
 /**
  * Tests if a field may hold a value of the type of a fixed value. A test with
@@ -178,12 +158,6 @@ const fieldsAt = (
 		return found === undefined ? [] : [found]
 	})
 
-const badLiteral = (at: ReadonlyArray<PropertyKey>): Issue => ({
-	path: at,
-	issue:
-		"A test has a fixed value that is not a string, a number, a boolean or null",
-})
-
 /** The field of the principal that an operand names, or the issue when there is none. */
 const principalField = (
 	context: Context,
@@ -217,9 +191,6 @@ const operandIssues = (
 	const fields = fieldsAt(context, field)
 	if (operand._tag === "Literal") {
 		const value = operand.value
-		if (!isScalar(value)) {
-			return [badLiteral(at)]
-		}
 		if (ordered && typeof value !== "string" && typeof value !== "number") {
 			return [
 				{
@@ -318,9 +289,6 @@ const underIssues = (
 	return Arr.flatMap(prefix, (operand, index): ReadonlyArray<Issue> => {
 		const place = [...at, "prefix", index]
 		if (operand._tag === "Literal") {
-			if (!isScalar(operand.value)) {
-				return [badLiteral(place)]
-			}
 			return Arr.some(candidates, (descriptor) => {
 				const kinds = pathPartKinds(descriptor, index)
 				return typeof kinds === "object" && !fitsLiteral(kinds, operand.value)
@@ -361,77 +329,41 @@ const notWhole = (at: ReadonlyArray<PropertyKey>): Issue => ({
 })
 
 /**
- * The issues of a condition. A node that the condition uses in many places is
- * checked one time. The nodes it has seen are in a native `Set`, because it
- * must find a node by the node itself: `Equal` compares nodes by structure.
+ * The issues of a condition. The constructors of the nodes checked the shape
+ * of each node, so this checks the names and the types against the domain. A
+ * node that the condition uses in many places is checked one time. The nodes
+ * it has seen are in a native `Set`, because it must find a node by the node
+ * itself: `Equal` compares nodes by structure.
  */
 const conditionIssues = (
 	context: Context,
-	node: unknown,
+	node: Nodes.Node,
 	at: ReadonlyArray<PropertyKey>,
-	depth: number,
-	seen: Set<object>,
+	seen: Set<Nodes.Node>,
 ): ReadonlyArray<Issue> => {
-	if (!isObject(node) || !hasProperty(node, "_tag")) {
-		return [notWhole(at)]
-	}
-	if (depth > Limits.conditionDepth) {
-		return [
-			{
-				path: at,
-				issue: `A condition has more than ${String(Limits.conditionDepth)} levels. The most is ${String(Limits.conditionDepth)}.`,
-			},
-		]
-	}
 	if (seen.has(node)) {
 		return []
 	}
 	seen.add(node)
-	const below = (child: unknown, path: ReadonlyArray<PropertyKey>) =>
-		conditionIssues(context, child, path, depth + 1, seen)
 	switch (node._tag) {
-		case "True":
-		case "False":
-			return []
 		case "Compare": {
-			if (
-				!hasProperty(node, "op") ||
-				typeof node.op !== "string" ||
-				!HashSet.has(compareOperators, node.op) ||
-				!hasProperty(node, "field") ||
-				typeof node.field !== "string" ||
-				!hasProperty(node, "value") ||
-				!isOperand(node.value)
-			) {
-				return [notWhole(at)]
-			}
-			const field = node.field
-			const exists = fieldIssue(context, field, [...at, "field"])
+			const exists = fieldIssue(context, node.field, [...at, "field"])
 			return exists.length > 0
 				? exists
 				: operandIssues(
 						context,
-						field,
+						node.field,
 						node.op !== "eq" && node.op !== "ne",
 						node.value,
 						[...at, "value"],
 					)
 		}
 		case "In": {
-			if (
-				!hasProperty(node, "field") ||
-				typeof node.field !== "string" ||
-				!hasProperty(node, "values") ||
-				!isOperandList(node.values)
-			) {
-				return [notWhole(at)]
-			}
-			const field = node.field
-			const exists = fieldIssue(context, field, [...at, "field"])
+			const exists = fieldIssue(context, node.field, [...at, "field"])
 			return exists.length > 0
 				? exists
 				: Arr.flatMap(node.values, (operand, index) =>
-						operandIssues(context, field, false, operand, [
+						operandIssues(context, node.field, false, operand, [
 							...at,
 							"values",
 							index,
@@ -439,34 +371,23 @@ const conditionIssues = (
 					)
 		}
 		case "Exists":
-			return hasProperty(node, "field") && typeof node.field === "string"
-				? fieldIssue(context, node.field, [...at, "field"])
-				: [notWhole(at)]
+			return fieldIssue(context, node.field, [...at, "field"])
 		case "Under":
-			return hasProperty(node, "prefix") && isOperandList(node.prefix)
-				? underIssues(context, node.prefix, at)
-				: [notWhole(at)]
+			return underIssues(context, node.prefix, at)
 		case "And":
 		case "Or":
-			return hasProperty(node, "conditions") && Array.isArray(node.conditions)
-				? Arr.flatMap(
-						node.conditions as ReadonlyArray<unknown>,
-						(child, index) => below(child, [...at, "conditions", index]),
-					)
-				: [notWhole(at)]
+			return Arr.flatMap(node.conditions, (child, index) =>
+				conditionIssues(context, child, [...at, "conditions", index], seen),
+			)
 		case "Not":
-			return hasProperty(node, "condition")
-				? below(node.condition, [...at, "condition"])
-				: [notWhole(at)]
-		case "Predicate":
-			return hasProperty(node, "name") &&
-				typeof node.name === "string" &&
-				hasProperty(node, "run") &&
-				typeof node.run === "function"
-				? []
-				: [notWhole(at)]
+			return conditionIssues(
+				context,
+				node.condition,
+				[...at, "condition"],
+				seen,
+			)
 		default:
-			return [notWhole(at)]
+			return []
 	}
 }
 
@@ -544,7 +465,9 @@ export const ruleIssues = (
 		),
 		...(rule.when === undefined
 			? []
-			: conditionIssues(context, rule.when, [...at, "when"], 1, new Set())),
+			: Nodes.isNode(rule.when)
+				? conditionIssues(context, rule.when, [...at, "when"], new Set())
+				: [notWhole([...at, "when"])]),
 	]
 }
 

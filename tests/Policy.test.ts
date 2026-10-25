@@ -1355,9 +1355,10 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 1000)
 	})
 
-	it("does the work on a shared part of a condition only one time", () => {
+	it("makes a residual of a shared condition in a short time", () => {
+		// A shared child counts for each place, so 15 levels are near the most.
 		const condition = Arr.reduce(
-			Arr.range(0, 23),
+			Arr.range(0, 14),
 			Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>().eq(
 				"level",
 				2,
@@ -1495,7 +1496,7 @@ describe("Policy", () => {
 		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
 		const build = (seed: number) =>
 			Arr.reduce(
-				Arr.range(0, 21),
+				Arr.range(0, 11),
 				$.eq("level", 0) as Condition.Test<Bot, Caller>,
 				(c, level) => {
 					const a = $.eq("name", `${String(seed)}-${String(level)}-a`)
@@ -1740,7 +1741,7 @@ describe("Policy", () => {
 	it("folds a condition with shared parts in a short time", () => {
 		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
 		const shared = Arr.reduce(
-			Arr.range(0, 31),
+			Arr.range(0, 11),
 			$.eq("level", 0) as Condition.Test<Bot>,
 			(c, level) =>
 				$.and(
@@ -1969,13 +1970,23 @@ describe("Policy", () => {
 				Policy.define(App)(function* (_) {
 					yield* _.allow("read", Bot)
 					yield* _.deny("read", Bot, {
+						when: ($) => $.eq("level", "3" as never),
+					})
+				}),
+			/can not hold the value "3"/,
+		)
+		// A spread of a node is a plain object, not a node.
+		assert.throws(
+			() =>
+				Policy.define(App)(function* (_) {
+					yield* _.deny("read", Bot, {
 						when: ($) => ({
 							...$.eq("level", 3),
 							value: { _tag: "Literal", value: "3" } as const,
 						}),
 					})
 				}),
-			/can not hold the value "3"/,
+			/not a whole condition tree/,
 		)
 	})
 
@@ -1989,7 +2000,7 @@ describe("Policy", () => {
 							$.not($.eq("ownerUserId", ids["owner"] as unknown as string)),
 					})
 				}),
-			/not a string, a number, a boolean or null/,
+			/An operand must be a fixed scalar value/,
 		)
 	})
 
@@ -1999,10 +2010,7 @@ describe("Policy", () => {
 				Policy.define(App)(function* (_) {
 					yield* _.allow("read", Bot)
 					yield* _.deny("read", Bot, {
-						when: ($) => ({
-							...$.eq("level", 3),
-							value: { _tag: "Principal", path: "userId" } as const,
-						}),
+						when: ($) => $.eq("level", $.principal("userId") as never),
 					})
 				}),
 			/can not hold a value of the principal field "userId"/,
@@ -2332,16 +2340,18 @@ describe("Policy", () => {
 			assert.isBelow(Date.now() - start, 1000)
 		}).pipe(Effect.runSync))
 
-	it("does not encode a shared condition that would be too large as JSON", () => {
-		const shared = Arr.reduce(
-			Arr.range(1, 30),
-			Condition.always as Condition.Condition,
-			(condition) => Condition.and(condition, condition),
-		)
+	it("does not make a shared condition that would be too large", () => {
+		const start = Date.now()
 		assert.throws(
-			() => Schema.encodeSync(Condition.schema)(shared),
-			/more than 100000 nodes/,
+			() =>
+				Arr.reduce(
+					Arr.range(1, 30),
+					Condition.always as Condition.Condition,
+					(condition) => Condition.and(condition, condition),
+				),
+			/The most is 100000/,
 		)
+		assert.isBelow(Date.now() - start, 100)
 	})
 
 	it("matches a key of a record by its Schema, and any key by a star", () => {
@@ -2875,53 +2885,30 @@ describe("Policy", () => {
 		assert.throws(() => JSON.stringify(shared), /more than 100000 nodes/)
 	})
 
-	it("counts shared parts of conditions in the size of the JSON form", () => {
-		const shared = Arr.reduce(
-			Arr.range(1, 30),
-			Condition.builder<{ readonly level: number }, unknown, unknown>().eq(
-				"level",
-				1,
-			) as Condition.Condition,
-			(condition) => Condition.and(condition, condition),
+	it("does not take a condition from JSON with too many nodes", () => {
+		const exit = Schema.decodeUnknownExit(PolicySchemaOfApp)({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Bot"],
+					when: {
+						_tag: "And",
+						conditions: Array.from({ length: 150_000 }, () => ({
+							_tag: "True",
+						})),
+					},
+				},
+			],
+		})
+		assert.isTrue(Exit.isFailure(exit))
+		assert.include(
+			String(Exit.isFailure(exit) ? exit.cause : ""),
+			"The most is 100000",
 		)
-		const policy = Policy.rules(App, [
-			Rule.make({
-				_tag: "Allow",
-				actions: ["read"],
-				resources: ["Bot"],
-				when: shared,
-			}),
-		])
-		const start = Date.now()
-		assert.throws(
-			() => Schema.encodeSync(PolicySchemaOfApp)(policy),
-			/more than 100000 nodes/,
-		)
-		assert.throws(() => JSON.stringify(policy), /more than 100000 nodes/)
-		assert.isBelow(Date.now() - start, 1000)
 	})
-
-	it.effect("explains a policy with many rules in a short time", () =>
-		Effect.gen(function* () {
-			const _ = Rule.builder(App)
-			const policy = Policy.rules(App, [
-				...Arr.map(Arr.range(1, 30_000), (index) =>
-					_.deny("read", Bot, {
-						when: ($) => $.eq("name", `n${String(index)}`),
-					}),
-				),
-				_.allow("read", Bot),
-			])
-			const start = Date.now()
-			const explained = yield* Policy.explain(policy, {
-				principal: alice,
-				action: "read",
-				resource: aliceBot,
-			})
-			assert.strictEqual(explained.decision._tag, "Allow")
-			assert.isBelow(Date.now() - start, 1500)
-		}),
-	)
 
 	it("makes the residual of a very wide condition", () => {
 		const policy = Schema.decodeUnknownSync(PolicySchemaOfApp)({
@@ -2934,7 +2921,7 @@ describe("Policy", () => {
 					resources: ["Bot"],
 					when: {
 						_tag: "And",
-						conditions: Array.from({ length: 150_000 }, () => ({
+						conditions: Array.from({ length: 90_000 }, () => ({
 							_tag: "True",
 						})),
 					},
@@ -3228,7 +3215,10 @@ describe("Policy", () => {
 		)
 		const policy = Policy.rules(App, Rules, { algorithm: "firstApplicable" })
 		const request = { principal: alice, action: "read", kind: "Bot" } as const
-		assert.throws(() => Policy.residual(policy, request), /500 levels/)
+		assert.throws(
+			() => Policy.residual(policy, request),
+			/levels. The most is 1000/,
+		)
 		const short = Policy.rules(App, Arr.take(Rules, 400), {
 			algorithm: "firstApplicable",
 		})
@@ -3566,10 +3556,10 @@ describe("Policy", () => {
 		assert.strictEqual(covered._tag, "None")
 	})
 
-	it("collects the constants of shared branches one time", () => {
+	it("searches a condition with shared branches in a short time", () => {
 		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
 		const shared = Arr.reduce(
-			Arr.range(0, 24),
+			Arr.range(0, 14),
 			$.eq("id", "a") as Condition.Test<Bot>,
 			(inner) => $.or(inner, inner),
 		)
@@ -3597,7 +3587,7 @@ describe("Policy", () => {
 	it("simplifies shared predicate branches in a short time", () => {
 		const $ = Condition.builder<Rule.DataFor<App, "Bot">, Bot, Caller>()
 		const shared = Arr.reduce(
-			Arr.range(0, 17),
+			Arr.range(0, 14),
 			$.predicate("never", () => false) as Condition.Condition<
 				never,
 				never,

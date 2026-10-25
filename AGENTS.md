@@ -72,9 +72,14 @@ material. Do not change it unless the user asks.
 - Build the library on Effect. Do not copy the way Effect builds itself: Effect
   had no Effect to build on, so its own code uses tricks that this library does
   not need.
-  - Make values with Effect data types: `Data.taggedEnum` for trees of plain
-    nodes, `Data.Class` for values with methods, and `Schema` classes for errors
+  - Make values with Effect data types: `Data.Class` for values with methods,
+    `Data.taggedEnum` for small plain values, and `Schema` classes for errors
     and for data that comes from outside.
+  - A node of a condition is a class in `src/internal/nodes.ts`. Only its
+    constructor makes one, also for JSON. The constructor checks the data and
+    the limits, and it keeps the size, the depth and the predicate mark of the
+    node in private fields. So a walk over a condition needs no memo, and a
+    plain object or a spread of a node is not a node.
   - Do not make prototypes by hand. Do not write `Equal.symbol`, `Hash.symbol`
     or `NodeInspectSymbol` methods, and do not use `Object.create`. Effect data
     types give equality, hashing and `pipe`. When a value needs an equality that
@@ -86,9 +91,10 @@ material. Do not change it unless the user asks.
   - Use the tools that Effect gives to its users, such as `Function.dual`,
     `Effect.fn`, `Context.Service`, `Layer`, `Cache` and `Schema`.
 - Do not keep state for the whole program. A module may not have a `Map`, a
-  `Set`, a `WeakMap`, a cache or a `let` at its top level. When a walk needs a
-  memo, the walk makes it, and the memo goes away when the walk ends. State that
-  must live longer belongs to a value, such as a layer.
+  `Set`, a `WeakMap`, a cache or a `let` at its top level. A walk over a
+  condition is a plain walk: the limits of the nodes keep its work small. When
+  another walk needs a memo, the walk makes it, and the memo goes away when the
+  walk ends. State that must live longer belongs to a value, such as a layer.
 - Change as little state as you can. Use `const` and values that do not change.
   Make a new value in place of a change to an old one. A memo `Map` inside one
   call is the usual exception.
