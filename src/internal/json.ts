@@ -206,7 +206,16 @@ interface Part {
  * the trampoline for an input of unknown depth, so a deep input does not fill
  * the stack.
  */
-const decoder = (budget: Budget): ((part: Part) => Node) => {
+/**
+ * A count of the nodes of a larger input, as a policy, that the nodes and
+ * values of a condition count in. It throws past its limit.
+ */
+export type Outer = (more: number, at: Place.Place | undefined) => void
+
+const decoder = (
+	budget: Budget,
+	outer: Outer | undefined,
+): ((part: Part) => Node) => {
 	// The nodes of this condition that the decoder has read. A condition with
 	// more nodes than `conditionNodes` does not load, so the decoder stops at
 	// the first node past it, and it does not read the rest of a very large
@@ -218,6 +227,7 @@ const decoder = (budget: Budget): ((part: Part) => Node) => {
 			throw problemAt(at, "A condition node must be an object")
 		}
 		spend(budget, 1, at)
+		// The limit of the condition comes first, as it is the nearer one.
 		const counted = (more: number): void => {
 			count.nodes += more
 			if (count.nodes > budget.limits.conditionNodes) {
@@ -226,6 +236,7 @@ const decoder = (budget: Budget): ((part: Part) => Node) => {
 					`A condition has more than ${String(budget.limits.conditionNodes)} nodes and values. The most is ${String(budget.limits.conditionNodes)}.`,
 				)
 			}
+			outer?.(more, at)
 		}
 		counted(1)
 		// The values of an `In` or an `Under` test count in the weight of the
@@ -353,13 +364,20 @@ export const decodeAt = (
 	input: unknown,
 	at: Place.Place | undefined,
 	budget: Budget,
-): Node => decoder(budget)({ input, at })
+	outer?: Outer,
+): Node => decoder(budget, outer)({ input, at })
 
 /** Decodes the JSON form of a condition, with the default limits. */
 export const decode = (input: unknown): Result.Result<Node, Problem> => {
 	try {
 		return Result.succeed(
-			decoder({ used: 0, limits: Limits.defaults })({ input, at: undefined }),
+			decoder(
+				{ used: 0, limits: Limits.defaults },
+				undefined,
+			)({
+				input,
+				at: undefined,
+			}),
 		)
 	} catch (error) {
 		if (error instanceof Problem) {

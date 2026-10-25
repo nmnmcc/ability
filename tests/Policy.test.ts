@@ -464,15 +464,19 @@ describe("Policy", () => {
 		}, 60_000)
 
 		it("stops a very long list of values before it reads them, in a small heap", () => {
-			const output = execFileSync(
-				process.execPath,
-				[
-					"--max-old-space-size=96",
-					new URL("./scripts/long-in.ts", import.meta.url).pathname,
-				],
-				{ encoding: "utf8" },
-			)
-			assert.strictEqual(output.trim(), "failed")
+			// The values count in the limit of a condition and of a policy.
+			Arr.forEach(["conditionNodes", "policyNodes"], (limit) => {
+				const output = execFileSync(
+					process.execPath,
+					[
+						"--max-old-space-size=96",
+						new URL("./scripts/long-in.ts", import.meta.url).pathname,
+						limit,
+					],
+					{ encoding: "utf8" },
+				)
+				assert.strictEqual(output.trim(), "failed")
+			})
 		}, 60_000)
 
 		it("does not decode a shared input that would be too large", () => {
@@ -482,7 +486,7 @@ describe("Policy", () => {
 			const Small = Domain.make({
 				principal: Caller,
 				resources: [Bot],
-				limits: { policyNodes: 100_000, conditionNodes: 100_000 },
+				limits: { policyNodes: 100_000, conditionNodes: 50_000 },
 			})
 			const SmallSchema = Policy.schema(Small)
 			const shared = Arr.reduce(
@@ -517,7 +521,7 @@ describe("Policy", () => {
 			assert.isTrue(Exit.isFailure(conditionExit))
 			assert.include(
 				String(Exit.isFailure(conditionExit) ? conditionExit.cause : ""),
-				"A condition has more than 100000 nodes and values. The most is 100000.",
+				"A condition has more than 50000 nodes and values. The most is 50000.",
 			)
 			// The full inputs have more than 10 ** 7 nodes, so a short time shows
 			// that the decoders stop at the limit.
