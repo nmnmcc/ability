@@ -3,19 +3,19 @@
  * of the current request.
  *
  * You make the service class, in the same way as `Context.Service`. Give the
- * services that the principal and the decider need as `requires`, and their
- * errors as `error`:
+ * domain, and the Effect that gives the principal of the current request. The
+ * error type and the service type of the checks come from that Effect:
  *
  * ```ts
- * class Auth extends Authorizer.Service<Auth, { requires: Identity }>()(
- *   "app/Auth",
- *   App,
- * ) {}
+ * class Auth extends Authorizer.Service<Auth>()("app/Auth", {
+ *   domain: App,
+ *   principal: Identity,
+ * }) {}
  * ```
  *
- * Then give a layer with {@link layer}. It says where the principal comes
- * from and how to load its policy. The policy of each principal is loaded
- * once and kept in a cache for a short time.
+ * Then give a layer with {@link layer}. It says how to load the policy of a
+ * principal. The policy of each principal is loaded once and kept in a cache
+ * for a short time.
  *
  * Then use the service in a handler:
  *
@@ -38,7 +38,6 @@
 // principals and deciders to `unknown`. The public types keep them, so the
 // language service check for `unknown` in an Effect is off here.
 // @effect-diagnostics anyUnknownInErrorContext:off
-import * as Arr from "effect/Array"
 import * as Cache from "effect/Cache"
 import * as Context from "effect/Context"
 import type * as Duration from "effect/Duration"
@@ -46,8 +45,7 @@ import * as Effect from "effect/Effect"
 import * as Equal from "effect/Equal"
 import * as Hash from "effect/Hash"
 import * as Layer from "effect/Layer"
-import * as MutableHashMap from "effect/MutableHashMap"
-import * as Option from "effect/Option"
+import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import * as Condition from "./Condition.ts"
 import * as Decision from "./Decision.ts"
@@ -97,22 +95,6 @@ export class Pending extends Schema.TaggedError<Pending>(
 	ticket: Schema.String,
 	reason: Schema.optionalKey(Schema.String),
 }) {}
-
-/**
- * The services and the errors of the principal and the decider of an
- * authorizer.
- *
- * @stability stable
- * @category models
- * @since 0.3.0
- */
-export interface Config {
-	readonly requires?: unknown
-	readonly error?: unknown
-}
-
-type RequiresOf<C> = C extends { readonly requires: infer R } ? R : never
-type ErrorOf<C> = C extends { readonly error: infer E } ? E : never
 
 /**
  * What a check is about: an act on a resource value, or an act on a kind of
@@ -262,6 +244,8 @@ export interface ServiceClass<
 	R,
 > extends Context.ServiceClass<Self, Id, Authorizer<D, E, R>> {
 	readonly domain: D
+	/** The Effect that gives the principal of the current request. */
+	readonly principal: Effect.Effect<Domain.Principal<D>, E, R>
 	readonly decide: (
 		target: Policy.Target<D>,
 	) => Effect.Effect<Decision.Decision, PolicyUnavailable | E, R | Self>
@@ -318,6 +302,7 @@ export interface ServiceClass<
  */
 export type AnyServiceClass = Context.Key<any, any> & {
 	readonly domain: Domain.Any
+	readonly principal: Effect.Effect<any, any, any>
 }
 
 /**
@@ -327,17 +312,30 @@ export type AnyServiceClass = Context.Key<any, any> & {
  * @category constructors
  * @since 0.3.0
  */
-export const Service: <Self, C extends Config = {}>() => <
+export const Service: <Self>() => <
 	const Id extends string,
 	D extends Domain.Any,
+	E = never,
+	R = never,
 >(
 	id: Id,
-	domain: D,
-) => ServiceClass<Self, Id, D, ErrorOf<C>, RequiresOf<C>> = (() =>
-	(id: string, domain: Domain.Any) => {
+	options: {
+		readonly domain: D
+		/** Gives the principal of the current request. */
+		readonly principal: Effect.Effect<Domain.Principal<NoInfer<D>>, E, R>
+	},
+) => ServiceClass<Self, Id, D, E, R> = (() =>
+	(
+		id: string,
+		options: {
+			readonly domain: Domain.Any
+			readonly principal: Effect.Effect<any, any, any>
+		},
+	) => {
 		const Base = Context.Service<any, any>()(id)
 		return class extends Base {
-			static readonly domain = domain
+			static readonly domain = options.domain
+			static readonly principal = options.principal
 			static readonly decide = (target: AnyTarget) =>
 				this.use((service: any) => service.decide(target))
 			static readonly check = (target: AnyTarget) =>
@@ -369,8 +367,6 @@ type AnyTarget = {
  * @since 0.3.0
  */
 export interface Options<D extends Domain.Any, E, R, EL, RL, RP> {
-	/** Gives the principal of the current request. */
-	readonly principal: Effect.Effect<Domain.Principal<D>, E, R>
 	/**
 	 * Loads the policy of a principal. A failure becomes
 	 * {@link PolicyUnavailable}. The services of the predicates of the policy
@@ -390,23 +386,27 @@ export interface Options<D extends Domain.Any, E, R, EL, RL, RP> {
 	 * How the policies are kept. The default keeps 1000 policies for 30 seconds.
 	 * Give `false` to load the policy for each check.
 	 *
-	 * Two principals with the same data get one policy from the cache. So the
-	 * loader must decide by the data of the principal only. When it tests that
-	 * an object of the principal is a given object, as `role === admin` does,
-	 * give `false`. A principal with objects in an array, a set or the keys of
-	 * a map is not kept, because such tests are usual there.
+	 * The key of a principal is the text of its JSON form, from the Schema of
+	 * the principal of the domain. A principal is kept only when the value that
+	 * the Schema decodes from that form is `Equal` to it. The loader gets that
+	 * decoded copy, so two principals with one key get one policy, and the
+	 * cache can not change an answer. So the loader must decide by the data of
+	 * the principal, not by the identity of its objects. Give `key` to make the
+	 * key in another way: then the loader gets the principal of the first check
+	 * with the key.
 	 */
 	readonly cache?:
 		| {
 				readonly capacity?: number
 				readonly timeToLive?: Duration.Input
+				readonly key?: (principal: Domain.Principal<D>) => string | undefined
 		  }
 		| false
 }
 
 /**
  * A cache key for a principal. Two keys are equal when they have the same
- * text, so two principals with the same value share one policy. The key also
+ * text, so two principals with the same key share one policy. The key also
  * keeps the principal, so the cache can load its policy. A plain `Data` value
  * can not do both, so the key gives its own equality with `Equal.Equal`.
  */
@@ -426,189 +426,44 @@ class PrincipalKey implements Equal.Equal {
 }
 
 /**
- * Tests if an array has a plain field at each index below its length. With
- * one more own key for `length`, it then has no other own keys.
+ * Makes the cache key of a principal from its JSON form. The key keeps the
+ * principal that the Schema decodes from that form, so the loader sees only
+ * the data that the key shows. A principal gets no key when it does not
+ * encode, or when the decoded value is not `Equal` to it. Two classes, or a
+ * string and a number, may have one JSON form, as in a union, and `Equal`
+ * tells them apart. So two principals with one key are equal, and the cache
+ * can not give one the policy of the other.
  */
-const hasEveryIndex = (value: Array<unknown>): boolean =>
-	Arr.every(
-		Array.from({ length: value.length }, (_, index) => index),
-		(index) => isPlainField(value, String(index)),
-	)
-
-/**
- * Tests if an own key of an object holds plain data that the text shows: it
- * can be seen in a loop over the keys, and it is not a getter.
- */
-const isPlainField = (value: object, key: string): boolean => {
-	const descriptor = Object.getOwnPropertyDescriptor(value, key)
-	return (
-		descriptor !== undefined &&
-		descriptor.enumerable === true &&
-		"value" in descriptor
-	)
-}
-
-const isObjectLike = (value: unknown): boolean =>
-	(typeof value === "object" && value !== null) || typeof value === "function"
-
-/**
- * The number of each class that a key has seen. Each layer has its own, so
- * no state is kept for the whole program. A class is a function, and `Equal`
- * compares functions by the function itself.
- */
-type ClassIds = MutableHashMap.MutableHashMap<object, number>
-
-/** Gives a number that is only for this class, in this layer. */
-const classId = (classes: ClassIds, constructor: object): string => {
-	const id = Option.getOrElse(MutableHashMap.get(classes, constructor), () => {
-		const fresh = MutableHashMap.size(classes)
-		MutableHashMap.set(classes, constructor, fresh)
-		return fresh
-	})
-	return `#${String(id)}`
-}
-
-/** The most levels of objects in a principal that the cache takes. */
-const maxKeyDepth = 256
-
-/**
- * Gives a text that names a principal value. Two values get one text only when
- * they have the same types and the same data. So a string `"1"` and a bigint
- * `1n` get two texts. The text keeps the class of each object, by a number
- * that is its own, because two classes may have one name.
- *
- * It reads only the fields of plain objects and of `Schema.Class` values, and
- * only when each own key is a plain field that a loop over the keys can see.
- * An object of another class may keep its data where the text can not see it,
- * as a `URL` does. So it gives `undefined` for such an object, unless it is a
- * plain `Date`, `URL`, array, `Map` or `Set` with no extra own keys. It also
- * gives `undefined` for a function, a symbol, or a value with one object in two
- * places. The text can not show that two places hold the same object, and a
- * loader may test it, as `set.has(value)` does.
- * The private fields (`#name`) of a class can not be seen, so a principal
- * class must not keep its data in them.
- *
- * It also gives `undefined` for a value with more than {@link maxKeyDepth}
- * levels of objects. The walk calls itself for each level, so a deeper value
- * could fill the stack. Such a principal is not cached.
- */
-const keyText = (
-	value: unknown,
-	seen: Set<object>,
-	classes: ClassIds,
-	depth: number = 0,
-): string | undefined => {
-	const plain = (text: string): string => text
-	switch (typeof value) {
-		case "string":
-			return plain(`s${JSON.stringify(value)}`)
-		case "number":
-			return plain(Object.is(value, -0) ? "n-0" : `n${String(value)}`)
-		case "bigint":
-			return plain(`b${String(value)}`)
-		case "boolean":
-			return plain(value ? "true" : "false")
-		case "undefined":
-			return plain("undefined")
-		case "object":
-			break
-		default:
+const jsonKey = (
+	schema: Schema.Top,
+): ((principal: object) => PrincipalKey | undefined) => {
+	const codec = Schema.toCodecJson(schema) as unknown as Schema.Codec<
+		unknown,
+		unknown
+	>
+	const encode = Schema.encodeUnknownResult(codec)
+	const decode = Schema.decodeUnknownResult(codec)
+	const keyOf = (principal: object): PrincipalKey | undefined =>
+		Result.match(encode(principal), {
+			onFailure: () => undefined,
+			onSuccess: (json) =>
+				Result.match(decode(json), {
+					onFailure: () => undefined,
+					onSuccess: (decoded) =>
+						Equal.equals(decoded, principal)
+							? new PrincipalKey(decoded as object, JSON.stringify(json))
+							: undefined,
+				}),
+		})
+	return (principal) => {
+		// A very deep principal may fill the stack of the encoder or of
+		// `Equal`. Such a principal is not kept.
+		try {
+			return keyOf(principal)
+		} catch {
 			return undefined
+		}
 	}
-	if (value === null) {
-		return plain("null")
-	}
-	if (seen.has(value) || depth >= maxKeyDepth) {
-		return undefined
-	}
-	seen.add(value)
-	const list = (
-		items: ReadonlyArray<unknown>,
-		wrap: (texts: ReadonlyArray<string>) => string,
-	): string | undefined => {
-		const texts = Arr.map(items, (item) =>
-			keyText(item, seen, classes, depth + 1),
-		)
-		return Arr.every(texts, (text) => text !== undefined)
-			? wrap(texts as ReadonlyArray<string>)
-			: undefined
-	}
-	const prototype: unknown = Object.getPrototypeOf(value)
-	// The own keys of the value. A built-in value keeps its data inside, so it
-	// may have no own keys, and the elements of an array are its own keys. An
-	// extra own key is data that the text does not show.
-	const own = Reflect.ownKeys(value)
-	// The entries of a map or a set keep their order, because a loader may read
-	// the first one.
-	if (prototype === Date.prototype && own.length === 0) {
-		return `d${String((value as Date).getTime())}`
-	}
-	if (prototype === URL.prototype && own.length === 0) {
-		return `u${JSON.stringify((value as URL).href)}`
-	}
-	if (
-		prototype === Array.prototype &&
-		own.length === (value as Array<unknown>).length + 1 &&
-		hasEveryIndex(value as Array<unknown>) &&
-		// An array finds an object by the object itself, as in
-		// `roles.includes(admin)`.
-		!Arr.some(value as Array<unknown>, isObjectLike)
-	) {
-		return list(value as Array<unknown>, (texts) => `[${texts.join(",")}]`)
-	}
-	if (
-		prototype === Map.prototype &&
-		own.length === 0 &&
-		// A map finds an object key by the object itself, not by its data, as
-		// in `map.get(role)`. The text can not show which object it is.
-		!Arr.some(Array.from((value as Map<unknown, unknown>).keys()), isObjectLike)
-	) {
-		// The keys and the values go in one list, so a value that is an object
-		// does not go through the test of the elements of an array.
-		return list(
-			Arr.flatMap(Array.from(value as Map<unknown, unknown>), ([key, item]) => [
-				key,
-				item,
-			]),
-			(texts) => `Map{${texts.join(",")}}`,
-		)
-	}
-	if (
-		prototype === Set.prototype &&
-		own.length === 0 &&
-		// A set finds an object by the object itself, as in `set.has(role)`.
-		!Arr.some(Array.from(value as Set<unknown>), isObjectLike)
-	) {
-		return list(
-			Array.from(value as Set<unknown>),
-			(texts) => `Set{${texts.join(",")}}`,
-		)
-	}
-	if (
-		(prototype === null ||
-			prototype === Object.prototype ||
-			// The prototype must be the prototype of the class itself. A value
-			// made with `Object.create(user)` has `user` as its prototype, and
-			// the data of `user` is not in the own keys. Such a prototype may
-			// have its own `constructor` key, so the test compares the
-			// prototype with the `prototype` of the class.
-			(Schema.isSchema((prototype as object).constructor) &&
-				(prototype as object).constructor.prototype === prototype)) &&
-		Arr.every(own, (key) => typeof key === "string" && isPlainField(value, key))
-	) {
-		// The keys keep their order, because a loader may read the first one.
-		const keys = own as ReadonlyArray<string>
-		const name =
-			prototype === null
-				? ""
-				: classId(classes, (prototype as object).constructor)
-		return list(
-			Arr.map(keys, (key) => (value as Record<string, unknown>)[key]),
-			(texts) =>
-				`${name}{${Arr.map(keys, (key, index) => `${JSON.stringify(key)}:${texts[index]!}`).join(",")}}`,
-		)
-	}
-	return undefined
 }
 
 const forbidden = (
@@ -626,7 +481,6 @@ const forbidden = (
 const makeLayer = (
 	service: AnyServiceClass,
 	options: {
-		readonly principal: Effect.Effect<object, unknown, unknown>
 		readonly policy: (
 			principal: object,
 		) => Effect.Effect<Policy.Any, unknown, unknown>
@@ -634,20 +488,27 @@ const makeLayer = (
 			request: object,
 		) => Effect.Effect<Decision.Decision, unknown, unknown>
 		readonly cache?:
-			| { readonly capacity?: number; readonly timeToLive?: Duration.Input }
+			| {
+					readonly capacity?: number
+					readonly timeToLive?: Duration.Input
+					readonly key?: (principal: object) => string | undefined
+			  }
 			| false
 	},
 ) => {
 	const domain: Domain.Any = service.domain
 	// It gives `undefined` when the principal has no key. Such a principal does
 	// not use the cache.
-	const classes: ClassIds = MutableHashMap.empty()
-	const keyOf = (principal: object): PrincipalKey | undefined => {
-		// One set of seen objects for the walk: the walk adds each object to it,
-		// and the set goes away when the key is made.
-		const text = keyText(principal, new Set(), classes)
-		return text === undefined ? undefined : new PrincipalKey(principal, text)
-	}
+	const custom = options.cache === false ? undefined : options.cache?.key
+	const keyOf: (principal: object) => PrincipalKey | undefined =
+		custom === undefined
+			? jsonKey(domain.principal)
+			: (principal) => {
+					const text = custom(principal)
+					return text === undefined
+						? undefined
+						: new PrincipalKey(principal, text)
+				}
 	return Layer.effect(
 		service,
 		Effect.gen(function* () {
@@ -702,7 +563,7 @@ const makeLayer = (
 			): Effect.Effect<A, E, unknown> => Effect.provideContext(effect, services)
 
 			const current = Effect.gen(function* () {
-				const principal = yield* options.principal
+				const principal = yield* service.principal
 				const value = yield* policyFor(principal)
 				return { principal, policy: value }
 			})
@@ -821,7 +682,7 @@ const makeLayer = (
 
 			return {
 				domain,
-				principal: options.principal,
+				principal: service.principal,
 				policy: Effect.map(current, ({ policy: value }) => value),
 				decide,
 				check,

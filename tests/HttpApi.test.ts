@@ -37,9 +37,12 @@ class Identity extends Context.Service<Identity, Caller>()(
 	"@nmnmcc/ability/tests/HttpApi.test/Identity",
 ) {}
 
-class Auth extends Authorizer.Service<Auth, { requires: Identity }>()(
+class Auth extends Authorizer.Service<Auth>()(
 	"@nmnmcc/ability/tests/HttpApi.test/Auth",
-	App,
+	{
+		domain: App,
+		principal: Identity,
+	},
 ) {}
 
 class BotNotFound extends Schema.TaggedError<BotNotFound>()("BotNotFound", {
@@ -187,7 +190,6 @@ const AuthenticationLive = Layer.succeed(Authentication, (httpEffect) =>
 )
 
 const AuthLive = Authorizer.layer(Auth, {
-	principal: Identity,
 	policy: (caller) =>
 		Effect.succeed(
 			Policy.define(App)(function* (_) {
@@ -226,7 +228,6 @@ const BrokenServerLive = Layer.mergeAll(BotsLive, AdminLive).pipe(
 		).pipe(
 			Layer.provide(
 				Authorizer.layer(Auth, {
-					principal: Identity,
 					policy: () => Effect.fail({ password: "secret" }),
 				}),
 			),
@@ -243,7 +244,6 @@ const MixedServerLive = Layer.mergeAll(BotsLive, AdminLive).pipe(
 		).pipe(
 			Layer.provide(
 				Authorizer.layer(Auth, {
-					principal: Identity,
 					policy: () =>
 						Effect.succeed(
 							Policy.define(App)(function* (_) {
@@ -268,7 +268,6 @@ const UnknownServerLive = Layer.mergeAll(BotsLive, AdminLive).pipe(
 		).pipe(
 			Layer.provide(
 				Authorizer.layer(Auth, {
-					principal: Identity,
 					policy: () =>
 						Effect.succeed(
 							Policy.define(App)(function* (_) {

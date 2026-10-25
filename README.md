@@ -421,21 +421,26 @@ request, loads its policy, and keeps the policy in a cache.
 ```ts
 class Identity extends Context.Service<Identity, User>()("app/Identity") {}
 
-class Auth extends Authorizer.Service<Auth, { requires: Identity }>()(
-	"app/Auth",
-	Blog,
-) {}
+class Auth extends Authorizer.Service<Auth>()("app/Auth", {
+	domain: Blog,
+	principal: Identity,
+}) {}
 
 const AuthLive = Authorizer.layer(Auth, {
-	principal: Identity,
 	policy: (user) => loadPolicyOf(user),
 	cache: { capacity: 1000, timeToLive: "30 seconds" },
 })
 ```
 
-Two principals with the same data get one policy from the cache. So the loader
-must decide by the data of the principal only. When it tests that an object of
-the principal is a given object, as `role === admin` does, give `cache: false`.
+The error type and the service type of every check come from the `principal`
+Effect.
+
+The cache key of a principal is the text of its JSON form, from the Schema of
+the principal of the domain. A principal is kept only when the value that the
+Schema decodes from that form is equal to it, so two principals with one key are
+equal. The loader gets that decoded copy, so it must decide by the data of the
+principal, not by the identity of its objects. Give `cache: { key }` to make the
+key in another way, or `cache: false` to load the policy for each check.
 
 Use it in a handler:
 
@@ -494,7 +499,6 @@ service must answer later:
 
 ```ts
 Authorizer.layer(Auth, {
-	principal: Identity,
 	policy: loadPolicyOf,
 	decider: (request) =>
 		requests

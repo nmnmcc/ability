@@ -41,9 +41,12 @@ class Identity extends Context.Service<Identity, Member>()(
 	"@nmnmcc/ability/examples/authorizer/Identity",
 ) {}
 
-class Auth extends Authorizer.Service<Auth, { requires: Identity }>()(
+class Auth extends Authorizer.Service<Auth>()(
 	"@nmnmcc/ability/examples/authorizer/Auth",
-	Workspace,
+	{
+		domain: Workspace,
+		principal: Identity,
+	},
 ) {}
 
 class DocumentNotFound extends Schema.TaggedError<DocumentNotFound>()(
@@ -52,7 +55,6 @@ class DocumentNotFound extends Schema.TaggedError<DocumentNotFound>()(
 ) {}
 
 const AuthLive = Authorizer.layer(Auth, {
-	principal: Identity,
 	// In a real program this loads the rules of the member from a database.
 	policy: () =>
 		Effect.succeed(

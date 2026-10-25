@@ -795,10 +795,12 @@ describe("Authorizer", () => {
 	class Identity extends Context.Service<Identity, Caller>()(
 		"@nmnmcc/ability/tests/Ability.tst/Identity",
 	) {}
-	class Auth extends Authorizer.Service<
-		Auth,
-		{ requires: Identity; error: "no session" }
-	>()("@nmnmcc/ability/tests/Ability.tst/Auth", App) {}
+	// The principal gives the error type and the service type of the checks.
+	const session: Effect.Effect<Caller, "no session", Identity> = Identity
+	class Auth extends Authorizer.Service<Auth>()(
+		"@nmnmcc/ability/tests/Ability.tst/Auth",
+		{ domain: App, principal: session },
+	) {}
 
 	it("puts the errors and services into a check", () => {
 		expect(Auth.check({ action: "update", resource: aliceBot })).type.toBe<
@@ -981,12 +983,18 @@ describe("Authorizer", () => {
 
 	it("checks the options of the layer", () => {
 		expect(Authorizer.layer).type.toBeCallableWith(Auth, {
-			principal: Identity,
 			policy: () => Effect.succeed(Policy.empty(App)),
 		})
 		expect(Authorizer.layer).type.not.toBeCallableWith(Auth, {
-			principal: Effect.fail("other error" as const),
 			policy: () => Effect.succeed(Policy.empty(App)),
+			decider: () => Effect.fail("other error" as const),
+		})
+	})
+
+	it("takes only a principal of the domain", () => {
+		expect(Authorizer.Service<never>()).type.not.toBeCallableWith("x", {
+			domain: App,
+			principal: Effect.succeed("not a caller"),
 		})
 	})
 })

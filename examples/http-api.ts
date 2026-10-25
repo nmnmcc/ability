@@ -61,9 +61,12 @@ class Identity extends Context.Service<Identity, User>()(
 	"@nmnmcc/ability/examples/http-api/Identity",
 ) {}
 
-class Auth extends Authorizer.Service<Auth, { requires: Identity }>()(
+class Auth extends Authorizer.Service<Auth>()(
 	"@nmnmcc/ability/examples/http-api/Auth",
-	Notes,
+	{
+		domain: Notes,
+		principal: Identity,
+	},
 ) {}
 
 class NoteNotFound extends Schema.TaggedError<NoteNotFound>()("NoteNotFound", {
@@ -167,7 +170,6 @@ const NotesLive = HttpApiBuilder.group(Api, "notes", (handlers) =>
 )
 
 const AuthLive = Authorizer.layer(Auth, {
-	principal: Identity,
 	policy: () =>
 		Effect.succeed(
 			Policy.define(Notes)(function* (_) {

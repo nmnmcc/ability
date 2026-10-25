@@ -1,7 +1,16 @@
 // Each test gives its own layer, so it uses Effect.provide.
 // @effect-diagnostics strictEffectProvide:off
 import { assert, describe, it } from "@effect/vitest"
-import { Array as Arr, Context, Effect, Exit, Layer, Ref, Schema } from "effect"
+import {
+	Array as Arr,
+	Context,
+	Effect,
+	Equal,
+	Exit,
+	Layer,
+	Ref,
+	Schema,
+} from "effect"
 import {
 	Authorizer,
 	Condition,
@@ -25,10 +34,10 @@ class Identity extends Context.Service<Identity, Caller>()(
 	"@nmnmcc/ability/tests/Authorizer.test/Identity",
 ) {}
 
-class Auth extends Authorizer.Service<Auth, { requires: Identity }>()(
-	"test/Auth",
-	App,
-) {}
+class Auth extends Authorizer.Service<Auth>()("test/Auth", {
+	domain: App,
+	principal: Identity,
+}) {}
 
 const policyFor = (caller: Caller) =>
 	Policy.define(App)(function* (_) {
@@ -60,7 +69,6 @@ const makeLayer = (options: {
 	>["decider"]
 }) =>
 	Authorizer.layer(Auth, {
-		principal: Identity,
 		policy: (caller) =>
 			Ref.update(options.loads, (n) => n + 1).pipe(
 				Effect.andThen(
@@ -164,11 +172,14 @@ describe("Authorizer", () => {
 			const turns = yield* Ref.make(0)
 			const reader = Caller.make({ ...alice, role: "guest" })
 			const writer = Caller.make({ ...alice, role: "member" })
-			const layer = Authorizer.layer(Auth, {
+			class Turning extends Authorizer.Service<Turning>()("test/Turning", {
+				domain: App,
 				// Each load gives the other principal.
 				principal: Ref.getAndUpdate(turns, (n) => n + 1).pipe(
 					Effect.map((n) => (n % 2 === 0 ? reader : writer)),
 				),
+			}) {}
+			const layer = Authorizer.layer(Turning, {
 				policy: (caller) =>
 					Effect.succeed(
 						Policy.define(App)(function* (_) {
@@ -181,14 +192,10 @@ describe("Authorizer", () => {
 						}),
 					),
 			})
-			const exit = yield* Auth.guard(
+			const exit = yield* Turning.guard(
 				{ action: "update", resource: aliceBot },
 				{ hide: () => ({ _tag: "BotNotFound" as const }) },
-			).pipe(
-				Effect.provide(layer),
-				Effect.provideService(Identity, alice),
-				Effect.exit,
-			)
+			).pipe(Effect.provide(layer), Effect.exit)
 			assert.isTrue(Exit.isFailure(exit))
 		}),
 	)
@@ -386,12 +393,11 @@ describe("Authorizer", () => {
 					fields: { tags: Schema.Record(Schema.String, Schema.String) },
 				})
 				const Notes = Domain.make({ principal: Caller, resources: [Note] })
-				class NoteAuth extends Authorizer.Service<
-					NoteAuth,
-					{ requires: Identity }
-				>()("test/NoteAuth", Notes) {}
-				const layer = Authorizer.layer(NoteAuth, {
+				class NoteAuth extends Authorizer.Service<NoteAuth>()("test/NoteAuth", {
+					domain: Notes,
 					principal: Identity,
+				}) {}
+				const layer = Authorizer.layer(NoteAuth, {
 					policy: () => Effect.succeed(Policy.empty(Notes)),
 					decider: () => Effect.succeed(Decision.Allow({})),
 				})
@@ -447,6 +453,101 @@ describe("Authorizer", () => {
 				}),
 			)
 			assert.strictEqual(loads, 2)
+		}),
+	)
+
+	it.effect("gives the loader a copy that the Schema decodes", () =>
+		Effect.gen(function* () {
+			const seen: Array<Caller> = []
+			class CopyAuth extends Authorizer.Service<CopyAuth>()("test/CopyAuth", {
+				domain: App,
+				principal: Identity,
+			}) {}
+			const layer = Authorizer.layer(CopyAuth, {
+				policy: (caller) =>
+					Effect.sync(() => {
+						seen.push(caller)
+						return Policy.define(App)(function* (_) {
+							yield* _.allow("read", Bot)
+						})
+					}),
+			})
+			yield* CopyAuth.check({ action: "read", resource: aliceBot }).pipe(
+				Effect.provideService(Identity, alice),
+				Effect.provide(layer),
+			)
+			assert.strictEqual(seen.length, 1)
+			assert.notStrictEqual(seen[0], alice)
+			assert.isTrue(Equal.equals(seen[0], alice))
+		}),
+	)
+
+	it.effect("makes the cache key with the key of the options", () =>
+		Effect.gen(function* () {
+			const loads = yield* Ref.make(0)
+			class KeyAuth extends Authorizer.Service<KeyAuth>()("test/KeyAuth", {
+				domain: App,
+				principal: Identity,
+			}) {}
+			const layer = Authorizer.layer(KeyAuth, {
+				policy: () =>
+					Ref.update(loads, (n) => n + 1).pipe(
+						Effect.as(
+							Policy.define(App)(function* (_) {
+								yield* _.allow("read", Bot)
+							}),
+						),
+					),
+				// One key for every principal of an organization.
+				cache: { key: (caller) => caller.organizationId },
+			})
+			yield* Effect.gen(function* () {
+				yield* Effect.provideService(
+					KeyAuth.check({ action: "read", resource: aliceBot }),
+					Identity,
+					alice,
+				)
+				yield* Effect.provideService(
+					KeyAuth.check({ action: "read", resource: aliceBot }),
+					Identity,
+					Caller.make({ ...alice, userId: "carol" }),
+				)
+			}).pipe(Effect.provide(layer))
+			assert.strictEqual(yield* Ref.get(loads), 1)
+		}),
+	)
+
+	it.effect("does not give one cached policy to two classes of a union", () =>
+		Effect.gen(function* () {
+			class Admin extends Schema.Class<Admin>("Admin")({ id: Schema.String }) {}
+			class Guest extends Schema.Class<Guest>("Guest")({ id: Schema.String }) {}
+			// Both classes have one JSON form, so a decode gives an Admin.
+			const Person = Schema.Union([Admin, Guest])
+			const People = Domain.make({ principal: Person, resources: [Bot] })
+			class CurrentPerson extends Context.Service<
+				CurrentPerson,
+				Admin | Guest
+			>()("@nmnmcc/ability/tests/Authorizer.test/CurrentPerson") {}
+			class PersonAuth extends Authorizer.Service<PersonAuth>()(
+				"test/PersonAuth",
+				{ domain: People, principal: CurrentPerson },
+			) {}
+			const layer = Authorizer.layer(PersonAuth, {
+				policy: (person) =>
+					Effect.succeed(
+						Policy.define(People)(function* (_) {
+							if (person instanceof Admin) {
+								yield* _.allow("read", Bot)
+							}
+						}),
+					),
+			})
+			const exit = yield* Effect.provideService(
+				PersonAuth.check({ action: "read", resource: aliceBot }),
+				CurrentPerson,
+				Guest.make({ id: "g" }),
+			).pipe(Effect.provide(layer), Effect.exit)
+			assert.strictEqual(failureTag(exit), "Forbidden")
 		}),
 	)
 
@@ -509,12 +610,11 @@ describe("Authorizer", () => {
 			class Quota extends Context.Service<Quota, { readonly left: number }>()(
 				"@nmnmcc/ability/tests/Authorizer.test/Quota",
 			) {}
-			class Auth2 extends Authorizer.Service<Auth2, { requires: Identity }>()(
-				"test/Auth2",
-				App,
-			) {}
-			const layer = Authorizer.layer(Auth2, {
+			class Auth2 extends Authorizer.Service<Auth2>()("test/Auth2", {
+				domain: App,
 				principal: Identity,
+			}) {}
+			const layer = Authorizer.layer(Auth2, {
 				policy: () =>
 					Effect.succeed(
 						Policy.define(App)(function* (_) {
@@ -550,12 +650,11 @@ describe("Authorizer", () => {
 
 	it.effect("does not let the decider allow a kind with a denied value", () =>
 		Effect.gen(function* () {
-			class Auth3 extends Authorizer.Service<Auth3, { requires: Identity }>()(
-				"test/Auth3",
-				App,
-			) {}
-			const layer = Authorizer.layer(Auth3, {
+			class Auth3 extends Authorizer.Service<Auth3>()("test/Auth3", {
+				domain: App,
 				principal: Identity,
+			}) {}
+			const layer = Authorizer.layer(Auth3, {
 				policy: () =>
 					Effect.succeed(
 						Policy.define(App)(function* (_) {
@@ -583,12 +682,11 @@ describe("Authorizer", () => {
 			class Current extends Context.Service<Current, User>()(
 				"@nmnmcc/ability/tests/Authorizer.test/Current",
 			) {}
-			class ShopAuth extends Authorizer.Service<
-				ShopAuth,
-				{ requires: Current }
-			>()("test/ShopAuth", Shop) {}
-			const layer = Authorizer.layer(ShopAuth, {
+			class ShopAuth extends Authorizer.Service<ShopAuth>()("test/ShopAuth", {
+				domain: Shop,
 				principal: Current,
+			}) {}
+			const layer = Authorizer.layer(ShopAuth, {
 				policy: (user) =>
 					Effect.succeed(
 						Policy.define(Shop)(function* (_) {
@@ -625,12 +723,11 @@ describe("Authorizer", () => {
 			class ShopUser extends Context.Service<ShopUser, User>()(
 				"@nmnmcc/ability/tests/Authorizer.test/ShopUser",
 			) {}
-			class ShopAuth extends Authorizer.Service<
-				ShopAuth,
-				{ requires: ShopUser }
-			>()("test/ShopAuth2", Shop) {}
-			const layer = Authorizer.layer(ShopAuth, {
+			class ShopAuth extends Authorizer.Service<ShopAuth>()("test/ShopAuth2", {
+				domain: Shop,
 				principal: ShopUser,
+			}) {}
+			const layer = Authorizer.layer(ShopAuth, {
 				policy: (user) =>
 					Effect.succeed(
 						Policy.define(Shop)(function* (_) {
@@ -665,12 +762,11 @@ describe("Authorizer", () => {
 			class CurrentSite extends Context.Service<CurrentSite, Site>()(
 				"@nmnmcc/ability/tests/Authorizer.test/CurrentSite",
 			) {}
-			class WebAuth extends Authorizer.Service<
-				WebAuth,
-				{ requires: CurrentSite }
-			>()("test/WebAuth", Web) {}
-			const layer = Authorizer.layer(WebAuth, {
+			class WebAuth extends Authorizer.Service<WebAuth>()("test/WebAuth", {
+				domain: Web,
 				principal: CurrentSite,
+			}) {}
+			const layer = Authorizer.layer(WebAuth, {
 				policy: (site) =>
 					Effect.succeed(
 						Policy.define(Web)(function* (_) {
@@ -714,12 +810,11 @@ describe("Authorizer", () => {
 					CurrentUser,
 					InstanceType<typeof Admin> | InstanceType<typeof Guest>
 				>()("@nmnmcc/ability/tests/Authorizer.test/CurrentUser") {}
-				class TeamAuth extends Authorizer.Service<
-					TeamAuth,
-					{ requires: CurrentUser }
-				>()("test/TeamAuth", Team) {}
-				const layer = Authorizer.layer(TeamAuth, {
+				class TeamAuth extends Authorizer.Service<TeamAuth>()("test/TeamAuth", {
+					domain: Team,
 					principal: CurrentUser,
+				}) {}
+				const layer = Authorizer.layer(TeamAuth, {
 					policy: (user) =>
 						Effect.succeed(
 							Policy.define(Team)(function* (_) {
@@ -756,10 +851,10 @@ describe("Authorizer", () => {
 			}),
 			resources: [Bot],
 		})
-		class PlainAuth extends Authorizer.Service<
-			PlainAuth,
-			{ requires: Member }
-		>()("test/PlainAuth", Plain) {}
+		class PlainAuth extends Authorizer.Service<PlainAuth>()("test/PlainAuth", {
+			domain: Plain,
+			principal: Member as never,
+		}) {}
 		const roleOf = (principal: object): unknown => {
 			const roles = (principal as { readonly roles: Record<string, unknown> })
 				.roles
@@ -770,7 +865,6 @@ describe("Authorizer", () => {
 			)
 		}
 		const layer = Authorizer.layer(PlainAuth, {
-			principal: Member as never,
 			policy: (principal) =>
 				Effect.succeed(
 					Policy.define(Plain)(function* (_) {
@@ -867,10 +961,10 @@ describe("Authorizer", () => {
 
 	it.effect("fails a check on a kind when the residual is too large", () =>
 		Effect.gen(function* () {
-			class Deep extends Authorizer.Service<Deep, { requires: Identity }>()(
-				"test/Deep",
-				App,
-			) {}
+			class Deep extends Authorizer.Service<Deep>()("test/Deep", {
+				domain: App,
+				principal: Identity,
+			}) {}
 			const policy = Arr.reduce(
 				Arr.range(0, 23),
 				Policy.define(App)(function* (_) {
@@ -881,7 +975,6 @@ describe("Authorizer", () => {
 					depth % 2 === 0 ? Policy.any([inner]) : Policy.all([inner]),
 			)
 			const layer = Authorizer.layer(Deep, {
-				principal: Identity,
 				policy: () => Effect.succeed(policy),
 				decider: () => Effect.succeed(Decision.Allow({})),
 			})
@@ -903,12 +996,11 @@ describe("Authorizer", () => {
 			class CurrentRanked extends Context.Service<CurrentRanked, Ranked>()(
 				"@nmnmcc/ability/tests/Authorizer.test/CurrentRanked",
 			) {}
-			class RankAuth extends Authorizer.Service<
-				RankAuth,
-				{ requires: CurrentRanked }
-			>()("test/RankAuth", Ranks) {}
-			const layer = Authorizer.layer(RankAuth, {
+			class RankAuth extends Authorizer.Service<RankAuth>()("test/RankAuth", {
+				domain: Ranks,
 				principal: CurrentRanked,
+			}) {}
+			const layer = Authorizer.layer(RankAuth, {
 				policy: (user) =>
 					Effect.succeed(
 						Policy.define(Ranks)(function* (_) {
@@ -947,12 +1039,11 @@ describe("Authorizer", () => {
 	it.effect("fails closed when the loaded policy has another domain", () =>
 		Effect.gen(function* () {
 			const Other = Domain.make({ principal: Caller, resources: [Bot] })
-			class Mixed extends Authorizer.Service<Mixed, { requires: Identity }>()(
-				"test/Mixed",
-				App,
-			) {}
-			const layer = Authorizer.layer(Mixed, {
+			class Mixed extends Authorizer.Service<Mixed>()("test/Mixed", {
+				domain: App,
 				principal: Identity,
+			}) {}
+			const layer = Authorizer.layer(Mixed, {
 				policy: () =>
 					Effect.succeed(
 						Policy.define(Other)(function* (_) {
@@ -981,12 +1072,14 @@ describe("Authorizer", () => {
 			class CurrentHolder extends Context.Service<CurrentHolder, Holder>()(
 				"@nmnmcc/ability/tests/Authorizer.test/CurrentHolder",
 			) {}
-			class HolderAuth extends Authorizer.Service<
-				HolderAuth,
-				{ requires: CurrentHolder }
-			>()("test/HolderAuth", Holders) {}
+			class HolderAuth extends Authorizer.Service<HolderAuth>()(
+				"test/HolderAuth",
+				{
+					domain: Holders,
+					principal: CurrentHolder,
+				},
+			) {}
 			const layer = Authorizer.layer(HolderAuth, {
-				principal: CurrentHolder,
 				policy: (user) =>
 					Effect.succeed(
 						Policy.define(Holders)(function* (_) {
@@ -1023,12 +1116,14 @@ describe("Authorizer", () => {
 			class CurrentChooser extends Context.Service<CurrentChooser, Chooser>()(
 				"@nmnmcc/ability/tests/Authorizer.test/CurrentChooser",
 			) {}
-			class ChooserAuth extends Authorizer.Service<
-				ChooserAuth,
-				{ requires: CurrentChooser }
-			>()("test/ChooserAuth", Choosers) {}
+			class ChooserAuth extends Authorizer.Service<ChooserAuth>()(
+				"test/ChooserAuth",
+				{
+					domain: Choosers,
+					principal: CurrentChooser,
+				},
+			) {}
 			const layer = Authorizer.layer(ChooserAuth, {
-				principal: CurrentChooser,
 				policy: (user) =>
 					Effect.succeed(
 						Policy.define(Choosers)(function* (_) {
@@ -1060,10 +1155,10 @@ describe("Authorizer", () => {
 
 	it.effect("checks a loaded policy with shared children", () =>
 		Effect.gen(function* () {
-			class Wide extends Authorizer.Service<Wide, { requires: Identity }>()(
-				"test/Wide",
-				App,
-			) {}
+			class Wide extends Authorizer.Service<Wide>()("test/Wide", {
+				domain: App,
+				principal: Identity,
+			}) {}
 			const policy = Arr.reduce(
 				Arr.range(0, 14),
 				Policy.define(App)(function* (_) {
@@ -1072,7 +1167,6 @@ describe("Authorizer", () => {
 				(inner) => Policy.all([inner, inner]),
 			)
 			const layer = Authorizer.layer(Wide, {
-				principal: Identity,
 				policy: () => Effect.succeed(policy),
 			})
 			const start = Date.now()
@@ -1100,12 +1194,14 @@ describe("Authorizer", () => {
 			class CurrentMember extends Context.Service<CurrentMember, Member>()(
 				"@nmnmcc/ability/tests/Authorizer.test/CurrentMember",
 			) {}
-			class MemberAuth extends Authorizer.Service<
-				MemberAuth,
-				{ requires: CurrentMember }
-			>()("test/MemberAuth", Members) {}
+			class MemberAuth extends Authorizer.Service<MemberAuth>()(
+				"test/MemberAuth",
+				{
+					domain: Members,
+					principal: CurrentMember,
+				},
+			) {}
 			const layer = Authorizer.layer(MemberAuth, {
-				principal: CurrentMember,
 				policy: (user) =>
 					Effect.succeed(
 						Policy.define(Members)(function* (_) {
@@ -1142,12 +1238,14 @@ describe("Authorizer", () => {
 			class CurrentStaff extends Context.Service<CurrentStaff, Staff>()(
 				"@nmnmcc/ability/tests/Authorizer.test/CurrentStaff",
 			) {}
-			class StaffAuth extends Authorizer.Service<
-				StaffAuth,
-				{ requires: CurrentStaff }
-			>()("test/StaffAuth", Staffs) {}
+			class StaffAuth extends Authorizer.Service<StaffAuth>()(
+				"test/StaffAuth",
+				{
+					domain: Staffs,
+					principal: CurrentStaff,
+				},
+			) {}
 			const layer = Authorizer.layer(StaffAuth, {
-				principal: CurrentStaff,
 				policy: (user) =>
 					Effect.succeed(
 						Policy.define(Staffs)(function* (_) {
@@ -1186,13 +1284,12 @@ describe("Authorizer", () => {
 				CurrentMapHolder,
 				Holder
 			>()("@nmnmcc/ability/tests/Authorizer.test/CurrentMapHolder") {}
-			class MapAuth extends Authorizer.Service<
-				MapAuth,
-				{ requires: CurrentMapHolder }
-			>()("test/MapAuth", Holders) {}
+			class MapAuth extends Authorizer.Service<MapAuth>()("test/MapAuth", {
+				domain: Holders,
+				principal: CurrentMapHolder,
+			}) {}
 			const loads = yield* Ref.make(0)
 			const layer = Authorizer.layer(MapAuth, {
-				principal: CurrentMapHolder,
 				policy: () =>
 					Ref.update(loads, (n) => n + 1).pipe(
 						Effect.as(
@@ -1236,12 +1333,11 @@ describe("Authorizer", () => {
 			class CurrentDeep extends Context.Service<CurrentDeep, Deep>()(
 				"@nmnmcc/ability/tests/Authorizer.test/CurrentDeep",
 			) {}
-			class DeepAuth extends Authorizer.Service<
-				DeepAuth,
-				{ requires: CurrentDeep }
-			>()("test/DeepAuth", Deeps) {}
-			const layer = Authorizer.layer(DeepAuth, {
+			class DeepAuth extends Authorizer.Service<DeepAuth>()("test/DeepAuth", {
+				domain: Deeps,
 				principal: CurrentDeep,
+			}) {}
+			const layer = Authorizer.layer(DeepAuth, {
 				policy: () =>
 					Effect.succeed(
 						Policy.define(Deeps)(function* (_) {
@@ -1270,12 +1366,11 @@ describe("Authorizer", () => {
 			class CurrentMany extends Context.Service<CurrentMany, Many>()(
 				"@nmnmcc/ability/tests/Authorizer.test/CurrentMany",
 			) {}
-			class ManyAuth extends Authorizer.Service<
-				ManyAuth,
-				{ requires: CurrentMany }
-			>()("test/ManyAuth", Manys) {}
-			const layer = Authorizer.layer(ManyAuth, {
+			class ManyAuth extends Authorizer.Service<ManyAuth>()("test/ManyAuth", {
+				domain: Manys,
 				principal: CurrentMany,
+			}) {}
+			const layer = Authorizer.layer(ManyAuth, {
 				policy: () =>
 					Effect.succeed(
 						Policy.define(Manys)(function* (_) {
@@ -1308,12 +1403,14 @@ describe("Authorizer", () => {
 				CurrentManyHolder,
 				Holder
 			>()("@nmnmcc/ability/tests/Authorizer.test/CurrentManyHolder") {}
-			class HolderAuth extends Authorizer.Service<
-				HolderAuth,
-				{ requires: CurrentManyHolder }
-			>()("test/ManyHolderAuth", Holders) {}
+			class HolderAuth extends Authorizer.Service<HolderAuth>()(
+				"test/ManyHolderAuth",
+				{
+					domain: Holders,
+					principal: CurrentManyHolder,
+				},
+			) {}
 			const layer = Authorizer.layer(HolderAuth, {
-				principal: CurrentManyHolder,
 				policy: () =>
 					Effect.succeed(
 						Policy.define(Holders)(function* (_) {
