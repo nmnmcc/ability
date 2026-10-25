@@ -7,6 +7,8 @@
  */
 import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
+import * as Equal from "effect/Equal"
+import * as Hash from "effect/Hash"
 import * as Condition from "../Condition.ts"
 import type * as Domain from "../Domain.ts"
 import type * as Policy from "../Policy.ts"
@@ -16,6 +18,7 @@ import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
 import * as ResourceData from "./resource.ts"
 import * as Patterns from "./patterns.ts"
+import * as Structure from "./structure.ts"
 
 /** The data of a rule. */
 export interface Shape {
@@ -61,10 +64,35 @@ export class Rule<D = never, I = never, X = unknown> extends Data.Class<
 		return this
 	}
 
+	// The `meta` of a rule may have very many levels, and the walk of
+	// `Data.Class` calls itself for each level. So the equality is the one of
+	// `Structure`, which does not fill the stack. The hash reads the parts
+	// of the rule that are small, and the hash that the condition keeps, but
+	// not the domain, which has the Schemas, or the `meta`. Two equal rules
+	// still have one hash, since the equality reads every part.
+	[Hash.symbol](): number {
+		return Hash.structureKeys(
+			this,
+			Arr.filter(
+				Object.keys(this),
+				(key) => key !== "domain" && key !== "meta",
+			),
+		)
+	}
+
+	[Equal.symbol](that: unknown): boolean {
+		return Structure.equals(kind, this, that)
+	}
+
 	/** Tests if a value is a rule, by its private field. */
 	static is(u: unknown): u is Rule {
 		return typeof u === "object" && u !== null && #rule in u
 	}
+}
+
+const kind: Structure.Kind = {
+	isNode: Nodes.isNode,
+	isRecord: (u) => u instanceof Rule,
 }
 
 /** Makes a rule from its data. It does not check the data against a domain. */

@@ -118,18 +118,6 @@ const kind: Structure.Kind = {
 }
 
 /**
- * The hash of a rule in the hash of its node. It reads the parts of the rule
- * that are small, and the hash that the condition keeps. It does not read
- * the domain, which has the Schemas, or the `meta`, which may be large. Two
- * equal rules still have one hash, since `Equal` reads every part.
- */
-const ruleHash = (rule: Rule.Rule): number =>
-	Hash.structureKeys(
-		rule,
-		Arr.filter(Object.keys(rule), (key) => key !== "domain" && key !== "meta"),
-	)
-
-/**
  * The condition of a rule. A value that is not a node counts as one node
  * here: the binding of the rule gives the issue for it, before any walk.
  */
@@ -171,7 +159,11 @@ export class Rules extends Base {
 				depth: 1,
 				opaque: Arr.some(conditions, (when) => when?.opaque ?? false),
 			}),
-			{ algorithm: props.algorithm, rules: Arr.map(rules, ruleHash) },
+			// The hash of a rule reads only its small parts: see `Rule`.
+			{
+				algorithm: props.algorithm,
+				rules: Arr.map(rules, (rule) => rule[Hash.symbol]()),
+			},
 		)
 	}
 }

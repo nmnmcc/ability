@@ -217,6 +217,13 @@ describe("Deep inputs", () => {
 			HashSet.size(HashSet.make(policy("a"), policy("a"), policy("b"))),
 			2,
 		)
+		// A rule by itself, out of its policy.
+		const ruleOf = (value: string) =>
+			(policy(value).node as { readonly rules: ReadonlyArray<unknown> })
+				.rules[0]
+		assert.strictEqual(Hash.hash(ruleOf("a")), Hash.hash(ruleOf("a")))
+		assert.isTrue(Equal.equals(ruleOf("a"), ruleOf("a")))
+		assert.isFalse(Equal.equals(ruleOf("a"), ruleOf("b")))
 	})
 
 	it("compares policies with a meta that holds itself", () => {

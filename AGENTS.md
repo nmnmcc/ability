@@ -97,7 +97,8 @@ material. Do not change it unless the user asks.
     say why in a comment. The nodes of a condition and of a policy tree are the
     other case: a tree has no limit of levels, and the walk of `Data.Class`
     calls itself for each level. So a node keeps its hash, and its equality is a
-    walk of the trampoline, both in `src/internal/structure.ts`.
+    walk of the trampoline, both in `src/internal/structure.ts`. A rule is a
+    case too, since its `meta` may have very many levels.
   - Do not mark values with a `TypeId`. A guard tests the class with
     `instanceof`.
   - Use the tools that Effect gives to its users, such as `Function.dual`,
