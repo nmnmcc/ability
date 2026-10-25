@@ -82,10 +82,12 @@ export const read = (
 		return null
 	}
 	const prototype: unknown = Object.getPrototypeOf(input)
+	// A list is a plain list only with the prototype of `Array`: a subclass
+	// of `Array` may have a field, as a getter `when`, too.
 	if (
 		prototype !== Object.prototype &&
 		prototype !== null &&
-		!Array.isArray(input)
+		prototype !== Array.prototype
 	) {
 		throw problemAt(
 			at,

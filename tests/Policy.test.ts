@@ -2206,6 +2206,29 @@ describe("Policy", () => {
 		)
 	})
 
+	it("does not take a rule that is a list of a subclass of Array", () => {
+		class Shaped extends Array<unknown> {
+			get when() {
+				return { _tag: "False" }
+			}
+		}
+		const rule = Object.assign(new Shaped(), {
+			_tag: "Allow",
+			actions: ["read"],
+			resources: ["Bot"],
+		})
+		const exit = Schema.decodeUnknownExit(PolicySchemaOfApp)({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [rule],
+		})
+		assert.isTrue(Exit.isFailure(exit))
+		assert.include(
+			String(Exit.isFailure(exit) ? exit.cause : ""),
+			"not plain data",
+		)
+	})
+
 	it("does not take a condition or fields that a rule has from a class", () => {
 		class Shaped {
 			get when() {
