@@ -133,14 +133,19 @@ const jsonKey = (
 	const keyOf = (principal: object): PrincipalKey | undefined =>
 		Result.match(encode(principal), {
 			onFailure: () => undefined,
-			onSuccess: (json) =>
-				Result.match(decode(json), {
+			onSuccess: (json) => {
+				// The key is the text, so the check decodes the text. The encoded
+				// value may hold more than its text shows, as an object of a
+				// `Schema.Any` field does: `JSON.stringify` leaves out a map.
+				const text = JSON.stringify(json)
+				return Result.match(decode(JSON.parse(text)), {
 					onFailure: () => undefined,
 					onSuccess: (decoded) =>
 						Equal.equals(decoded, principal)
-							? new PrincipalKey(decoded as object, JSON.stringify(json))
+							? new PrincipalKey(decoded as object, text)
 							: undefined,
-				}),
+				})
+			},
 		})
 	return (principal) => {
 		// A very deep principal may fill the stack of the encoder or of

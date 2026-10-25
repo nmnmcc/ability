@@ -551,6 +551,49 @@ describe("Authorizer", () => {
 		}),
 	)
 
+	it.effect(
+		"does not give one cached policy to two values that one text shows",
+		() =>
+			Effect.gen(function* () {
+				const Holder = Schema.Struct({ claims: Schema.Any })
+				const Holders = Domain.make({ principal: Holder, resources: [Bot] })
+				class CurrentClaims extends Context.Service<
+					CurrentClaims,
+					typeof Holder.Type
+				>()("@nmnmcc/ability/tests/Authorizer.test/CurrentClaims") {}
+				class ClaimsAuth extends Authorizer.Service<ClaimsAuth>()(
+					"test/ClaimsAuth",
+					{ domain: Holders, principal: CurrentClaims },
+				) {}
+				const layer = Authorizer.layer(ClaimsAuth, {
+					policy: (holder) =>
+						Effect.succeed(
+							Policy.define(Holders)(function* (_) {
+								if (
+									(holder.claims as Map<string, string>).get("role") === "admin"
+								) {
+									yield* _.allow("read", Bot)
+								}
+							}),
+						),
+				})
+				// A map is `{}` as JSON text, so the two principals have one text.
+				const exit = yield* Effect.gen(function* () {
+					yield* Effect.provideService(
+						ClaimsAuth.check({ action: "read", resource: aliceBot }),
+						CurrentClaims,
+						{ claims: new Map([["role", "admin"]]) },
+					)
+					yield* Effect.provideService(
+						ClaimsAuth.check({ action: "read", resource: aliceBot }),
+						CurrentClaims,
+						{ claims: new Map([["role", "guest"]]) },
+					)
+				}).pipe(Effect.provide(layer), Effect.exit)
+				assert.strictEqual(failureTag(exit), "Forbidden")
+			}),
+	)
+
 	it.effect("loads the policy again after invalidate", () =>
 		Effect.gen(function* () {
 			const { loads } = yield* run(
