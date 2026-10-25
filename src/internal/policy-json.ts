@@ -364,13 +364,29 @@ const readTree = (
 	budget: Json.Budget,
 	// The rules of one decode. The list belongs to that decode.
 	rules: Array<RuleInput>,
-): ((part: TreePart) => Plan) =>
-	Trampoline.adaptive<TreePart, Plan>((R, child) => (part, depth) => {
+): ((part: TreePart) => Plan) => {
+	// The nodes and rules of the tree that the walk has read. A tree with more
+	// of them than `policyNodes` does not load, so the walk stops at the first
+	// one past it, and it does not read the rest of a very large input. The
+	// count belongs to one decode.
+	const count = { nodes: 0 }
+	const counted = (more: number, at: Place.Place | undefined): void => {
+		count.nodes += more
+		const most = budget.limits.policyNodes
+		if (count.nodes > most) {
+			throw Json.problemAt(
+				at,
+				`A policy tree has more than ${String(most)} nodes. The most is ${String(most)}.`,
+			)
+		}
+	}
+	return Trampoline.adaptive<TreePart, Plan>((R, child) => (part, depth) => {
 		const { input, at } = part
 		if (typeof input !== "object" || input === null) {
 			throw Json.problemAt(at, "A node of a policy must be an object")
 		}
 		Json.spend(budget, 1, at)
+		counted(1, at)
 		const below = (value: unknown, ...parts: ReadonlyArray<PropertyKey>) =>
 			child({ input: value, at: Place.at(at, ...parts) }, depth + 1)
 		const tag = Json.read(input, "_tag", at)
@@ -383,8 +399,10 @@ const readTree = (
 						`"${algorithm}" is not a combining algorithm`,
 					)
 				}
+				const list = Json.readList(input, "rules", at, budget)
+				counted(list.length, at)
 				const found = Arr.map(
-					Json.readList(input, "rules", at, budget),
+					list,
 					(rule, index) =>
 						rules.push({
 							input: rule,
@@ -436,6 +454,7 @@ const readTree = (
 				throw Json.problemAt(Place.at(at, "_tag"), "The node has no known tag")
 		}
 	})
+}
 
 /** Stops a plan past `policyNodes`, with the message of the nodes. */
 const sized = (budget: Json.Budget, plan: Plan): Plan => {

@@ -67,17 +67,18 @@ const value = <A>(step: Step<A>): A => step as unknown as A
 const step = <A>(value: A): Step<A> => value as unknown as Step<A>
 
 /** Runs each step at once, on the stack. */
+// A step of `direct` is its value, so a function that gives a step gives a
+// value too. The runner passes such a function on with no wrap: a wrap for
+// each item would be a call more for each node of a walk.
 export const direct: Runner = {
 	succeed: step,
 	suspend: (make) => make(),
 	map: (from, f) => step(f(value(from))),
 	flatMap: (from, f) => f(value(from)),
-	forEach: (items, f) =>
-		step(Arr.map(items, (item, index) => value(f(item, index)))),
-	reduce: (items, initial, f) =>
-		step(Arr.reduce(items, initial, (before, item) => value(f(before, item)))),
-	some: (items, f) => step(Arr.some(items, (item) => value(f(item)))),
-	every: (items, f) => step(Arr.every(items, (item) => value(f(item)))),
+	forEach: (items, f) => step(Arr.map(items, f as never)),
+	reduce: (items, initial, f) => step(Arr.reduce(items, initial, f as never)),
+	some: (items, f) => step(Arr.some(items, f as never)),
+	every: (items, f) => step(Arr.every(items, f as never)),
 }
 
 // A step of `loop` is an Effect with no error and no services. A failure of a

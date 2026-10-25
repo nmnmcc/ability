@@ -195,13 +195,25 @@ interface Part {
  * the trampoline for an input of unknown depth, so a deep input does not fill
  * the stack.
  */
-const decoder = (budget: Budget): ((part: Part) => Node) =>
-	Trampoline.adaptive<Part, Node>((R, child) => (part, depth) => {
+const decoder = (budget: Budget): ((part: Part) => Node) => {
+	// The nodes of this condition that the decoder has read. A condition with
+	// more nodes than `conditionNodes` does not load, so the decoder stops at
+	// the first node past it, and it does not read the rest of a very large
+	// input. The count belongs to the decode of one condition.
+	const count = { nodes: 0 }
+	return Trampoline.adaptive<Part, Node>((R, child) => (part, depth) => {
 		const { input, at } = part
 		if (typeof input !== "object" || input === null) {
 			throw problemAt(at, "A condition node must be an object")
 		}
 		spend(budget, 1, at)
+		count.nodes += 1
+		if (count.nodes > budget.limits.conditionNodes) {
+			throw problemAt(
+				at,
+				`A condition has more than ${String(budget.limits.conditionNodes)} nodes and values. The most is ${String(budget.limits.conditionNodes)}.`,
+			)
+		}
 		// A node past a limit, such as a field path with too many parts, is a
 		// problem at its place. The constructor checks the ceilings, and the
 		// decoder checks the limits of the decode.
@@ -307,6 +319,7 @@ const decoder = (budget: Budget): ((part: Part) => Node) =>
 				throw problemAt(Place.at(at, "_tag"), "The node has no known tag")
 		}
 	})
+}
 
 /**
  * Decodes the JSON form of a condition at a path, with the budget of a larger

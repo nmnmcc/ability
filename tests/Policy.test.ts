@@ -464,30 +464,51 @@ describe("Policy", () => {
 		}, 60_000)
 
 		it("does not decode a shared input that would be too large", () => {
+			// A domain with small limits, so the test is short. A decoder stops
+			// at the first node past a limit, so the time grows with the limit,
+			// not with the input.
+			const Small = Domain.make({
+				principal: Caller,
+				resources: [Bot],
+				limits: { policyNodes: 100_000, conditionNodes: 100_000 },
+			})
+			const SmallSchema = Policy.schema(Small)
 			const shared = Arr.reduce(
 				Arr.range(1, 26),
 				{ _tag: "Rules", algorithm: "denyOverrides", rules: [] } as unknown,
 				(inner) => ({ _tag: "All", policies: [inner, inner] }),
 			)
 			const start = Date.now()
-			const exit = Schema.decodeUnknownExit(PolicySchema)(shared)
+			const exit = Schema.decodeUnknownExit(SmallSchema)(shared)
 			assert.isTrue(Exit.isFailure(exit))
 			assert.include(
 				String(Exit.isFailure(exit) ? exit.cause : ""),
-				"The most is 100000",
+				"A policy tree has more than 100000 nodes. The most is 100000.",
 			)
 			const condition = Arr.reduce(
 				Arr.range(1, 30),
 				{ _tag: "True" } as unknown,
 				(inner) => ({ _tag: "And", conditions: [inner, inner] }),
 			)
-			assert.isTrue(
-				Exit.isFailure(Schema.decodeUnknownExit(Condition.schema)(condition)),
+			const conditionExit = Schema.decodeUnknownExit(SmallSchema)({
+				_tag: "Rules",
+				algorithm: "denyOverrides",
+				rules: [
+					{
+						_tag: "Allow",
+						actions: ["read"],
+						resources: ["Bot"],
+						when: condition,
+					},
+				],
+			})
+			assert.isTrue(Exit.isFailure(conditionExit))
+			assert.include(
+				String(Exit.isFailure(conditionExit) ? conditionExit.cause : ""),
+				"A condition has more than 100000 nodes and values. The most is 100000.",
 			)
-			// Each decoder reads up to `jsonNodes` objects before it stops. The
-			// full inputs have more than 10 ** 7 nodes, so a short time shows
-			// that the decoders stop at the limit. A busy machine may need more
-			// than one second for the two reads.
+			// The full inputs have more than 10 ** 7 nodes, so a short time shows
+			// that the decoders stop at the limit.
 			assert.isBelow(Date.now() - start, 3000)
 			const high = Arr.reduce(Arr.range(1, 1001), {} as unknown, (inner) => ({
 				a: inner,
@@ -3842,7 +3863,8 @@ describe("Policy", () => {
 		assert.isTrue(Exit.isFailure(exit))
 		assert.include(
 			String(Exit.isFailure(exit) ? exit.cause : ""),
-			"150001 nodes and values. The most is 100000",
+			// The decoder stops at the first node past the limit.
+			"A condition has more than 100000 nodes and values. The most is 100000.",
 		)
 	})
 
