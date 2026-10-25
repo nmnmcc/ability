@@ -121,7 +121,7 @@ export type ActionOf<D, K extends string> = Resource.Action<ResourceOf<D, K>>
  *
  * @stability stable
  * @category utility types
- * @since 0.4.0
+ * @since 1.0.0
  */
 export type CommonAction<D, K extends string> = (
 	K extends unknown ? (action: ActionOf<D, K>) => void : never
@@ -228,7 +228,7 @@ export const make: <
  *
  * @stability stable
  * @category getters
- * @since 0.4.0
+ * @since 1.0.0
  */
 export const descriptorOf = (
 	domain: Any,

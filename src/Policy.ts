@@ -138,7 +138,7 @@ export type Node = RulesNode | AllNode | AnyNode | FirstOfNode | CeilingNode
  *
  * @stability stable
  * @category models
- * @since 0.4.0
+ * @since 1.0.0
  */
 export type TypedNode<E = never, R = never, O = never, D = any> = (
 	| {
@@ -279,7 +279,7 @@ export type FieldlessTarget<D> = {
  *
  * @stability stable
  * @category models
- * @since 0.5.0
+ * @since 1.0.0
  */
 export type Scope<D, K extends string> = (
 	builder: Condition.Builder<
@@ -869,7 +869,7 @@ const provideOnce = (
  *
  * @stability stable
  * @category services
- * @since 0.4.0
+ * @since 1.0.0
  */
 export const provideContext: {
 	<R>(
@@ -1130,7 +1130,7 @@ const decideOnce = (
  *
  * @stability stable
  * @category predicates
- * @since 0.4.0
+ * @since 1.0.0
  */
 export const fitsKind = (
 	descriptor: Resource.Descriptor,
@@ -1370,7 +1370,7 @@ type Ast = Condition.Ast
  *
  * @stability stable
  * @category models
- * @since 0.4.0
+ * @since 1.0.0
  */
 export interface Residuals<E = never, R = never, O = never, I = unknown> {
 	/** The condition on resource values for which the policy allows. */
@@ -1384,7 +1384,7 @@ export interface Residuals<E = never, R = never, O = never, I = unknown> {
  *
  * @stability stable
  * @category models
- * @since 0.4.0
+ * @since 1.0.0
  */
 export interface AnyKindRequest {
 	readonly principal: object
@@ -1414,7 +1414,7 @@ type Fits<Req, T> = [Req] extends [T] ? unknown : never
  *
  * @stability stable
  * @category utility types
- * @since 0.4.0
+ * @since 1.0.0
  */
 export type ResidualReads<D, K> = Condition.Reads<
 	(
@@ -1973,7 +1973,7 @@ export const residual: {
  *
  * @stability stable
  * @category evaluation
- * @since 0.4.0
+ * @since 1.0.0
  */
 export const residuals: {
 	<const Req extends AnyKindRequest>(
@@ -2004,7 +2004,7 @@ export const residuals: {
  *
  * @stability stable
  * @category models
- * @since 0.5.0
+ * @since 1.0.0
  */
 export type Coverage<
 	E = never,
@@ -2216,7 +2216,7 @@ const coverageAny = (policy: Any, request: ScopedRequest): AnyCoverage => {
  *
  * @stability stable
  * @category evaluation
- * @since 0.5.0
+ * @since 1.0.0
  */
 export const scopeHasValue = (policy: Any, request: ScopedRequest): boolean => {
 	const scoped = scopedResiduals(policy, request)
@@ -2235,7 +2235,7 @@ export const scopeHasValue = (policy: Any, request: ScopedRequest): boolean => {
  *
  * @stability stable
  * @category evaluation
- * @since 0.5.0
+ * @since 1.0.0
  */
 export const scopeIsEmpty = (policy: Any, request: ScopedRequest): boolean => {
 	const scoped = scopedResiduals(policy, request)
@@ -2262,7 +2262,7 @@ export const scopeIsEmpty = (policy: Any, request: ScopedRequest): boolean => {
  *
  * @stability stable
  * @category evaluation
- * @since 0.5.0
+ * @since 1.0.0
  */
 export const coverage: {
 	<const Req extends AnyKindRequest>(

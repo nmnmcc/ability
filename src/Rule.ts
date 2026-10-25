@@ -54,7 +54,7 @@ export interface Rule<E = never, R = never, O = never, D = any, I = unknown>
  *
  * @stability stable
  * @category models
- * @since 0.4.0
+ * @since 1.0.0
  */
 export interface Shape<E = never, R = never, O = never, I = unknown> {
 	readonly _tag: "Allow" | "Deny"
@@ -160,7 +160,7 @@ export type ActionFor<D, K> =
  *
  * @stability stable
  * @category utility types
- * @since 0.4.0
+ * @since 1.0.0
  */
 export type TargetOf<Res> = Res extends ReadonlyArray<infer X> ? X : Res
 
@@ -173,7 +173,7 @@ export type TargetOf<Res> = Res extends ReadonlyArray<infer X> ? X : Res
  *
  * @stability stable
  * @category utility types
- * @since 0.4.0
+ * @since 1.0.0
  */
 export type ActionForTargets<D, Res> = (
 	Res extends ReadonlyArray<infer X>
@@ -228,7 +228,7 @@ export type FieldFor<D, K> =
  *
  * @stability stable
  * @category models
- * @since 0.4.0
+ * @since 1.0.0
  */
 export type ConditionFor<D, K> = Condition.Condition<
 	any,
@@ -321,7 +321,7 @@ class RuleData extends Data.Class<Shape<unknown, unknown, unknown, any>> {
  *
  * @stability stable
  * @category constructors
- * @since 0.4.0
+ * @since 1.0.0
  */
 export const make = <E = never, R = never, O = never, I = unknown>(
 	data: Shape<E, R, O, I>,
@@ -355,7 +355,7 @@ const kindName = (target: unknown): string =>
  *
  * @stability stable
  * @category getters
- * @since 0.4.0
+ * @since 1.0.0
  */
 export const domainOf = (rule: Any): Domain.Any | undefined => rule.domain
 
@@ -562,7 +562,7 @@ export const matchesField = (pattern: string, field: string): boolean => {
  *
  * @stability stable
  * @category predicates
- * @since 0.4.0
+ * @since 1.0.0
  */
 export const matchesInside = (pattern: string, field: string): boolean =>
 	// The name of a part may be empty, as a key of a record may be. So a match
@@ -645,7 +645,7 @@ const partLists = (pattern: string): ReadonlyArray<ReadonlyArray<string>> =>
  *
  * @stability stable
  * @category predicates
- * @since 0.4.0
+ * @since 1.0.0
  */
 export const matchesTarget = (
 	rule: Any,

@@ -53,7 +53,7 @@ import * as Resource from "./Resource.ts"
  *
  * @stability unstable
  * @category models
- * @since 0.5.0
+ * @since 1.0.0
  */
 export type Params = Readonly<Record<string, string | undefined>>
 
@@ -160,7 +160,7 @@ export const requires: <
  *
  * @stability unstable
  * @category constructors
- * @since 0.5.0
+ * @since 1.0.0
  */
 export const lists: <
 	A extends { readonly domain: Domain.Any },

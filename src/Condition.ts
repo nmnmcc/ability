@@ -274,7 +274,7 @@ export interface Variance<E, R, O> {
  *
  * @stability stable
  * @category models
- * @since 0.4.0
+ * @since 1.0.0
  */
 export interface Reads<V, P> {
 	readonly value: V
@@ -286,7 +286,7 @@ export interface Reads<V, P> {
  *
  * @stability stable
  * @category models
- * @since 0.4.0
+ * @since 1.0.0
  */
 export interface Marks<E, R, O, I> {
 	readonly "~Condition": Variance<E, R, O>
@@ -299,7 +299,7 @@ export interface Marks<E, R, O, I> {
  *
  * @stability stable
  * @category models
- * @since 0.4.0
+ * @since 1.0.0
  */
 export interface AndCondition<E, R, O, I> extends Marks<E, R, O, I> {
 	readonly _tag: "And"
@@ -311,7 +311,7 @@ export interface AndCondition<E, R, O, I> extends Marks<E, R, O, I> {
  *
  * @stability stable
  * @category models
- * @since 0.4.0
+ * @since 1.0.0
  */
 export interface OrCondition<E, R, O, I> extends Marks<E, R, O, I> {
 	readonly _tag: "Or"
@@ -323,7 +323,7 @@ export interface OrCondition<E, R, O, I> extends Marks<E, R, O, I> {
  *
  * @stability stable
  * @category models
- * @since 0.4.0
+ * @since 1.0.0
  */
 export interface NotCondition<E, R, O, I> extends Marks<E, R, O, I> {
 	readonly _tag: "Not"
@@ -337,7 +337,7 @@ export interface NotCondition<E, R, O, I> extends Marks<E, R, O, I> {
  *
  * @stability stable
  * @category models
- * @since 0.4.0
+ * @since 1.0.0
  */
 export interface PredicateCondition<E, R, O, I> extends Marks<E, R, O, I> {
 	readonly _tag: "Predicate"
@@ -358,7 +358,7 @@ export interface PredicateCondition<E, R, O, I> extends Marks<E, R, O, I> {
  *
  * @stability stable
  * @category models
- * @since 0.5.0
+ * @since 1.0.0
  */
 export type PredicateRun<E, R, I> = ((
 	value: never,
@@ -433,7 +433,7 @@ export type Services<C> = C extends {
  *
  * @stability stable
  * @category utility types
- * @since 0.4.0
+ * @since 1.0.0
  */
 export type ReadsOf<C> = [C] extends [
 	{ readonly "~Reads": (reads: infer I) => void },
@@ -448,7 +448,7 @@ export type ReadsOf<C> = [C] extends [
  *
  * @stability stable
  * @category utility types
- * @since 0.5.0
+ * @since 1.0.0
  */
 export type Checked<C> = [NotChecked<C>] extends [never] ? unknown : never
 
@@ -547,7 +547,7 @@ export type FieldPath<T> = [T] extends [object]
  *
  * @stability stable
  * @category utility types
- * @since 0.5.0
+ * @since 1.0.0
  */
 export type FieldSelector<T> = [T] extends [object]
 	? FieldPathInternal<T, 4, true>
@@ -562,7 +562,7 @@ export type FieldSelector<T> = [T] extends [object]
  *
  * @stability stable
  * @category utility types
- * @since 0.5.0
+ * @since 1.0.0
  */
 export type FieldValue<Data, F extends string> = (
 	Data extends unknown
@@ -627,7 +627,7 @@ type OrderedPath<T> = {
  *
  * @stability stable
  * @category models
- * @since 0.4.0
+ * @since 1.0.0
  */
 export type Test<Value, P = unknown> = Condition<
 	never,
@@ -876,7 +876,7 @@ export const and: <const Cs extends ReadonlyArray<Any>>(
  *
  * @stability stable
  * @category combinators
- * @since 0.5.0
+ * @since 1.0.0
  */
 export const andAll: <C extends Any>(
 	conditions: ReadonlyArray<C & Checked<C>>,
@@ -888,7 +888,7 @@ export const andAll: <C extends Any>(
  *
  * @stability stable
  * @category combinators
- * @since 0.5.0
+ * @since 1.0.0
  */
 export const orAll: <C extends Any>(
 	conditions: ReadonlyArray<C & Checked<C>>,
@@ -1069,7 +1069,7 @@ const testUnder = (prefix: ReadonlyArray<Operand>, input: Input): boolean => {
  *
  * @stability stable
  * @category predicates
- * @since 0.4.0
+ * @since 1.0.0
  */
 export const hasPredicate = (condition: Ast): boolean =>
 	hasPredicateIn(condition, new Map())
@@ -1146,7 +1146,7 @@ const provideAst = (
  *
  * @stability stable
  * @category services
- * @since 0.4.0
+ * @since 1.0.0
  */
 export const provideContext: {
 	<R>(
@@ -1581,7 +1581,7 @@ export const simplify: <E, R, O, I>(
  *
  * @stability stable
  * @category evaluation
- * @since 0.4.0
+ * @since 1.0.0
  */
 export const simplifier = (): (<E, R, O, I>(
 	condition: Condition<E, R, O, I>,
@@ -1919,7 +1919,7 @@ const fieldsIn = (
  *
  * @stability stable
  * @category models
- * @since 0.5.0
+ * @since 1.0.0
  */
 export interface Example {
 	readonly [field: string]: unknown
@@ -1935,7 +1935,7 @@ export interface Example {
  *
  * @stability stable
  * @category models
- * @since 0.5.0
+ * @since 1.0.0
  */
 export type Satisfiability = Data.TaggedEnum<{
 	Satisfiable: { readonly example: Example }
@@ -1950,7 +1950,7 @@ const satisfiability = Data.taggedEnum<Satisfiability>()
  *
  * @stability stable
  * @category models
- * @since 0.5.0
+ * @since 1.0.0
  */
 export interface SatisfiableOptions {
 	/**
@@ -2572,7 +2572,7 @@ const satisfiableAst = (
  *
  * @stability stable
  * @category evaluation
- * @since 0.5.0
+ * @since 1.0.0
  */
 export const satisfiable: {
 	(options?: SatisfiableOptions): (condition: Any) => Satisfiability
@@ -2620,7 +2620,7 @@ const jsonIn = (ast: Ast, done: Map<Ast, unknown>): unknown =>
  *
  * @stability stable
  * @category conversions
- * @since 0.5.0
+ * @since 1.0.0
  */
 export const toJsonValue = (condition: Ast): unknown =>
 	jsonIn(condition, new Map())
@@ -2685,7 +2685,7 @@ const OperandSchema = Schema.Union([
  *
  * @stability stable
  * @category models
- * @since 0.5.0
+ * @since 1.0.0
  */
 // `any` for what it reads: the field is contravariant, so no other type both
 // takes every condition and fits every rule.
@@ -2967,7 +2967,7 @@ const isPlainNode = (
  *
  * @stability stable
  * @category guards
- * @since 0.5.0
+ * @since 1.0.0
  */
 export const isAst = (u: unknown): u is Ast =>
 	isPlainNode(u, new Map(), 0, true)

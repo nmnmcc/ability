@@ -230,7 +230,7 @@ const classPrototype = (ast: SchemaAST.Declaration): object | undefined => {
  *
  * @stability stable
  * @category predicates
- * @since 0.5.0
+ * @since 1.0.0
  */
 export const hasGetter = (schema: unknown, path: string): boolean =>
 	!isTooLong(path) &&
@@ -262,7 +262,7 @@ const isTooLong = (path: string): boolean =>
  *
  * @stability stable
  * @category predicates
- * @since 0.5.0
+ * @since 1.0.0
  */
 export const hasMatchingGetter = (
 	schema: unknown,
@@ -544,7 +544,7 @@ const walkFields = (
  *
  * @stability stable
  * @category getters
- * @since 0.4.0
+ * @since 1.0.0
  */
 export const fieldPaths = (schema: Schema.Top): ReadonlyArray<string> =>
 	Arr.dedupe(Arr.map(walkFields(schema.ast), (visit) => visit.path))
@@ -618,7 +618,7 @@ const isPlainScalar = (ast: SchemaAST.AST): boolean => {
  *
  * @stability stable
  * @category predicates
- * @since 0.5.0
+ * @since 1.0.0
  */
 export const isPlainField = (schema: Schema.Top, path: string): boolean =>
 	!isTooLong(path) && plainAt(schema.ast, path.split("."))
@@ -653,7 +653,7 @@ const plainAt = (ast: SchemaAST.AST, names: ReadonlyArray<string>): boolean => {
  *
  * @stability stable
  * @category predicates
- * @since 0.4.0
+ * @since 1.0.0
  */
 export const hasPath = (schema: Schema.Top, path: string): boolean =>
 	!isTooLong(path) && resolves(schema.ast, path.split("."), 0, new Map())
@@ -740,7 +740,7 @@ const resolves = (
  *
  * @stability stable
  * @category predicates
- * @since 0.5.0
+ * @since 1.0.0
  */
 export const hasMatchingPath = (
 	schema: Schema.Top,
@@ -1081,7 +1081,7 @@ const sampleKeys = (ast: SchemaAST.AST): ReadonlyArray<string> => {
  *
  * @stability stable
  * @category predicates
- * @since 0.5.0
+ * @since 1.0.0
  */
 export const hasValue = (schema: Schema.Top): boolean =>
 	isSurelyInhabited(schema.ast, new Set())
@@ -1226,7 +1226,7 @@ const inhabitedDeclarations = HashSet.make(
  *
  * @stability stable
  * @category predicates
- * @since 0.5.0
+ * @since 1.0.0
  */
 export const hasNoValue = (schema: Schema.Top): boolean =>
 	isEmptyType(schema.ast, new Set())
@@ -1268,7 +1268,7 @@ const isEmptyType = (
  *
  * @stability stable
  * @category models
- * @since 0.5.0
+ * @since 1.0.0
  */
 export interface FieldDomain {
 	/** The field may be `null` or missing. */
@@ -1305,7 +1305,7 @@ const objectDomain: FieldDomain = { ...emptyDomain, object: true }
  *
  * @stability stable
  * @category constants
- * @since 0.5.0
+ * @since 1.0.0
  */
 export const anyDomain: FieldDomain = {
 	null: true,
@@ -1507,7 +1507,7 @@ const domainAt = (
  *
  * @stability stable
  * @category getters
- * @since 0.5.0
+ * @since 1.0.0
  */
 export const domainOf = (schema: Schema.Top, path: string): FieldDomain =>
 	// No cache here: a search keeps the cells of each field for itself. A path
@@ -1797,7 +1797,7 @@ export const descriptor = (resource: Any): Descriptor => resource.descriptor
  *
  * @stability stable
  * @category getters
- * @since 0.4.0
+ * @since 1.0.0
  */
 export const kindOf = (value: unknown): string | undefined =>
 	hasProperty(value, "_tag") && typeof value._tag === "string"
