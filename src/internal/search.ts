@@ -317,28 +317,35 @@ const fix = (root: Node, field: string, value: unknown, search: Search): Node =>
 	})
 
 /** The fields of the tests of a condition, once for each test. */
-const testedFields = (root: Node): ReadonlyArray<string> =>
+const testedFields = (root: Node): ReadonlyArray<string> => {
+	// The fields go into one list, in order. A walk that joined the lists of
+	// the children would copy the list of a deep condition at each level. The
+	// list belongs to this walk.
+	const fields: Array<string> = []
 	Trampoline.run(root.depth, (R) => {
-		const go = (node: Node): Trampoline.Step<ReadonlyArray<string>> => {
+		const go = (node: Node): Trampoline.Step<undefined> => {
 			switch (node._tag) {
 				case "Compare":
 				case "In":
 				case "Exists":
-					return R.succeed([node.field])
+					fields.push(node.field)
+					return R.succeed(undefined)
 				case "And":
 				case "Or":
 					return R.map(
 						R.forEach(node.conditions, (child) => R.suspend(() => go(child))),
-						Arr.flatten,
+						() => undefined,
 					)
 				case "Not":
 					return R.suspend(() => go(node.condition))
 				default:
-					return R.succeed([])
+					return R.succeed(undefined)
 			}
 		}
 		return go(root)
 	})
+	return fields
+}
 
 /**
  * Picks the next field to split on. A field comes before the fields below it,
@@ -486,20 +493,29 @@ const exampleOf = (
  * belongs to one search.
  */
 const constantsOf = (node: Node): Map<string, Set<Nodes.Scalar>> => {
-	type Pair = readonly [string, ReadonlyArray<Nodes.Scalar>]
+	// The constants go into one map as the walk finds them. A walk that
+	// joined the lists of the children would copy the list of a deep
+	// condition at each level. The map belongs to one search.
+	const all = new Map<string, Set<Nodes.Scalar>>()
+	const add = (field: string, values: ReadonlyArray<Nodes.Scalar>): void => {
+		const known = all.get(field) ?? new Set<Nodes.Scalar>()
+		Arr.forEach(values, (value) => known.add(value))
+		all.set(field, known)
+	}
 	// The walk takes the steps of a trampoline, so a deep condition does not
 	// fill the stack.
-	const pairs = Trampoline.run(node.depth, (R) => {
-		const go = (current: Node): Trampoline.Step<ReadonlyArray<Pair>> => {
+	Trampoline.run(node.depth, (R) => {
+		const go = (current: Node): Trampoline.Step<undefined> => {
 			switch (current._tag) {
 				case "Compare":
-					return R.succeed([[current.field, [literalOf(current.value)]]])
+					add(current.field, [literalOf(current.value)])
+					return R.succeed(undefined)
 				case "In":
-					return R.succeed([
-						[current.field, Arr.map(current.values, literalOf)],
-					])
+					add(current.field, Arr.map(current.values, literalOf))
+					return R.succeed(undefined)
 				case "Exists":
-					return R.succeed([[current.field, []]])
+					add(current.field, [])
+					return R.succeed(undefined)
 				case "Under":
 					throw new Error(
 						"Condition.satisfiable needs a condition with no Under nodes. Call Condition.partial first.",
@@ -510,21 +526,15 @@ const constantsOf = (node: Node): Map<string, Set<Nodes.Scalar>> => {
 						R.forEach(current.conditions, (child) =>
 							R.suspend(() => go(child)),
 						),
-						Arr.flatten,
+						() => undefined,
 					)
 				case "Not":
 					return R.suspend(() => go(current.condition))
 				default:
-					return R.succeed([])
+					return R.succeed(undefined)
 			}
 		}
 		return go(node)
-	})
-	const all = new Map<string, Set<Nodes.Scalar>>()
-	Arr.forEach(pairs, ([field, values]) => {
-		const known = all.get(field) ?? new Set<Nodes.Scalar>()
-		Arr.forEach(values, (value) => known.add(value))
-		all.set(field, known)
 	})
 	return all
 }

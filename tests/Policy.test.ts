@@ -4317,6 +4317,25 @@ describe("Policy", () => {
 		)
 	})
 
+	it("collects the rules of a deep tree with a rule at each level in a short time", () => {
+		const leaf = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot)
+		})
+		const deep = Arr.reduce(
+			Arr.range(1, 32_000),
+			leaf as Policy.Policy<typeof App>,
+			(previous) => Policy.all([leaf, previous]),
+		)
+		const start = Date.now()
+		assert.deepStrictEqual(
+			Policy.residual(deep, { principal: alice, action: "read", kind: "Bot" }),
+			Condition.always,
+		)
+		// A walk that joined the lists of the rules of the children at each
+		// node would copy 32,000 rules about 32,000 times.
+		assert.isBelow(Date.now() - start, 3000)
+	})
+
 	it("makes and walks a deep policy tree without filling the stack", () => {
 		const one = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot)

@@ -196,29 +196,35 @@ export const isNode = (u: unknown): u is Node => u instanceof Base
  * into the condition of each rule takes the rules from this list first, so it
  * does not go down the levels of the tree and of a condition at once.
  */
-export const rulesOf = (root: Node): ReadonlyArray<Rule.Rule> =>
+export const rulesOf = (root: Node): ReadonlyArray<Rule.Rule> => {
+	// The rules go into one list, in order. A walk that joined the lists of
+	// the children at each node would copy the list of a deep tree at each
+	// level. The list belongs to this walk.
+	const rules: Array<Rule.Rule> = []
 	// The walk takes the steps of a trampoline, so a deep tree does not fill
 	// the stack.
 	Trampoline.run(root.depth, (R) => {
-		const go = (node: Node): Trampoline.Step<ReadonlyArray<Rule.Rule>> => {
+		const children = (nodes: ReadonlyArray<Node>) =>
+			R.map(
+				R.forEach(nodes, (child) => R.suspend(() => go(child))),
+				() => undefined,
+			)
+		const go = (node: Node): Trampoline.Step<undefined> => {
 			switch (node._tag) {
 				case "Rules":
-					return R.succeed(node.rules)
+					Arr.forEach(node.rules, (rule) => {
+						rules.push(rule)
+					})
+					return R.succeed(undefined)
 				case "All":
 				case "Any":
 				case "FirstOf":
-					return R.map(
-						R.forEach(node.policies, (child) => R.suspend(() => go(child))),
-						Arr.flatten,
-					)
+					return children(node.policies)
 				case "Ceiling":
-					return R.map(
-						R.forEach([node.cap, node.policy], (child) =>
-							R.suspend(() => go(child)),
-						),
-						Arr.flatten,
-					)
+					return children([node.cap, node.policy])
 			}
 		}
 		return go(root)
 	})
+	return rules
+}

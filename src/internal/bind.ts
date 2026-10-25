@@ -815,48 +815,46 @@ export const treeIssues = (
 	// shares the path of its parent. The tree may be the JSON form, with no
 	// depth that a node knows, so the walk is a walk of the trampoline for an
 	// input of an unknown depth.
-	type Found = Issue | readonly [RuleData, Place.Place]
+	// The rules go into one list, in order: a walk that joined the lists of
+	// the children at each node would copy the list of a deep tree at each
+	// level. The list belongs to this walk.
+	const found: Array<readonly [RuleData, Place.Place]> = []
 	const rulesOf = Trampoline.adaptive<
 		{ readonly node: TreeNode; readonly at: At },
-		ReadonlyArray<Found>
+		undefined
 	>((R, child) => ({ node, at }, level) => {
+		const below = (
+			parts: ReadonlyArray<{ readonly node: TreeNode; readonly at: At }>,
+		) =>
+			R.map(
+				R.forEach(parts, (part) => child(part, level + 1)),
+				() => undefined,
+			)
 		switch (node._tag) {
 			case "Rules":
-				return R.succeed(
-					Arr.map(
-						node.rules,
-						(rule, index) => [rule, Place.at(at, "rules", index)] as const,
-					),
-				)
+				Arr.forEach(node.rules, (rule, index) => {
+					found.push([rule, Place.at(at, "rules", index)])
+				})
+				return R.succeed(undefined)
 			case "All":
 			case "Any":
 			case "FirstOf":
-				return R.map(
-					R.forEach(node.policies, (inner, index) =>
-						child(
-							{ node: inner, at: Place.at(at, "policies", index) },
-							level + 1,
-						),
-					),
-					Arr.flatten,
+				return below(
+					Arr.map(node.policies, (inner, index) => ({
+						node: inner,
+						at: Place.at(at, "policies", index),
+					})),
 				)
 			case "Ceiling":
-				return R.map(
-					R.forEach(
-						[
-							{ node: node.cap, at: Place.at(at, "cap") },
-							{ node: node.policy, at: Place.at(at, "policy") },
-						],
-						(part) => child(part, level + 1),
-					),
-					Arr.flatten,
-				)
+				return below([
+					{ node: node.cap, at: Place.at(at, "cap") },
+					{ node: node.policy, at: Place.at(at, "policy") },
+				])
 		}
 	})
+	rulesOf({ node: root, at: undefined })
 	const memo = makeMemo(domain.limits)
-	return Arr.flatMap(rulesOf({ node: root, at: undefined }), (found) =>
-		Array.isArray(found)
-			? ruleIssues(domain, found[0], found[1], memo)
-			: [found as Issue],
+	return Arr.flatMap(found, ([rule, place]) =>
+		ruleIssues(domain, rule, place, memo),
 	)
 }

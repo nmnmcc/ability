@@ -655,25 +655,29 @@ export const provide = (node: Node, context: Context.Context<never>): Node =>
 
 /** The fields that a condition tests, in the order that they first come. */
 export const fields = (node: Node): ReadonlyArray<string> => {
-	const all = Trampoline.run(node.depth, (R) => {
-		const go = (current: Node): Step<ReadonlyArray<string>> => {
+	// The fields go into one native `Set`, in order, as in `dedupe`: a field
+	// of a condition that is not bound to a domain may be any string. A walk
+	// that joined the lists of the children would copy the list of a deep
+	// condition at each level. The set belongs to this walk.
+	const seen = new Set<string>()
+	Trampoline.run(node.depth, (R) => {
+		const go = (current: Node): Step<undefined> => {
 			switch (current._tag) {
 				case "Compare":
 				case "In":
 				case "Exists":
-					return R.succeed([current.field])
+					seen.add(current.field)
+					return R.succeed(undefined)
 				case "And":
 				case "Or":
-					return R.map(eachChild(R, current.conditions, go), Arr.flatten)
+					return R.map(eachChild(R, current.conditions, go), () => undefined)
 				case "Not":
 					return R.suspend(() => go(current.condition))
 				default:
-					return R.succeed([])
+					return R.succeed(undefined)
 			}
 		}
 		return go(node)
 	})
-	// A native `Set`, as in `dedupe`: a field of a condition that is not bound
-	// to a domain may be any string.
-	return Array.from(new Set(all))
+	return Array.from(seen)
 }
