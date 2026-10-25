@@ -451,9 +451,12 @@ const branchOf = (place: Place, count: { size: number }): Branch => {
 				values.length > 0 ||
 				Arr.some(properties, (property) => SchemaAST.isOptional(property.type)),
 			// A struct without the name may still have it as an extra field,
-			// with any value: only a decode takes extra fields away.
+			// with any value: only a decode takes extra fields away. A value
+			// that may be any object, as one of `Schema.Unknown` may, may have
+			// the name with any value too.
 			top:
 				place.top ||
+				valueKinds.object ||
 				Arr.some(structs, (struct) => propertyOf(struct, name) === undefined),
 		}
 		return [name, branchOf(below, count)] as const
@@ -475,7 +478,7 @@ const branchOf = (place: Place, count: { size: number }): Branch => {
 			),
 			// A record may not have a given key.
 			missing: true,
-			top: place.top || records.length < structs.length,
+			top: place.top || valueKinds.object || records.length < structs.length,
 		},
 		count,
 	)

@@ -1784,6 +1784,41 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 5000)
 	})
 
+	it("lets a name below a union branch of any value hold any value", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: {
+				info: Schema.Union([
+					Schema.Struct({ owner: Schema.Literal("public") }),
+					Schema.Unknown,
+				]),
+			},
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = rulesOf(Notes, [
+			Policy.rule({
+				_tag: "Allow",
+				actions: ["read"],
+				resources: ["Note"],
+				when: Condition.builder<
+					{ readonly info: { readonly owner: string | null } },
+					unknown,
+					unknown
+				>().in("info.owner", ["public", null]),
+			}),
+		])
+		// `{ info: { owner: "secret" } }` is a value of the Schema, and the
+		// policy does not allow it.
+		assert.notStrictEqual(
+			Policy.coverage(policy, {
+				principal: alice,
+				action: "read",
+				kind: "Note",
+			})._tag,
+			"All",
+		)
+	})
+
 	it("lets a name that a union branch does not have hold any value", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],
