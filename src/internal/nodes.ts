@@ -152,6 +152,15 @@ const factsOf = (children: ReadonlyArray<Node>): Facts => {
 
 /** The base of every node. It keeps the facts. */
 abstract class Base extends Data.Class {
+	/**
+	 * The JSON form of the node, for `JSON.stringify`. A number that JSON can
+	 * not hold, as `Infinity`, becomes an object that no decoder takes, in
+	 * place of `null`, which would change the test.
+	 */
+	toJSON(): unknown {
+		return toJson(this as unknown as Node)
+	}
+
 	readonly #facts: Facts
 
 	constructor(props: object, facts: Facts) {
@@ -325,6 +334,54 @@ export const runOf = (node: Predicate): Run => node.run as Run
 /** A node of a condition. */
 export type Node =
 	True | False | Compare | In | Exists | Under | And | Or | Not | Predicate
+
+const operandJson = (operand: Operand): unknown =>
+	operand._tag === "Literal"
+		? {
+				_tag: "Literal",
+				// JSON has no `Infinity`, `-Infinity` or `NaN`. Such a number
+				// becomes an object that the decoder does not take.
+				value:
+					typeof operand.value === "number" && !Number.isFinite(operand.value)
+						? { nonFinite: String(operand.value) }
+						: operand.value,
+			}
+		: { _tag: "Principal", path: operand.path }
+
+/** Gives the JSON form of a condition with no predicate. */
+export const toJson = (node: Node): unknown => {
+	switch (node._tag) {
+		case "True":
+		case "False":
+			return { _tag: node._tag }
+		case "Compare":
+			return {
+				_tag: "Compare",
+				op: node.op,
+				field: node.field,
+				value: operandJson(node.value),
+			}
+		case "In":
+			return {
+				_tag: "In",
+				field: node.field,
+				values: Arr.map(node.values, operandJson),
+			}
+		case "Exists":
+			return { _tag: "Exists", field: node.field }
+		case "Under":
+			return { _tag: "Under", prefix: Arr.map(node.prefix, operandJson) }
+		case "And":
+		case "Or":
+			return { _tag: node._tag, conditions: Arr.map(node.conditions, toJson) }
+		case "Not":
+			return { _tag: "Not", condition: toJson(node.condition) }
+		case "Predicate":
+			throw new Error(
+				`The predicate "${node.name}" can not become JSON. A condition with a predicate has no JSON form.`,
+			)
+	}
+}
 
 /** Tests if a value is a node. Only a constructor of a node makes one. */
 export const isNode = (u: unknown): u is Node => u instanceof Base

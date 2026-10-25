@@ -268,6 +268,18 @@ describe("Condition", () => {
 		assert.isBelow(Date.now() - start, 100)
 	})
 
+	it("keeps a number that JSON can not hold out of the JSON text", () => {
+		const condition = Condition.builder<
+			{ readonly n: number | null },
+			unknown,
+			unknown
+		>().eq("n", Infinity)
+		const exit = Schema.decodeUnknownExit(Condition.schema)(
+			JSON.parse(JSON.stringify(condition)),
+		)
+		assert.isTrue(Exit.isFailure(exit))
+	})
+
 	it("decodes an empty list as an empty list", () => {
 		const decode = Schema.decodeUnknownSync(Condition.schema)
 		assert.isTrue(

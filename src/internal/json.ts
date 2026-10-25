@@ -16,53 +16,8 @@ import { readPart } from "./read.ts"
 
 type Node = Nodes.Node
 
-const operandJson = (operand: Nodes.Operand): unknown =>
-	operand._tag === "Literal"
-		? {
-				_tag: "Literal",
-				// JSON has no `Infinity`, `-Infinity` or `NaN`. Such a number
-				// becomes an object that the decoder does not take.
-				value:
-					typeof operand.value === "number" && !Number.isFinite(operand.value)
-						? { nonFinite: String(operand.value) }
-						: operand.value,
-			}
-		: { _tag: "Principal", path: operand.path }
-
-/** Gives the JSON form of a condition with no predicate. */
-export const toJson = (node: Node): unknown => {
-	switch (node._tag) {
-		case "True":
-		case "False":
-			return { _tag: node._tag }
-		case "Compare":
-			return {
-				_tag: "Compare",
-				op: node.op,
-				field: node.field,
-				value: operandJson(node.value),
-			}
-		case "In":
-			return {
-				_tag: "In",
-				field: node.field,
-				values: Arr.map(node.values, operandJson),
-			}
-		case "Exists":
-			return { _tag: "Exists", field: node.field }
-		case "Under":
-			return { _tag: "Under", prefix: Arr.map(node.prefix, operandJson) }
-		case "And":
-		case "Or":
-			return { _tag: node._tag, conditions: Arr.map(node.conditions, toJson) }
-		case "Not":
-			return { _tag: "Not", condition: toJson(node.condition) }
-		case "Predicate":
-			throw new Error(
-				`The predicate "${node.name}" can not become JSON. A condition with a predicate has no JSON form.`,
-			)
-	}
-}
+/** Gives the JSON form of a condition with no predicate. See `Nodes.toJson`. */
+export const toJson = (node: Node): unknown => Nodes.toJson(node)
 
 /** A problem of an input, with the path of the problem. */
 export class Problem extends Data.TaggedError("Problem")<{
