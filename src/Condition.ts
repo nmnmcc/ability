@@ -734,21 +734,26 @@ export type SelectPath<T, F extends string> = PathCheck<T, F, SelectRules>
  */
 export type NamePath<T, F extends string> = PathCheck<T, F, NameRules>
 
-/** A path that a condition may read, with an ordered value. */
-type OrderedReadPath<T, F extends string> =
-	ReadPath<T, F> extends F
-		? Exclude<PathValue<T, F>, null> extends number | string
-			? F
-			: never
-		: ReadPath<T, F>
+/**
+ * A path that a condition may read, with an ordered value. The path that is
+ * given must be one that {@link ReadPath} takes: a path of the type `string`
+ * is not, since the names that `ReadPath` gives for it fit `string` too.
+ */
+type OrderedReadPath<T, F extends string> = [F] extends [ReadPath<T, F>]
+	? Exclude<PathValue<T, F>, null> extends number | string
+		? F
+		: never
+	: ReadPath<T, F>
 
-/** A path that a condition may read, with a scalar value. */
-type ScalarReadPath<T, F extends string> =
-	ReadPath<T, F> extends F
-		? PathValue<T, F> extends Scalar
-			? F
-			: never
-		: ReadPath<T, F>
+/**
+ * A path that a condition may read, with a scalar value. See
+ * {@link OrderedReadPath}.
+ */
+type ScalarReadPath<T, F extends string> = [F] extends [ReadPath<T, F>]
+	? PathValue<T, F> extends Scalar
+		? F
+		: never
+	: ReadPath<T, F>
 
 /**
  * A value for a field of type `A`: a fixed value, or a field of the principal

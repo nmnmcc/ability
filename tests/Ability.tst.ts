@@ -179,6 +179,23 @@ describe("Rule", () => {
 		expect($.eq).type.not.toBeCallableWith("level", $.principal("counts.1"))
 	})
 
+	it("does not take a path of the type string", () => {
+		class Owner extends Schema.Class<Owner>("WidePathOwner")({
+			id: Schema.String,
+		}) {}
+		const Counted = Resource.make("Counted", {
+			actions: ["read"],
+			fields: { n: Schema.Finite },
+		})
+		const $ = Condition.builder<Resource.Data<typeof Counted>, unknown, Owner>()
+		const path: string = "id"
+		expect($.principal).type.toBeCallableWith("id")
+		expect($.principal).type.not.toBeCallableWith(path)
+		expect($.eq).type.not.toBeCallableWith(path, 1)
+		expect($.lt).type.not.toBeCallableWith(path, 1)
+		expect($.exists).type.not.toBeCallableWith(path)
+	})
+
 	it("does not read below a field that may hold a list or a date", () => {
 		const Item = Resource.make("MixedItem", {
 			actions: ["read"],
