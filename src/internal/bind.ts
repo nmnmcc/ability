@@ -801,12 +801,16 @@ export const ruleIssues = (
 			? [
 					{
 						path: Place.pathOf(at),
-						issue: `The policy takes more than ${String(memo.limits.searchSteps)} steps to check: its field patterns, and the fields and values of its tests on each resource. The most is ${String(memo.limits.searchSteps)}.`,
+						issue: workIssue(memo.limits.searchSteps),
 					},
 				]
 			: []),
 	]
 }
+
+/** The issue of a policy past the limit of the work of its checks. */
+export const workIssue = (most: number): string =>
+	`The policy takes more than ${String(most)} steps to check: its field patterns, and the fields and values of its tests on each resource. The most is ${String(most)}.`
 
 /** The JSON form of a policy tree, or a policy tree, as the binding reads it. */
 type TreeNode =
@@ -821,11 +825,17 @@ type TreeNode =
 			readonly policy: TreeNode
 	  }
 
-/** Checks each rule of a policy tree against a domain. */
+/**
+ * Checks each rule of a policy tree against a domain. It gives the issues,
+ * and the steps of the work of the checks, which a policy keeps.
+ */
 export const treeIssues = (
 	domain: Domain.Any,
 	root: TreeNode,
-): ReadonlyArray<Issue> => {
+): {
+	readonly issues: ReadonlyArray<Issue>
+	readonly work: number
+} => {
 	// The rules come out of the tree first, and each one is checked after.
 	// A check of a condition goes down its levels, so a check inside the walk
 	// of the tree would go down the levels of both. The place of each rule
@@ -871,7 +881,8 @@ export const treeIssues = (
 	})
 	rulesOf({ node: root, at: undefined })
 	const memo = makeMemo(domain.limits)
-	return Arr.flatMap(found, ([rule, place]) =>
+	const issues = Arr.flatMap(found, ([rule, place]) =>
 		ruleIssues(domain, rule, place, memo),
 	)
+	return { issues, work: memo.work.steps }
 }

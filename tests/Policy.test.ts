@@ -2405,6 +2405,44 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 2000)
 	})
 
+	it("puts the limit of the work of the checks on a tree of policies", () => {
+		const Small = Domain.make({
+			principal: Caller,
+			resources: [Bot],
+			limits: { searchSteps: 2 },
+		})
+		const one = Policy.define(Small)(function* (_) {
+			yield* _.allow("read", Bot, { when: ($) => $.eq("id", "one") })
+		})
+		const codec = Policy.schema(Small)
+		// A part that the Schema takes alone.
+		assert.isTrue(Exit.isSuccess(Schema.encodeExit(codec)(one)))
+		// The tree has the work of both parts, so it is past the limit.
+		assert.throws(() => Policy.all([one, one]), /steps to check/)
+		assert.throws(() => Policy.ceiling(one, one), /steps to check/)
+		const alone = Schema.encodeSync(codec)(one)
+		assert.isTrue(
+			Exit.isFailure(
+				Schema.decodeExit(codec)({
+					_tag: "All",
+					policies: [alone, alone],
+				}),
+			),
+		)
+		// A tree that is made is a tree that the Schema takes.
+		const Wide = Domain.make({
+			principal: Caller,
+			resources: [Bot],
+			limits: { searchSteps: 4 },
+		})
+		const part = Policy.define(Wide)(function* (_) {
+			yield* _.allow("read", Bot, { when: ($) => $.eq("id", "one") })
+		})
+		const tree = Policy.all([part, part])
+		const json = Schema.encodeSync(Policy.schema(Wide))(tree)
+		assert.isTrue(Exit.isSuccess(Schema.decodeExit(Policy.schema(Wide))(json)))
+	})
+
 	it("checks the values of a test one time for kinds with one field type", () => {
 		const kinds = Arr.makeBy(1000, (index) =>
 			Resource.make(`Kind${String(index)}`, {

@@ -41,6 +41,10 @@ export class PolicyData<
 	// policy, or an object made by hand, is not a policy. `Equal` does not
 	// read it.
 	readonly #policy = true
+	// The steps of the work of the checks of the rules, from the binding. A
+	// tree of policies keeps the sum of the work of its parts. `Equal` does
+	// not read it.
+	readonly #work: number
 	/** Only in the types. */
 	declare readonly "~Opaque": () => X
 	/**
@@ -48,6 +52,11 @@ export class PolicyData<
 	 * domain, so a policy of one domain is not a policy of a wider domain.
 	 */
 	declare readonly "~Domain": (domain: D) => D
+
+	constructor(args: { readonly domain: D; readonly node: Node }, work: number) {
+		super(args)
+		this.#work = work
+	}
 
 	toJSON(): unknown {
 		return PolicyJson.toJson(this.node, PolicyJson.syncMeta(this.domain.meta))
@@ -57,17 +66,27 @@ export class PolicyData<
 	static is(u: unknown): u is Any {
 		return typeof u === "object" && u !== null && #policy in u
 	}
+
+	/** Gives the steps of the work of the checks of the rules of a policy. */
+	static workOf(policy: Any): number {
+		return (policy as PolicyData).#work
+	}
 }
 
 /** The node of a policy, with no types, for the code below. */
 export const nodeOf = (policy: Any): PolicyNodes.Node => policy.node as never
 
 /**
- * Makes a policy of a domain from its tree. The constructors of the nodes
- * check the ceiling of `policyNodes`, since a node does not know its domain,
- * so this checks the limit of the domain.
+ * Makes a policy of a domain from its tree, with the steps of the work of the
+ * binding of its rules. The constructors of the nodes check the ceiling of
+ * `policyNodes`, since a node does not know its domain, so this checks the
+ * limit of the domain.
  */
-export const fromNode = (domain: Domain.Any, node: PolicyNodes.Node): any => {
+const fromNode = (
+	domain: Domain.Any,
+	node: PolicyNodes.Node,
+	work: number,
+): any => {
 	const most = domain.limits.policyNodes
 	if (node.size > most) {
 		throw Limits.exceeded(
@@ -78,7 +97,7 @@ export const fromNode = (domain: Domain.Any, node: PolicyNodes.Node): any => {
 			most,
 		)
 	}
-	return new PolicyData({ domain, node })
+	return new PolicyData({ domain, node }, work)
 }
 
 /**
@@ -122,7 +141,7 @@ const fromRules = (
 		)
 	}
 	// Every rule is bound to the domain here, also a rule from `Policy.rule`.
-	const issues = Bind.treeIssues(domain, node)
+	const { issues, work } = Bind.treeIssues(domain, node)
 	if (issues.length > 0) {
 		throw PolicyError.make({
 			issues: Arr.map(issues, (issue) => ({
@@ -134,7 +153,7 @@ const fromRules = (
 			message: `A rule does not fit the domain: ${issues.map((issue) => issue.issue).join("; ")}`,
 		})
 	}
-	return fromNode(domain, node)
+	return fromNode(domain, node, work)
 }
 
 /** Makes a policy from a generator function that gives rules. */
@@ -166,20 +185,43 @@ const sameDomain = (policies: ReadonlyArray<Any>): Domain.Any => {
 	return domain
 }
 
+/**
+ * Makes a policy of a tree of policies. The work of the tree is the sum of
+ * the work of its parts. A binding of the whole tree, as the Schema does,
+ * counts the work on a pattern or a test that two parts share one time, so
+ * it is never more. So a tree that this makes is a tree that the Schema
+ * takes. A binding of the whole tree here would bind each part again for
+ * each level of a deep tree.
+ */
+const fromParts = (
+	policies: ReadonlyArray<Any>,
+	node: PolicyNodes.Node,
+): any => {
+	const domain = sameDomain(policies)
+	const work = Arr.reduce(
+		policies,
+		0,
+		(total, policy) => total + PolicyData.workOf(policy),
+	)
+	const most = domain.limits.searchSteps
+	if (work > most) {
+		const message = Bind.workIssue(most)
+		throw PolicyError.make({ issues: [{ path: [], message }], message })
+	}
+	return fromNode(domain, node, work)
+}
+
 // The constructors of the nodes stop a tree past `policyDepth` or
 // `policyNodes`.
 export const combine =
 	(tag: "All" | "Any" | "FirstOf") =>
 	(policies: ReadonlyArray<Any>): any =>
-		fromNode(
-			sameDomain(policies),
-			new PolicyNodes[tag](Arr.map(policies, nodeOf)),
-		)
+		fromParts(policies, new PolicyNodes[tag](Arr.map(policies, nodeOf)))
 
 /** Puts a limit on a policy. A deny from `cap` always wins. */
 export const ceiling = dual(2, (policy: Any, cap: Any): any =>
-	fromNode(
-		sameDomain([policy, cap]),
+	fromParts(
+		[policy, cap],
 		new PolicyNodes.Ceiling({ cap: nodeOf(cap), policy: nodeOf(policy) }),
 	),
 )
@@ -259,28 +301,33 @@ const provideNode = (
 export const provideContext = dual(
 	2,
 	(policy: Any, context: Context.Context<never>): any =>
-		fromNode(policy.domain, provideNode(nodeOf(policy), context)),
+		fromNode(
+			policy.domain,
+			provideNode(nodeOf(policy), context),
+			PolicyData.workOf(policy),
+		),
 )
 
 /** Tests if a value is a policy. */
 export const isPolicy = (u: unknown): u is Any => PolicyData.is(u)
 
-/** The Schema of the policies of a domain with no predicates. */
-export const schema = (domain: Domain.Any): Schema.Top =>
-	Schema.Unknown.pipe(
+/**
+ * The Schema of the policies of a domain with no predicates. A decoded policy
+ * is bound to the domain. A policy value was bound when it was made, so it
+ * is not bound again when it is encoded.
+ */
+export const schema = (domain: Domain.Any): Schema.Top => {
+	// A policy with a predicate is not a plain policy, and it can not become
+	// JSON.
+	const Plain = Schema.declare(
+		(u): u is Any => isPolicy(u) && u.domain === domain && !nodeOf(u).opaque,
+	)
+	return Schema.Unknown.pipe(
 		Schema.decodeTo(
-			// A policy with a predicate is not a plain policy, and it can not
-			// become JSON.
-			Schema.declare(
-				(u): u is Any =>
-					isPolicy(u) && u.domain === domain && !nodeOf(u).opaque,
-			).check(
-				Schema.makeFilter((policy) => Bind.treeIssues(domain, nodeOf(policy))),
-			),
+			Plain,
 			SchemaTransformation.transformEffect({
 				decode: (input: unknown, options) =>
 					PolicyJson.decode(input, domain).pipe(
-						Effect.map((node) => fromNode(domain, node)),
 						Effect.mapError(
 							(problem) =>
 								new SchemaIssue.Pointer(
@@ -293,6 +340,35 @@ export const schema = (domain: Domain.Any): Schema.Top =>
 										),
 								),
 						),
+						Effect.flatMap((node) => {
+							const { issues, work } = Bind.treeIssues(domain, node)
+							// The issues, as a filter of the Schema gives them.
+							const pointers = Arr.map(
+								issues,
+								(found) =>
+									new SchemaIssue.Pointer(
+										found.path,
+										new SchemaIssue.InvalidValue(
+											{ message: found.issue },
+											input,
+											options,
+										),
+									),
+							)
+							const issue = Arr.isReadonlyArrayNonEmpty(pointers)
+								? pointers.length === 1
+									? pointers[0]
+									: new SchemaIssue.Composite(
+											Plain.ast,
+											pointers,
+											input,
+											options,
+										)
+								: undefined
+							return issue === undefined
+								? Effect.succeed(fromNode(domain, node, work))
+								: Effect.fail(issue)
+						}),
 					),
 				encode: (policy: Any) =>
 					Effect.mapError(
@@ -302,3 +378,4 @@ export const schema = (domain: Domain.Any): Schema.Top =>
 			}),
 		),
 	) as never
+}
