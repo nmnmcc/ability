@@ -1889,6 +1889,31 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 2000)
 	})
 
+	it("does not take a fixed value that is missing", () => {
+		const exit = Schema.decodeUnknownExit(PolicySchemaOfApp)({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Bot"],
+					when: {
+						_tag: "Compare",
+						op: "eq",
+						field: "ownerUserId",
+						value: { _tag: "Literal" },
+					},
+				},
+			],
+		})
+		assert.isTrue(Exit.isFailure(exit))
+		assert.include(
+			String(Exit.isFailure(exit) ? exit.cause : ""),
+			"A fixed value is missing",
+		)
+	})
+
 	it("counts the meta of a rule in the budget of a decode", () => {
 		const Metas = Domain.make({
 			principal: Caller,

@@ -151,6 +151,15 @@ const decodeOperand = (
 ): Nodes.Operand => {
 	const tag = read(input, "_tag", path)
 	if (tag === "Literal") {
+		// A missing value is not `null`: a test with `null` has its own
+		// meaning, and a lost value must not become one.
+		const own =
+			typeof input === "object" && input !== null
+				? Object.getOwnPropertyDescriptor(input, "value")
+				: undefined
+		if (own === undefined || ("value" in own && own.value === undefined)) {
+			throw problem([...path, "value"], "A fixed value is missing")
+		}
 		const value = read(input, "value", path)
 		if (!isJsonScalar(value)) {
 			throw problem(
