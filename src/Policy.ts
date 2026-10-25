@@ -1788,6 +1788,17 @@ const scopeProblem = (
  * Gives the condition of a scope, with the principal and the path in it.
  * With no scope, it is `True`.
  */
+/**
+ * The fields that a scope reads, before it is made smaller. A smaller scope
+ * may leave out a read that fails, such as a getter.
+ */
+const scopeFields = (within: unknown): ReadonlyArray<string> =>
+	within === undefined
+		? []
+		: Condition.fields(
+				(within as (builder: unknown) => Ast)(Condition.builder()),
+			)
+
 const scopeOf = (within: unknown, input: ResidualContext["input"]): Ast => {
 	if (within === undefined) {
 		return always
@@ -1850,14 +1861,7 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 		// A read of a getter may fail when `decide` runs, and a smaller
 		// condition may leave the read out. So a plain residual can not agree
 		// with `decide`, and there is none.
-		if (
-			!readsOnly(
-				nodeOf(policy),
-				targetOf(request, descriptor),
-				(field) => Resource.hasPath(descriptor.schema, field),
-				new Map(),
-			)
-		) {
+		if (readsGetter(policy, request, descriptor)) {
 			throw new globalThis.Error(
 				"A rule of this request reads a getter, so it has no residual condition",
 			)
@@ -2031,6 +2035,28 @@ type AnyCoverage = Data.TaggedEnum<{
 
 const coverages = Data.taggedEnum<AnyCoverage>()
 
+/**
+ * Tests if a rule that the request may use, or its scope, reads a getter of
+ * a class, in any branch of a union.
+ */
+const readsGetter = (
+	policy: Any,
+	request: ScopedRequest,
+	descriptor: Resource.Descriptor,
+): boolean => {
+	const noGetter = (field: string) =>
+		!Resource.hasGetter(descriptor.schema, field)
+	return (
+		!Arr.every(scopeFields(request.within), noGetter) ||
+		!readsOnly(
+			nodeOf(policy),
+			targetOf(request, descriptor),
+			noGetter,
+			new Map(),
+		)
+	)
+}
+
 /** The parts of a request that tell which rules it may use. */
 const targetOf = (
 	request: ScopedRequest,
@@ -2081,19 +2107,29 @@ const readsOnly = (
 
 const coverageAny = (policy: Any, request: ScopedRequest): AnyCoverage => {
 	const descriptor = Domain.descriptorOf(policy.domain, request.kind)
-	if (
-		descriptor !== undefined &&
-		!readsOnly(
-			nodeOf(policy),
-			targetOf(request, descriptor),
-			(field) => Resource.isPlainField(descriptor.schema, field),
-			new Map(),
-		)
-	) {
+	// A read of a getter has no residual, so the condition is `False`.
+	if (descriptor !== undefined && readsGetter(policy, request, descriptor)) {
 		return coverages.Unknown({ condition: never, reason: "schema" })
 	}
 	const scoped = scopedResiduals(policy, request)
 	const allowed = scoped.allow
+	// Each field that a rule or the scope reads must be plain, also a field
+	// that a smaller condition leaves out. The condition is the residual.
+	if (descriptor !== undefined) {
+		const plain = (field: string) =>
+			Resource.isPlainField(descriptor.schema, field)
+		if (
+			!Arr.every(scopeFields(request.within), plain) ||
+			!readsOnly(
+				nodeOf(policy),
+				targetOf(request, descriptor),
+				plain,
+				new Map(),
+			)
+		) {
+			return coverages.Unknown({ condition: allowed, reason: "schema" })
+		}
+	}
 
 	const options = { schema: scoped.schema }
 	const some =
@@ -2334,7 +2370,10 @@ const measure = (
 
 /**
  * Tests if each own key of an object is a plain data key that a loop over the
- * keys sees. The `length` of an array is the one key that is not seen.
+ * keys sees. The `length` of an array is the one key that is not seen. The
+ * decoder reads keys of the prototypes too, so a prototype other than the
+ * one of a plain object or an array may have only methods, as the prototype
+ * of a class has.
  */
 const isPlainData = (input: object): boolean =>
 	Arr.every(Reflect.ownKeys(input), (key) => {
@@ -2345,7 +2384,25 @@ const isPlainData = (input: object): boolean =>
 			(property.enumerable === true ||
 				(Array.isArray(input) && key === "length"))
 		)
-	})
+	}) && hasOnlyMethods(Object.getPrototypeOf(input))
+
+/** Tests if the prototypes from `prototype` up have only methods. */
+const hasOnlyMethods = (prototype: unknown): boolean =>
+	prototype === null ||
+	prototype === Object.prototype ||
+	prototype === Array.prototype ||
+	(typeof prototype === "object" &&
+		Arr.every(Reflect.ownKeys(prototype), (key) => {
+			const property = Object.getOwnPropertyDescriptor(prototype, key)
+			return (
+				typeof key === "symbol" ||
+				key === "constructor" ||
+				(property !== undefined &&
+					"value" in property &&
+					typeof property.value === "function")
+			)
+		}) &&
+		hasOnlyMethods(Object.getPrototypeOf(prototype)))
 
 /** Tests if a value is low and small enough to decode. */
 const fitsLimits = (input: unknown): string | true => {

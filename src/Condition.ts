@@ -2766,7 +2766,10 @@ const measure = (
 
 /**
  * Tests if each own key of an object is a plain data key that a loop over the
- * keys sees. The `length` of an array is the one key that is not seen.
+ * keys sees. The `length` of an array is the one key that is not seen. The
+ * decoder reads keys of the prototypes too, so a prototype other than the
+ * one of a plain object or an array may have only methods, as the prototype
+ * of a class has.
  */
 const isPlainData = (input: object): boolean =>
 	Arr.every(Reflect.ownKeys(input), (key) => {
@@ -2777,7 +2780,25 @@ const isPlainData = (input: object): boolean =>
 			(property.enumerable === true ||
 				(Array.isArray(input) && key === "length"))
 		)
-	})
+	}) && hasOnlyMethods(Object.getPrototypeOf(input))
+
+/** Tests if the prototypes from `prototype` up have only methods. */
+const hasOnlyMethods = (prototype: unknown): boolean =>
+	prototype === null ||
+	prototype === Object.prototype ||
+	prototype === Array.prototype ||
+	(typeof prototype === "object" &&
+		Arr.every(Reflect.ownKeys(prototype), (key) => {
+			const property = Object.getOwnPropertyDescriptor(prototype, key)
+			return (
+				typeof key === "symbol" ||
+				key === "constructor" ||
+				(property !== undefined &&
+					"value" in property &&
+					typeof property.value === "function")
+			)
+		}) &&
+		hasOnlyMethods(Object.getPrototypeOf(prototype)))
 
 /** Tests if a value is low and small enough to decode. */
 const fitsLimits = (input: unknown): string | true => {

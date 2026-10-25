@@ -478,6 +478,20 @@ describe("Policy", () => {
 			)
 		})
 
+		it("does not decode an input with keys from a prototype", () => {
+			const deep = Arr.reduce(
+				Arr.range(1, 5000),
+				{ _tag: "True" } as unknown,
+				(child) => Object.create({ _tag: "Not", condition: child }) as unknown,
+			)
+			const exit = Schema.decodeUnknownExit(Condition.schema)(deep)
+			assert.isTrue(Exit.isFailure(exit))
+			assert.notInclude(
+				String(Exit.isFailure(exit) ? exit.cause : ""),
+				"RangeError",
+			)
+		})
+
 		it("does not fill the stack with deep JSON", () => {
 			const one = Schema.encodeSync(PolicySchema)(
 				Policy.define(App)(function* (_) {
@@ -2574,6 +2588,97 @@ describe("Policy", () => {
 					kind: "GetterNote",
 				}),
 			/reads a getter/,
+		)
+	})
+
+	it("gives no residual for a getter in a branch of a union or in a scope", () => {
+		class Owner extends Schema.Class<Owner>("UnionOwner")({
+			id: Schema.String,
+		}) {
+			get flag(): string {
+				throw new globalThis.Error("no")
+			}
+		}
+		class Info extends Schema.Class<Info>("ScopeInfo")({
+			id: Schema.String,
+		}) {
+			get allowed(): boolean {
+				throw new globalThis.Error("no")
+			}
+		}
+		const Box = Resource.make("UnionBox", {
+			actions: ["read"],
+			fields: {
+				box: Schema.Union([Owner, Schema.Struct({ flag: Schema.String })]),
+				info: Info,
+			},
+		})
+		const Boxes = Domain.make({ principal: Caller, resources: [Box] })
+		const policy = Policy.define(Boxes)(function* (_) {
+			yield* _.allow("read", Box, {
+				when: ($) => $.or($.eq("box.flag", "yes"), Condition.always),
+			})
+		})
+		const request = {
+			principal: alice,
+			action: "read",
+			kind: "UnionBox",
+		} as const
+		assert.throws(() => Policy.residual(policy, request), /reads a getter/)
+		assert.strictEqual(Policy.coverage(policy, request)._tag, "Unknown")
+		const open = Policy.define(Boxes)(function* (_) {
+			yield* _.allow("read", Box)
+		})
+		const scoped = {
+			...request,
+			within: ($) => $.or($.eq("info.allowed", true), Condition.always),
+		} satisfies Policy.KindRequest<typeof Boxes>
+		assert.strictEqual(Policy.coverage(open, scoped)._tag, "Unknown")
+	})
+
+	it("keeps the residual in an unknown coverage", () => {
+		const Note = Resource.make("CheckedId", {
+			actions: ["read"],
+			fields: { id: Schema.String.check(Schema.isMinLength(1)) },
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.define(Notes)(function* (_) {
+			yield* _.allow("read", Note, { when: ($) => $.eq("id", "p1") })
+		})
+		const covered = Policy.coverage(policy, {
+			principal: alice,
+			action: "read",
+			kind: "CheckedId",
+		})
+		assert.strictEqual(covered._tag, "Unknown")
+		assert.strictEqual(covered.condition._tag, "Compare")
+	})
+
+	it("finds a getter for a pattern with **", () => {
+		class Owner extends Schema.Class<Owner>("StarOwner")({
+			id: Schema.String,
+		}) {
+			get label() {
+				return this.id
+			}
+		}
+		const Box = Resource.make("StarBox", {
+			actions: ["read"],
+			fields: { owner: Owner },
+		})
+		const Boxes = Domain.make({ principal: Caller, resources: [Box] })
+		assert.strictEqual(
+			Policy.decideSync(
+				Policy.define(Boxes)(function* (_) {
+					yield* _.allow("read", Box, { fields: ["**.label" as never] })
+				}),
+				{
+					principal: alice,
+					action: "read",
+					resource: Box.make({ owner: Owner.make({ id: "o" }) }),
+				},
+			)._tag,
+			"Allow",
 		)
 	})
 

@@ -801,13 +801,19 @@ const makeLayer = (
 				}
 			})
 
+			// The filter is the condition of the coverage. When the coverage is
+			// not known, it is the residual condition in the scope, which throws
+			// an error when there is none, so the filter fails.
 			const filter = (
 				target: AnyTarget,
 			): Effect.Effect<Condition.Ast, unknown, unknown> =>
-				Effect.map(
-					coverage(target),
-					(covered): Condition.Ast => covered.condition as Condition.Ast,
-				)
+				Effect.map(current, ({ principal, policy: value }): Condition.Ast => {
+					const request = { ...target, principal } as never
+					const covered = Policy.coverage(value, request)
+					return covered._tag === "Unknown"
+						? Policy.residual(value, request)
+						: (covered.condition as Condition.Ast)
+				})
 
 			const coverage = (
 				target: AnyTarget,

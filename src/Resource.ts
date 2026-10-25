@@ -257,7 +257,8 @@ const isTooLong = (path: string): boolean =>
 /**
  * Tests if a Schema has a getter of a class at a path whose parts fit
  * `parts`, as `hasGetter` does for one path. A part fits a name when `fits`
- * says so, as a part with `*` fits many names. A part `**` is not taken here.
+ * says so, as a part with `*` fits many names. A part `**` stands for any
+ * number of parts, also none.
  *
  * @stability stable
  * @category predicates
@@ -269,7 +270,6 @@ export const hasMatchingGetter = (
 	fits: (part: string, name: string) => boolean,
 ): boolean =>
 	parts.length <= maxPathParts &&
-	!parts.includes("**") &&
 	Schema.isSchema(schema) &&
 	getterAt(schema.ast, parts, 0, fits, new Map())
 
@@ -298,6 +298,10 @@ const getterAt = (
 		const last = index === names.length - 1
 		const next = (type: SchemaAST.AST, at: number) =>
 			getterAt(type, names, at, fits, memo)
+		// A `**` may stand for no parts.
+		if (name === "**" && !last && next(ast, index + 1)) {
+			return true
+		}
 		switch (ast._tag) {
 			case "Union":
 				return Arr.some(ast.types, (type) => next(type, index))
@@ -324,17 +328,21 @@ const getterAt = (
 						ast.propertySignatures,
 						(property) =>
 							typeof property.name === "string" &&
-							fits(name, property.name) &&
-							next(property.type, index + 1),
+							// A `**` may stand for this part and more.
+							((name === "**" && next(property.type, index)) ||
+								(fits(name, property.name) && next(property.type, index + 1))),
 					) ||
 						// A record keeps the Schema of its keys and of its values.
-						Arr.some(
-							ast.indexSignatures,
-							(signature) =>
-								Arr.some(
-									[name.replaceAll("*", ""), name.replaceAll("*", "a")],
-									(key) => fits(name, key) && keyFits(signature.parameter, key),
-								) && next(signature.type, index + 1),
+						Arr.some(ast.indexSignatures, (signature) =>
+							name === "**"
+								? hasSomeKey(signature.parameter) &&
+									(next(signature.type, index) ||
+										next(signature.type, index + 1))
+								: Arr.some(
+										[name.replaceAll("*", ""), name.replaceAll("*", "a")],
+										(key) =>
+											fits(name, key) && keyFits(signature.parameter, key),
+									) && next(signature.type, index + 1),
 						))
 				)
 			default:
