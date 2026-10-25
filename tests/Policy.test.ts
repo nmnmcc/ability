@@ -4709,6 +4709,31 @@ describe("Policy", () => {
 		})
 	})
 
+	it("tests a path with a number part with a number field of the principal", () => {
+		class Member extends Schema.Class<Member>("NumberMember")({
+			id: Schema.Int,
+		}) {}
+		const Item = Resource.make("NumberItem", {
+			actions: ["read"],
+			fields: { id: Schema.Int },
+			path: (fields) => ["item", fields.id],
+		})
+		const Items = Domain.make({ principal: Member, resources: [Item] })
+		const policy = Policy.define(Items)(function* (_) {
+			yield* _.allow("read", Item, {
+				when: ($) => $.under("item", $.principal("id")),
+			})
+		})
+		const decide = (id: number) =>
+			Policy.decideSync(policy, {
+				principal: Member.make({ id: 7 }),
+				action: "read",
+				resource: Item.make({ id }),
+			})._tag
+		assert.strictEqual(decide(7), "Allow")
+		assert.strictEqual(decide(8), "NotApplicable")
+	})
+
 	it("reads the stack of a Schema error, as the residual does", () => {
 		class Info extends Schema.TaggedError<Info>(
 			"@nmnmcc/ability/tests/Policy.test/StackInfo",

@@ -860,10 +860,12 @@ export interface Builder<Data, Value, P> {
 	readonly exists: <const F extends string>(
 		field: ReadPath<Data, F>,
 	) => Test<Value>
-	/** The path of the resource starts with these parts. */
-	readonly under: <
-		const Ps extends ReadonlyArray<string | null | Ref<string | null, any>>,
-	>(
+	/**
+	 * The path of the resource starts with these parts. A part of a path may
+	 * be any {@link Scalar}, as a number field of the resource, and the
+	 * binding checks each part against the path of each kind of the rule.
+	 */
+	readonly under: <const Ps extends ReadonlyArray<Scalar | Ref<Scalar, any>>>(
 		...prefix: Ps
 	) => Test<Value, PrincipalOf<Ps[number], P>>
 	/**
