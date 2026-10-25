@@ -4169,6 +4169,60 @@ describe("Policy", () => {
 		assert.strictEqual(Policy.coverage(policy, request)._tag, "Some")
 	})
 
+	it("decides on a field path of 1000 parts", () => {
+		interface Link {
+			readonly value: string
+			readonly next: Link | null
+		}
+		const Link: Schema.Codec<Link> = Schema.Struct({
+			value: Schema.String,
+			next: Schema.NullOr(Schema.suspend((): Schema.Codec<Link> => Link)),
+		})
+		const Chain = Resource.make("Chain", {
+			actions: ["read"],
+			fields: { link: Link },
+		})
+		const Chains = Domain.make({ principal: Caller, resources: [Chain] })
+		const path = ["link", ...Arr.makeBy(998, () => "next"), "value"].join(".")
+		const chain = (value: string): Link =>
+			Arr.reduce(
+				Arr.range(1, 998),
+				{ value, next: null } as Link,
+				(next): Link => ({ value: "", next }),
+			)
+		const policy = rulesOf(Chains, [
+			Policy.rule({
+				_tag: "Allow",
+				actions: ["read"],
+				resources: ["Chain"],
+				when: Condition.builder<any, unknown, unknown>().eq(path, "yes"),
+			}),
+		])
+		const decide = (value: string) =>
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: Chain.make({ link: chain(value) }),
+			})._tag
+		assert.strictEqual(decide("yes"), "Allow")
+		assert.strictEqual(decide("no"), "NotApplicable")
+		// One more part is past the limit of the domain.
+		assert.throws(
+			() =>
+				rulesOf(Chains, [
+					Policy.rule({
+						_tag: "Allow",
+						actions: ["read"],
+						resources: ["Chain"],
+						when: Condition.builder<any, unknown, unknown>().exists(
+							`link.next.${path.slice("link.".length)}`,
+						),
+					}),
+				]),
+			/has more than 1000 parts. The most is 1000./,
+		)
+	})
+
 	it("makes and walks a deep policy tree without filling the stack", () => {
 		const one = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot)

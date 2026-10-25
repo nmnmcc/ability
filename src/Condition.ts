@@ -413,8 +413,7 @@ type ObjectPaths<
 > = [O] extends [never]
 	? never
 	: // A record is one field to a rule or a request, as `permittedFields`
-		// lists it. So is a struct at the last part that a path may have, since
-		// a path does not go below it.
+		// lists it.
 		| (Parents extends true
 				? K
 				: Arrays extends true
@@ -422,9 +421,7 @@ type ObjectPaths<
 						? K
 						: number extends keyof O
 							? K
-							: [Depth] extends [0]
-								? K
-								: never
+							: never
 					: never)
 		| `${K}.${FieldPathInternal<O, PreviousDepth[Depth], Arrays, Parents>}`
 
@@ -504,16 +501,31 @@ type Normalize<A> = Exclude<A, undefined> | (undefined extends A ? null : never)
  * @category utility types
  * @since 0.3.0
  */
-export type PathValue<T, Path extends string> = T extends unknown
-	? PathValueIn<T, Path>
+export type PathValue<T, Path extends string> = ValueWalk<T, Path>
+
+/**
+ * The values of the part `Name` of each type of `U`. A part below a value
+ * that is not an object, as below a string or `null`, is `null`.
+ */
+type StepValue<U, Name extends string> = U extends unknown
+	? U extends object
+		? ChildOf<U, Name>
+		: null
 	: never
 
-/** The type of the field at `Path` of `T`, which is not a union. */
-type PathValueIn<T, Path extends string> = T extends object
-	? Path extends `${infer Head}.${infer Rest}`
-		? PathValue<ChildOf<T, Head>, Rest>
-		: Normalize<ChildOf<T, Path>>
-	: null
+/**
+ * Walks a path two parts at a time, with the values of each step. The type
+ * checker takes at most about 1000 steps of a type that calls itself, so a
+ * walk of one part at a time would stop before a path of 1000 parts.
+ */
+type ValueWalk<
+	U,
+	Path extends string,
+> = Path extends `${infer A}.${infer B}.${infer Rest}`
+	? ValueWalk<StepValue<StepValue<U, A>, B>, Rest>
+	: Path extends `${infer A}.${infer B}`
+		? Normalize<StepValue<StepValue<U, A>, B>>
+		: Normalize<StepValue<U, Path>>
 
 /**
  * The type of the part `Name` of `T`. A part of a path is text, so the part
@@ -530,6 +542,203 @@ type ChildOf<T, Name extends string> = Name extends keyof T
 		: never
 
 /**
+ * What a path may do, for one use of it: go below a list or a whole value,
+ * as a rule or a request may, and end at a struct, as the fields of a rule
+ * may. See {@link FieldPath}, {@link FieldSelector} and {@link FieldName},
+ * which list the short paths with the same rules.
+ */
+interface PathRules {
+	readonly arrays: boolean
+	readonly parents: boolean
+}
+
+/** The rules of a path that a condition reads. */
+interface ReadRules {
+	readonly arrays: false
+	readonly parents: false
+}
+
+/** The rules of the field of a request. */
+interface SelectRules {
+	readonly arrays: true
+	readonly parents: false
+}
+
+/** The rules of a field of a rule, which may name a struct. */
+interface NameRules {
+	readonly arrays: true
+	readonly parents: true
+}
+
+/** The objects below a field with the values `V`: see `PathsOf`. */
+type ObjectsBelow<V, Arrays extends boolean> = Arrays extends true
+	? Exclude<V, Leaf | Whole | Function | ReadonlyArray<unknown>>
+	: [Extract<V, Whole | Function | ReadonlyArray<unknown>>] extends [never]
+		? Exclude<V, Leaf>
+		: never
+
+/** Tests if `Name` names a field of every object of `O`, as `keyof` does. */
+type HasPart<O, Name extends string> = Name extends keyof O
+	? true
+	: Name extends `${infer N extends number}`
+		? N extends keyof O
+			? true
+			: number extends keyof O
+				? true
+				: false
+		: false
+
+/**
+ * The objects below the part `Name` of the objects `O`, for a path that goes
+ * on, or `never` when it can not go on.
+ */
+type PathStep<O, Name extends string, R extends PathRules> =
+	HasPart<O, Name> extends true
+		? ObjectsBelow<NonNullable<ChildOf<O, Name>>, R["arrays"]>
+		: never
+
+/** Tests if a path may end at a field with the values `V`: see `PathsOf`. */
+type EndsAt<V, R extends PathRules, Last extends boolean> = [V] extends [never]
+	? true
+	: {} extends V
+		? true
+		: [Extract<V, Leaf | Whole>] extends [never]
+			? R["arrays"] extends true
+				? [Extract<V, ReadonlyArray<unknown>>] extends [never]
+					? EndsAtObjects<ObjectsBelow<V, true>, R, Last>
+					: true
+				: false
+			: true
+
+/**
+ * Tests if a path may end at a field that holds the objects `O`: a field of a
+ * rule may name a struct, and a request may name a record, or a struct at
+ * the last part that a path may have.
+ */
+type EndsAtObjects<O, R extends PathRules, Last extends boolean> = [O] extends [
+	never,
+]
+	? false
+	: R["parents"] extends true
+		? true
+		: string extends keyof O
+			? true
+			: number extends keyof O
+				? true
+				: Last
+
+/** The paths one part below `Done`, as the names that may come next. */
+type NextNames<O, Done extends string> = `${Done}${keyof O & (string | number)}`
+
+/**
+ * Walks a path two parts at a time, from the objects `O`. It gives `true`
+ * for a path that the rules `R` take, or the names that may come next after
+ * the last good part. `Count` counts the parts before `F`, so the walk knows
+ * the last part that a path may have: part 1000, the default of
+ * `Limits.fieldPathParts`.
+ */
+type PathWalk<
+	O,
+	F extends string,
+	Done extends string,
+	R extends PathRules,
+	Count extends ReadonlyArray<0>,
+> = F extends `${infer A}.${infer B}.${infer Rest}`
+	? PathStep<O, A, R> extends infer O1
+		? [O1] extends [never]
+			? NextNames<O, Done>
+			: PathStep<O1, B, R> extends infer O2
+				? [O2] extends [never]
+					? NextNames<O1, `${Done}${A}.`>
+					: PathWalk<O2, Rest, `${Done}${A}.${B}.`, R, [...Count, 0, 0]>
+				: never
+		: never
+	: F extends `${infer A}.${infer B}`
+		? PathStep<O, A, R> extends infer O1
+			? [O1] extends [never]
+				? NextNames<O, Done>
+				: PathEnd<O1, B, `${Done}${A}.`, R, [...Count, 0]>
+			: never
+		: PathEnd<O, F, Done, R, Count>
+
+type PathEnd<
+	O,
+	Name extends string,
+	Done extends string,
+	R extends PathRules,
+	Count extends ReadonlyArray<0>,
+> =
+	HasPart<O, Name> extends true
+		? EndsAt<
+				NonNullable<ChildOf<O, Name>>,
+				R,
+				Count["length"] extends 999 ? true : false
+			> extends true
+			? true
+			: NextNames<O, Done>
+		: NextNames<O, Done>
+
+/**
+ * Checks one field path `F` of `T`, of any length up to about 1000 parts.
+ * It gives `F` for a path that the rules `R` take. For another path, it gives
+ * the paths that may come next after its last good part, so a type error
+ * names them. For a union of types, a part must be in each of them.
+ */
+type PathCheck<T, F extends string, R extends PathRules> = [T] extends [object]
+	? PathWalk<T, F, "", R, []> extends true
+		? F
+		: PathWalk<T, F, "", R, []>
+	: never
+
+/**
+ * A path of `T` that a condition may read, as one of {@link FieldPath}, of
+ * any length up to about 1000 parts. It is `F` when `F` is such a path, and
+ * the names that may come next when it is not.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 2.1.0
+ */
+export type ReadPath<T, F extends string> = PathCheck<T, F, ReadRules>
+
+/**
+ * A path of `T` that a request may name, as one of {@link FieldSelector}, of
+ * any length up to about 1000 parts. See {@link ReadPath}.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 2.1.0
+ */
+export type SelectPath<T, F extends string> = PathCheck<T, F, SelectRules>
+
+/**
+ * A path of `T` that a field of a rule may name, as one of
+ * {@link FieldName}, of any length up to about 1000 parts. See
+ * {@link ReadPath}.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 2.1.0
+ */
+export type NamePath<T, F extends string> = PathCheck<T, F, NameRules>
+
+/** A path that a condition may read, with an ordered value. */
+type OrderedReadPath<T, F extends string> =
+	ReadPath<T, F> extends F
+		? Exclude<PathValue<T, F>, null> extends number | string
+			? F
+			: never
+		: ReadPath<T, F>
+
+/** A path that a condition may read, with a scalar value. */
+type ScalarReadPath<T, F extends string> =
+	ReadPath<T, F> extends F
+		? PathValue<T, F> extends Scalar
+			? F
+			: never
+		: ReadPath<T, F>
+
+/**
  * A value for a field of type `A`: a fixed value, or a field of the principal
  * with the same type.
  *
@@ -538,16 +747,6 @@ type ChildOf<T, Name extends string> = Name extends keyof T
  * @since 0.3.0
  */
 export type OperandOf<A, P = never> = Extract<A, Scalar> | Ref<A, P>
-
-type ScalarPath<T> = {
-	[F in FieldPath<T>]: PathValue<T, F> extends Scalar ? F : never
-}[FieldPath<T>]
-
-type OrderedPath<T> = {
-	[F in FieldPath<T>]: Exclude<PathValue<T, F>, null> extends number | string
-		? F
-		: never
-}[FieldPath<T>]
 
 /**
  * A test made by a {@link Builder}. It runs no code, but it keeps the value
@@ -585,58 +784,60 @@ type PrincipalOf<V, _P> = [Extract<V, PrincipalRef>] extends [never]
 export interface Builder<Data, Value, P> {
 	/** The field is equal to the value. */
 	readonly eq: <
-		const F extends FieldPath<Data>,
+		const F extends string,
 		const V extends OperandOf<FieldValue<Data, F>, any>,
 	>(
-		field: F,
+		field: ReadPath<Data, F>,
 		value: V,
 	) => Test<Value, PrincipalOf<V, P>>
 	/** The field is not equal to the value. */
 	readonly ne: <
-		const F extends FieldPath<Data>,
+		const F extends string,
 		const V extends OperandOf<FieldValue<Data, F>, any>,
 	>(
-		field: F,
+		field: ReadPath<Data, F>,
 		value: V,
 	) => Test<Value, PrincipalOf<V, P>>
 	readonly lt: <
-		const F extends OrderedPath<Data>,
+		const F extends string,
 		const V extends OperandOf<Exclude<FieldValue<Data, F>, null>, any>,
 	>(
-		field: F,
+		field: OrderedReadPath<Data, F>,
 		value: V,
 	) => Test<Value, PrincipalOf<V, P>>
 	readonly lte: <
-		const F extends OrderedPath<Data>,
+		const F extends string,
 		const V extends OperandOf<Exclude<FieldValue<Data, F>, null>, any>,
 	>(
-		field: F,
+		field: OrderedReadPath<Data, F>,
 		value: V,
 	) => Test<Value, PrincipalOf<V, P>>
 	readonly gt: <
-		const F extends OrderedPath<Data>,
+		const F extends string,
 		const V extends OperandOf<Exclude<FieldValue<Data, F>, null>, any>,
 	>(
-		field: F,
+		field: OrderedReadPath<Data, F>,
 		value: V,
 	) => Test<Value, PrincipalOf<V, P>>
 	readonly gte: <
-		const F extends OrderedPath<Data>,
+		const F extends string,
 		const V extends OperandOf<Exclude<FieldValue<Data, F>, null>, any>,
 	>(
-		field: F,
+		field: OrderedReadPath<Data, F>,
 		value: V,
 	) => Test<Value, PrincipalOf<V, P>>
 	/** The field is equal to one of the values. */
 	readonly in: <
-		const F extends FieldPath<Data>,
+		const F extends string,
 		const Vs extends ReadonlyArray<OperandOf<FieldValue<Data, F>, any>>,
 	>(
-		field: F,
+		field: ReadPath<Data, F>,
 		values: Vs,
 	) => Test<Value, PrincipalOf<Vs[number], P>>
 	/** The field has a value that is not `null`. */
-	readonly exists: <const F extends FieldPath<Data>>(field: F) => Test<Value>
+	readonly exists: <const F extends string>(
+		field: ReadPath<Data, F>,
+	) => Test<Value>
 	/** The path of the resource starts with these parts. */
 	readonly under: <
 		const Ps extends ReadonlyArray<string | null | Ref<string | null, any>>,
@@ -647,8 +848,8 @@ export interface Builder<Data, Value, P> {
 	 * A field of the principal, to use as a value. The field must have a
 	 * {@link Scalar} type.
 	 */
-	readonly principal: <const F extends ScalarPath<P>>(
-		field: F,
+	readonly principal: <const F extends string>(
+		field: ScalarReadPath<P, F>,
 	) => Ref<PathValue<P, F>, P>
 	readonly and: <const Cs extends ReadonlyArray<Any>>(
 		...conditions: Cs
