@@ -2148,6 +2148,30 @@ describe("Policy", () => {
 		)
 	})
 
+	it("binds a rule with very many wrong kinds and actions in a short time", () => {
+		const Small = Domain.make({
+			principal: Caller,
+			resources: [Bot],
+			limits: { searchSteps: 1 },
+		})
+		const start = Date.now()
+		const exit = Schema.decodeExit(Policy.schema(Small))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: Arr.makeBy(5000, (index) => `act${String(index)}`),
+					resources: Arr.makeBy(5000, (index) => `Kind${String(index)}`),
+				},
+			],
+		})
+		assert.isTrue(Exit.isFailure(exit))
+		// The key of the place of the suggestion for each action held every
+		// kind, which took more than twenty seconds.
+		assert.isBelow(Date.now() - start, 2000)
+	})
+
 	it("counts the work of the suggestions for wrong names", () => {
 		const names = Arr.makeBy(
 			1000,

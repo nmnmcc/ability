@@ -40,10 +40,14 @@ export interface RuleData {
  */
 interface Memo {
 	/**
-	 * The suggestion for each name, by the place where it was looked for. The
-	 * names come from a policy, so the map is native, as `fits` is.
+	 * The suggestion for each name, by the key of the place where it was
+	 * looked for, and by the name. The names come from a policy, so the maps
+	 * are native, as `fits` is. A map for each place means that a lookup does
+	 * not make the key of the place again, which may be long.
 	 */
-	readonly suggestions: Map<string, string>
+	readonly suggestions: Map<string, Map<string, string>>
+	/** The count of the names in `suggestions`. It belongs to one binding. */
+	readonly suggested: { count: number }
 	/**
 	 * If a pattern matches a field of a kind, by the kind and the pattern. The
 	 * patterns come from a policy, so the map is native: the hash of a string
@@ -66,6 +70,7 @@ interface Memo {
 
 const makeMemo = (limits: Limits.Limits): Memo => ({
 	suggestions: new Map(),
+	suggested: { count: 0 },
 	fits: new Map(),
 	matched: new Set(),
 	issues: { count: 0, noted: false },
@@ -80,36 +85,43 @@ const makeMemo = (limits: Limits.Limits): Memo => ({
  */
 const maxSuggestions = 32
 
+/**
+ * The key of a place where a name is looked for: the JSON text of a list of
+ * strings, which no other list has, also when a name holds the marks that a
+ * join puts between them. A caller makes the key of a long place one time.
+ */
+const scopeKey = (scope: ReadonlyArray<string>): string => JSON.stringify(scope)
+
 /** Adds a suggestion to a message, with the memo of the binding. */
 const suggestIn = (
 	memo: Memo,
 	message: string,
 	name: string,
-	scope: ReadonlyArray<string>,
+	scope: string,
 	names: () => ReadonlyArray<string>,
 ): string => {
-	// The text of a list of strings is a key with no two lists in one key,
-	// also when a name holds the marks that a join puts between them.
-	const key = JSON.stringify([scope, name])
-	const known = memo.suggestions.get(key)
+	const place = memo.suggestions.get(scope) ?? new Map<string, string>()
+	memo.suggestions.set(scope, place)
+	const known = place.get(name)
 	if (known !== undefined) {
 		return known
 	}
-	if (memo.suggestions.size >= maxSuggestions) {
+	if (memo.suggested.count >= maxSuggestions) {
 		return message
 	}
+	memo.suggested.count += 1
 	// A suggestion compares the name with every name of the scope, so its
 	// work counts. A suggestion past the limit of the work is left out: the
 	// issue is still there, with no suggestion.
 	const candidates = names()
 	const cost = Suggest.work(name, candidates)
 	if (memo.work.steps + cost > memo.limits.searchSteps) {
-		memo.suggestions.set(key, message)
+		place.set(name, message)
 		return message
 	}
 	memo.work.steps += cost
 	const made = Suggest.withSuggestion(message, name, candidates)
-	memo.suggestions.set(key, made)
+	place.set(name, made)
 	return made
 }
 
@@ -246,7 +258,7 @@ const fieldIssue = (
 						context.memo,
 						message,
 						field,
-						["kind", without.kind],
+						scopeKey(["kind", without.kind]),
 						() => namesOf(without.catalog, context.memo.limits),
 					),
 				},
@@ -398,7 +410,7 @@ const principalField = (
 					context.memo,
 					`The principal has no field "${ref}"`,
 					ref,
-					["principal"],
+					scopeKey(["principal"]),
 					() => namesOf(context.domain.principalCatalog, context.memo.limits),
 				),
 			}
@@ -837,6 +849,11 @@ export const ruleIssues = (
 							},
 						])
 					: conditionIssues(context, rule.when, Place.at(at, "when"), new Set())
+	// The place of the suggestions for the actions of the rule: its kinds. A
+	// rule may name very many kinds and actions, so the key is made one time.
+	const actionsScope = scopeKey(["actions", ...names])
+	// A native `Set` finds an action in a long list at once.
+	const knownActions = new Set(actions)
 	// The work is known only after every check of the rule. Past the limit, a
 	// check gives no issue, so this issue must come, or the policy would load
 	// with checks left out.
@@ -853,7 +870,7 @@ export const ruleIssues = (
 							memo,
 							`There is no resource with the kind "${kind}"`,
 							kind,
-							["kinds"],
+							scopeKey(["kinds"]),
 							() => kinds,
 						),
 					},
@@ -862,7 +879,7 @@ export const ruleIssues = (
 		...Arr.flatMap(
 			Arr.filter(
 				rule.actions,
-				(action) => action !== "*" && !actions.includes(action),
+				(action) => action !== "*" && !knownActions.has(action),
 			),
 			(action: string) =>
 				here([
@@ -872,7 +889,7 @@ export const ruleIssues = (
 							memo,
 							`The action "${action}" is not an action of these resources`,
 							action,
-							["actions", ...names],
+							actionsScope,
 							() => actions,
 						),
 					},
