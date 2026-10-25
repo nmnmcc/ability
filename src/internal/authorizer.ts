@@ -6,6 +6,7 @@
 // principals and deciders to `unknown`. The public types keep them, so the
 // language service check for `unknown` in an Effect is off here.
 // @effect-diagnostics anyUnknownInErrorContext:off
+import * as Arr from "effect/Array"
 import * as Cache from "effect/Cache"
 import * as Chunk from "effect/Chunk"
 import * as Context from "effect/Context"
@@ -28,6 +29,7 @@ import * as Decide from "./decide.ts"
 import * as DomainData from "./domain.ts"
 import * as Policies from "./policy.ts"
 import * as ResourceData from "./resource.ts"
+import * as Trampoline from "./trampoline.ts"
 
 type AnyServiceClass = Authorizer.AnyServiceClass
 
@@ -139,14 +141,21 @@ class PrincipalKey implements Equal.Equal {
  * `Object.values` does. So two keys need the same order too. A scalar is in
  * the text with its type, so the items of a set or a map show their order.
  */
-const orderOf = (value: unknown): string => {
+const orderOf: (value: unknown) => string = Trampoline.adaptive<
+	unknown,
+	string
+>((R, child) => (value, depth) => {
 	if (typeof value !== "object" || value === null) {
-		return typeof value === "string"
-			? JSON.stringify(value)
-			: `${typeof value}:${String(value)}`
+		return R.succeed(
+			typeof value === "string"
+				? JSON.stringify(value)
+				: `${typeof value}:${String(value)}`,
+		)
 	}
+	const items = (list: ReadonlyArray<unknown>) =>
+		R.forEach(list, (item) => child(item, depth + 1))
 	if (Array.isArray(value)) {
-		return `[${value.map(orderOf).join(",")}]`
+		return R.map(items(value), (texts) => `[${texts.join(",")}]`)
 	}
 	if (
 		value instanceof Map ||
@@ -155,15 +164,18 @@ const orderOf = (value: unknown): string => {
 		HashSet.isHashSet(value) ||
 		Chunk.isChunk(value)
 	) {
-		return `<${Array.from(value as Iterable<unknown>, orderOf).join(",")}>`
-	}
-	return `{${Object.keys(value)
-		.map(
-			(name) =>
-				`${JSON.stringify(name)}:${orderOf((value as Record<string, unknown>)[name])}`,
+		return R.map(
+			items(Array.from(value as Iterable<unknown>)),
+			(texts) => `<${texts.join(",")}>`,
 		)
-		.join(",")}}`
-}
+	}
+	const names = Object.keys(value)
+	return R.map(
+		items(Arr.map(names, (name) => (value as Record<string, unknown>)[name])),
+		(texts) =>
+			`{${Arr.map(names, (name, index) => `${JSON.stringify(name)}:${texts[index]!}`).join(",")}}`,
+	)
+})
 
 /**
  * Gives the JSON codec of a Schema, or `undefined` when the Schema has no JSON
