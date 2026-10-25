@@ -411,6 +411,40 @@ describe("Rule", () => {
 		expect(Policy.decideSync).type.toBeCallableWith(policy, typed)
 	})
 
+	it("checks each member of a union of requests", () => {
+		const policy = emptyOf(App)
+		const pick = (wide: boolean) =>
+			wide
+				? ({
+						principal: alice,
+						action: "read",
+						resource: aliceBot,
+						field: "notAField",
+					} as const)
+				: ({ principal: alice, action: "read", resource: aliceBot } as const)
+		const good = (wide: boolean) =>
+			wide
+				? ({
+						principal: alice,
+						action: "read",
+						resource: aliceBot,
+						field: "settings.model",
+					} as const)
+				: ({ principal: alice, action: "read", resource: aliceBot } as const)
+		expect(Policy.decideSync).type.not.toBeCallableWith(policy, pick(true))
+		expect(Policy.decideSync).type.toBeCallableWith(policy, good(true))
+		const kind = (wide: boolean) =>
+			wide
+				? ({
+						principal: alice,
+						action: "read",
+						kind: "Bot",
+						field: "notAField",
+					} as const)
+				: ({ principal: alice, action: "read", kind: "Bot" } as const)
+		expect(Policy.coverage).type.not.toBeCallableWith(policy, kind(true))
+	})
+
 	it("takes a record as one field of a request", () => {
 		const Tagged = Resource.make("Tagged", {
 			actions: ["read"],

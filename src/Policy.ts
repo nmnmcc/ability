@@ -281,6 +281,17 @@ export type CheckField<D, T> = T extends { readonly field?: infer F }
 	: unknown
 
 /**
+ * A target or a request with its field checked, as {@link CheckField} does.
+ * Each member of a union is checked by itself, so a member with no field
+ * does not take the place of the check of another member.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 2.1.3
+ */
+export type Checked<D, T> = T extends unknown ? T & CheckField<D, T> : never
+
+/**
  * A request: a principal, an action, and a resource value.
  *
  * @stability stable
@@ -804,7 +815,7 @@ export const decide: <
 	const Req extends DeepRequest<NoInfer<D>>,
 >(
 	policy: Policy<D, X>,
-	request: Req & CheckField<NoInfer<D>, Req>,
+	request: Checked<NoInfer<D>, Req>,
 ) => Effect.Effect<
 	Decision.Decision,
 	Condition.ErrorOf<X>,
@@ -823,7 +834,7 @@ export const decideSync: <
 	const Req extends DeepRequest<NoInfer<D>>,
 >(
 	policy: Policy<D>,
-	request: Req & CheckField<NoInfer<D>, Req>,
+	request: Checked<NoInfer<D>, Req>,
 ) => Decision.Decision = Decide.decideSync
 
 /**
@@ -842,7 +853,7 @@ export const explain: <
 	const Req extends DeepRequest<NoInfer<D>>,
 >(
 	policy: Policy<D, X>,
-	request: Req & CheckField<NoInfer<D>, Req>,
+	request: Checked<NoInfer<D>, Req>,
 ) => Effect.Effect<Explanation, Condition.ErrorOf<X>, Condition.ServicesOf<X>> =
 	Decide.explain as never
 
@@ -923,7 +934,7 @@ export const residual: <
 	const Req extends DeepKindRequest<NoInfer<D>>,
 >(
 	policy: Policy<D, X>,
-	request: Req & CheckField<NoInfer<D>, Req>,
+	request: Checked<NoInfer<D>, Req>,
 ) => Condition.Condition<ResidualReads<D, Req["kind"]>, X> =
 	Analysis.residual as never
 
@@ -985,7 +996,7 @@ export const coverage: <
 	const Req extends DeepKindRequest<NoInfer<D>>,
 >(
 	policy: Policy<D, X>,
-	request: Req & CheckField<NoInfer<D>, Req>,
+	request: Checked<NoInfer<D>, Req>,
 ) => Coverage<ResidualReads<D, Req["kind"]>, X> = Analysis.coverageAny as never
 
 // Schema
