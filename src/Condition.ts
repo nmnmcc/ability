@@ -355,14 +355,15 @@ type FieldPathInternal<
 > = [Depth] extends [never]
 	? never
 	: {
-			[K in keyof T & string]-?: PathsOf<
-				K,
+			// A record with number keys has number keys, as `counts.1`.
+			[K in keyof T & (string | number)]-?: PathsOf<
+				`${K}`,
 				NonNullable<T[K]>,
 				Depth,
 				Arrays,
 				Parents
 			>
-		}[keyof T & string]
+		}[keyof T & (string | number)]
 
 /**
  * The paths of one field `K` with the values `V`. Each kind of value in `V`
@@ -376,8 +377,9 @@ type PathsOf<
 	Arrays extends boolean,
 	Parents extends boolean,
 > =
-	// A field that is only ever `null` or missing is a field too.
-	| ([V] extends [never] ? K : never)
+	// A field that is only ever `null` or missing is a field too, and so is a
+	// field that may hold any value, as one of `Schema.Unknown` may.
+	| ([V] extends [never] ? K : {} extends V ? K : never)
 	| ([Extract<V, Leaf | Whole>] extends [never] ? never : K)
 	| ([Extract<V, ReadonlyArray<unknown>>] extends [never]
 			? never
@@ -408,7 +410,9 @@ type ObjectPaths<
 				: Arrays extends true
 					? string extends keyof O
 						? K
-						: never
+						: number extends keyof O
+							? K
+							: never
 					: never)
 		| `${K}.${FieldPathInternal<O, PreviousDepth[Depth], Arrays, Parents>}`
 

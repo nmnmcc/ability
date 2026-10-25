@@ -133,6 +133,36 @@ describe("Rule", () => {
 		})
 	})
 
+	it("takes a field of any value and a record with number keys", () => {
+		const Loose = Resource.make("Loose", {
+			actions: ["read"],
+			fields: {
+				data: Schema.Unknown,
+				counts: Schema.Record(Schema.Finite, Schema.String),
+			},
+		})
+		const Looses = Domain.make({ principal: Caller, resources: [Loose] })
+		const policy = Policy.define(Looses)(function* (_) {
+			yield* _.allow("read", Loose)
+		})
+		const request = (field: "data" | "counts") =>
+			({
+				principal: alice,
+				action: "read",
+				resource: Loose.make({ data: 1, counts: {} }),
+				field,
+			}) as const
+		expect(Policy.decideSync).type.toBeCallableWith(policy, request("data"))
+		expect(Policy.decideSync).type.toBeCallableWith(policy, request("counts"))
+		const $ = Condition.builder<
+			Policy.DataFor<typeof Looses, "Loose">,
+			unknown,
+			Caller
+		>()
+		expect($.exists).type.toBeCallableWith("data")
+		expect($.exists).type.toBeCallableWith("counts.1")
+	})
+
 	it("takes a field that holds a string or a struct", () => {
 		const Item = Resource.make("Item", {
 			actions: ["read"],
