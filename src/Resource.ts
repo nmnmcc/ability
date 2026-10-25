@@ -240,9 +240,13 @@ export interface Struct<
 	readonly kind: Kind
 	readonly actions: Actions
 	readonly schema: Schema.TaggedStruct<Kind, Fields>
-	/** Makes a value. It puts the `_tag` field on the value for you. */
+	/**
+	 * Makes a value. It puts the `_tag` field on the value for you. A field
+	 * with a default of its constructor, as from
+	 * `Schema.withConstructorDefault`, may be left out, as in `schema.make`.
+	 */
 	readonly make: (
-		input: Schema.Struct.Type<Fields>,
+		input: Schema.Struct.MakeIn<Fields>,
 	) => Schema.Struct.Type<Fields> & { readonly _tag: Kind }
 }
 

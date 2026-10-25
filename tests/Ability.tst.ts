@@ -675,6 +675,22 @@ describe("Policy", () => {
 		}
 	})
 
+	it("lets the make of a resource leave out a field with a default", () => {
+		const Named = Resource.make("Defaulted", {
+			actions: ["read"],
+			fields: {
+				id: Schema.String,
+				name: Schema.String.pipe(
+					Schema.withConstructorDefault(Effect.succeed("guest")),
+				),
+			},
+		})
+		expect(Named.make).type.toBeCallableWith({ id: "1" })
+		expect(Named.make).type.toBeCallableWith({ id: "1", name: "a" })
+		expect(Named.make).type.not.toBeCallableWith({ name: "a" })
+		expect(Named.make({ id: "1" }).name).type.toBe<string>()
+	})
+
 	it("gives the decider a field of any length, as a check takes", () => {
 		type Request = Authorizer.DeciderRequest<App>
 		expect<Exclude<Request["field"], undefined>>().type.toBe<string>()
