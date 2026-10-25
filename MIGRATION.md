@@ -107,20 +107,20 @@ const where = Effect.flatMap(Auth, (auth) => postsOfUser.filter(auth))
 
 ### Other removed functions
 
-| 1.x                                            | 2.0                               |
-| ---------------------------------------------- | --------------------------------- |
-| `Condition.simplifier()`                       | `Condition.simplify`              |
-| `Policy.scopeHasValue`, `scopeIsEmpty`         | `Policy.coverage`                 |
-| `Resource.hasValue`, `hasNoValue`              | gone: the search reads the shape  |
-| `Resource.isPlainField`, `domainOf`            | gone: the search reads the shape  |
-| `Resource.fieldPaths`, `descriptor.fieldPaths` | `Policy.permittedFields`          |
-| `Rule.matchesField`, `matchesInside`           | gone                              |
-| `Policy.residuals`                             | `Policy.residual`                 |
-| `Policy.fitsKind`, `isPolicy`                  | gone                              |
-| `Resource.descriptor`, `kindOf`, `isResource`  | gone: a value has its `_tag`      |
-| `Domain.descriptorOf`, `isDomain`              | gone                              |
-| `Condition.toJsonValue`                        | `Schema.encode(Condition.schema)` |
-| `Condition.isAst`, `hasPredicate`              | gone                              |
+| 1.x                                            | 2.0                                   |
+| ---------------------------------------------- | ------------------------------------- |
+| `Condition.simplifier()`                       | `Condition.simplify`                  |
+| `Policy.scopeHasValue`, `scopeIsEmpty`         | `Policy.coverage`                     |
+| `Resource.hasValue`, `hasNoValue`              | gone: the search reads the shape      |
+| `Resource.isPlainField`, `domainOf`            | gone: the search reads the shape      |
+| `Resource.fieldPaths`, `descriptor.fieldPaths` | `Policy.permittedFields`              |
+| `Rule.matchesField`, `matchesInside`           | gone                                  |
+| `Policy.residuals`                             | `Policy.residual`                     |
+| `Policy.fitsKind`, `isPolicy`                  | gone                                  |
+| `Resource.descriptor`, `kindOf`, `isResource`  | gone: a value has its `_tag`          |
+| `Domain.descriptorOf`, `isDomain`              | gone                                  |
+| `Condition.toJsonValue`                        | `Schema.encodeSync(Condition.schema)` |
+| `Condition.isAst`, `hasPredicate`              | gone                                  |
 
 ## Changes in behavior
 
