@@ -10,6 +10,7 @@ import * as Data from "effect/Data"
 import * as Condition from "../Condition.ts"
 import type * as Domain from "../Domain.ts"
 import type * as Resource from "../Resource.ts"
+import * as Catalog from "./catalog.ts"
 import * as ResourceData from "./resource.ts"
 import * as Patterns from "./patterns.ts"
 
@@ -125,7 +126,8 @@ export const matchesInside = (pattern: string, field: string): boolean =>
  * update some fields" is a yes. A deny rule for some fields does not stop a
  * request for the whole value. With the `descriptor` of the kind, such an
  * allow rule covers the request only when one of its patterns matches a field
- * of the kind. A grant of fields that the kind does not have is not a grant of
+ * of the kind, and a deny rule for a part of a field that holds parts covers
+ * a request for the whole field. A grant of fields that the kind does not have is not a grant of
  * some fields.
  */
 export const matchesTarget = (
@@ -165,5 +167,15 @@ export const matchesTarget = (
 		)
 	}
 	const field = target.field
-	return rule.fields.some((pattern) => matchesField(pattern, field))
+	// A field that holds parts, as a record does, shows its parts too. So a
+	// deny rule for a part inside it, as `data.secret` inside `data`, also
+	// covers a request for the whole field.
+	const open =
+		rule._tag === "Deny" &&
+		target.descriptor !== undefined &&
+		(Catalog.lookup(target.descriptor.catalog, field)?.open ?? false)
+	return rule.fields.some(
+		(pattern) =>
+			matchesField(pattern, field) || (open && matchesInside(pattern, field)),
+	)
 }

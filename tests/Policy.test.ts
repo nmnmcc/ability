@@ -1237,6 +1237,38 @@ describe("Policy", () => {
 		)
 	})
 
+	it("denies a request for a whole record when a deny rule names a part of it", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { data: Schema.Record(Schema.String, Schema.String) },
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.define(Notes)(function* (_) {
+			yield* _.allow("read", Note)
+			yield* _.deny("read", Note, { fields: ["data.secret" as never] })
+		})
+		const decide = (field: string) =>
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: Note.make({ data: { secret: "s" } }),
+				field: field as never,
+			})._tag
+		assert.strictEqual(decide("data.secret"), "Deny")
+		// The whole record shows the denied key too.
+		assert.strictEqual(decide("data"), "Deny")
+		assert.strictEqual(decide("data.public"), "Allow")
+		assert.strictEqual(
+			Policy.residual(policy, {
+				principal: alice,
+				action: "read",
+				kind: "Note",
+				field: "data" as never,
+			})._tag,
+			"False",
+		)
+	})
+
 	it("leaves out a record field when a deny rule names a part of it", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],
