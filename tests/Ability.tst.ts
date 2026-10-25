@@ -133,6 +133,33 @@ describe("Rule", () => {
 		})
 	})
 
+	it("takes a field that holds a string or a struct", () => {
+		const Item = Resource.make("Item", {
+			actions: ["read"],
+			fields: {
+				settings: Schema.Union([
+					Schema.String,
+					Schema.Struct({ secret: Schema.String }),
+				]),
+			},
+		})
+		const Items = Domain.make({ principal: Caller, resources: [Item] })
+		const _ = Policy.builder(Items)
+		expect(_.deny).type.toBeCallableWith("read", Item, { fields: ["settings"] })
+		expect(_.deny).type.toBeCallableWith("read", Item, {
+			fields: ["settings.secret"],
+		})
+		const policy = Policy.define(Items)(function* (_) {
+			yield* _.allow("read", Item)
+		})
+		expect(Policy.decideSync).type.toBeCallableWith(policy, {
+			principal: alice,
+			action: "read",
+			resource: Item.make({ settings: "open" }),
+			field: "settings",
+		})
+	})
+
 	it("takes a record as one field of a request", () => {
 		const Tagged = Resource.make("Tagged", {
 			actions: ["read"],

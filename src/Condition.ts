@@ -366,27 +366,62 @@ type FieldPathInternal<
 > = [Depth] extends [never]
 	? never
 	: {
-			[K in keyof T & string]-?: NonNullable<T[K]> extends Leaf | Whole
-				? K
-				: NonNullable<T[K]> extends Function
-					? never
-					: NonNullable<T[K]> extends ReadonlyArray<unknown>
-						? Arrays extends true
-							? K
-							: never
-						: NonNullable<T[K]> extends object
-							? // A record is one field to a rule or a request, as
-								// `permittedFields` lists it.
-								| (Parents extends true
-										? K
-										: Arrays extends true
-											? string extends keyof NonNullable<T[K]>
-												? K
-												: never
-											: never)
-								| `${K}.${FieldPathInternal<NonNullable<T[K]>, PreviousDepth[Depth], Arrays, Parents>}`
-							: never
+			[K in keyof T & string]-?: PathsOf<
+				K,
+				NonNullable<T[K]>,
+				Depth,
+				Arrays,
+				Parents
+			>
 		}[keyof T & string]
+
+/**
+ * The paths of one field `K` with the values `V`. Each kind of value in `V`
+ * gives its own paths, so a field that holds a string or a struct is a field,
+ * and the fields of the struct are fields too. A function is no field.
+ */
+type PathsOf<
+	K extends string,
+	V,
+	Depth extends number,
+	Arrays extends boolean,
+	Parents extends boolean,
+> =
+	// A field that is only ever `null` or missing is a field too.
+	| ([V] extends [never] ? K : never)
+	| ([Extract<V, Leaf | Whole>] extends [never] ? never : K)
+	| ([Extract<V, ReadonlyArray<unknown>>] extends [never]
+			? never
+			: Arrays extends true
+				? K
+				: never)
+	| ObjectPaths<
+			K,
+			Exclude<V, Leaf | Whole | Function | ReadonlyArray<unknown>>,
+			Depth,
+			Arrays,
+			Parents
+	  >
+
+/** The paths of a field `K` that holds the objects `O`, and of the fields below. */
+type ObjectPaths<
+	K extends string,
+	O,
+	Depth extends number,
+	Arrays extends boolean,
+	Parents extends boolean,
+> = [O] extends [never]
+	? never
+	: // A record is one field to a rule or a request, as `permittedFields`
+		// lists it.
+		| (Parents extends true
+				? K
+				: Arrays extends true
+					? string extends keyof O
+						? K
+						: never
+					: never)
+		| `${K}.${FieldPathInternal<O, PreviousDepth[Depth], Arrays, Parents>}`
 
 /**
  * The paths of the fields of `T` that hold one value, with dots for nested
