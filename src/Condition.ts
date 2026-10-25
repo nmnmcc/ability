@@ -484,25 +484,36 @@ type Normalize<A> = Exclude<A, undefined> | (undefined extends A ? null : never)
 
 /**
  * The type of the field of `T` at `Path`. A field that may be missing may also
- * be `null`.
+ * be `null`. Each type of a union gives its own value: a field below a value
+ * that is not an object, as below a string, is `null`, as a read of it is.
  *
  * @stability stable
  * @category utility types
  * @since 0.3.0
  */
-export type PathValue<
-	T,
-	Path extends string,
-> = Path extends `${infer Head}.${infer Rest}`
-	? Head extends keyof T
-		? undefined extends T[Head]
-			? PathValue<NonNullable<T[Head]>, Rest> | null
-			: null extends T[Head]
-				? PathValue<NonNullable<T[Head]>, Rest> | null
-				: PathValue<T[Head], Rest>
-		: never
-	: Path extends keyof T
-		? Normalize<T[Path]>
+export type PathValue<T, Path extends string> = T extends unknown
+	? PathValueIn<T, Path>
+	: never
+
+/** The type of the field at `Path` of `T`, which is not a union. */
+type PathValueIn<T, Path extends string> = T extends object
+	? Path extends `${infer Head}.${infer Rest}`
+		? PathValue<ChildOf<T, Head>, Rest>
+		: Normalize<ChildOf<T, Path>>
+	: null
+
+/**
+ * The type of the part `Name` of `T`. A part of a path is text, so the part
+ * `"1"` names the number key `1` too, as of a record with number keys.
+ */
+type ChildOf<T, Name extends string> = Name extends keyof T
+	? T[Name]
+	: Name extends `${infer N extends number}`
+		? N extends keyof T
+			? T[N]
+			: number extends keyof T
+				? T[number]
+				: never
 		: never
 
 /**

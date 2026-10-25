@@ -161,6 +161,41 @@ describe("Rule", () => {
 		>()
 		expect($.exists).type.toBeCallableWith("data")
 		expect($.exists).type.toBeCallableWith("counts.1")
+		expect($.eq).type.toBeCallableWith("counts.1", "a")
+		expect($.eq).type.not.toBeCallableWith("counts.1", 1)
+	})
+
+	it("gives the value type of a number key of the principal", () => {
+		class Counter extends Schema.Class<Counter>("Counter")({
+			counts: Schema.Record(Schema.Finite, Schema.String),
+		}) {}
+		const Sheet = Resource.make("Sheet", {
+			actions: ["read"],
+			fields: { level: Schema.Finite, name: Schema.String },
+		})
+		const $ = Condition.builder<Resource.Data<typeof Sheet>, unknown, Counter>()
+		expect($.principal("counts.1")).type.toBe<Condition.Ref<string, Counter>>()
+		expect($.eq).type.toBeCallableWith("name", $.principal("counts.1"))
+		expect($.eq).type.not.toBeCallableWith("level", $.principal("counts.1"))
+	})
+
+	it("gives the value type of a field in each branch of a union", () => {
+		const Item = Resource.make("FlagItem", {
+			actions: ["read"],
+			fields: {
+				data: Schema.Union([
+					Schema.String,
+					Schema.Struct({ flag: Schema.String }),
+				]),
+			},
+		})
+		const $ = Condition.builder<Resource.Data<typeof Item>, unknown, Caller>()
+		expect<
+			Condition.PathValue<Resource.Data<typeof Item>, "data.flag">
+		>().type.toBe<string | null>()
+		expect($.eq).type.toBeCallableWith("data.flag", "a")
+		expect($.eq).type.toBeCallableWith("data.flag", null)
+		expect($.eq).type.not.toBeCallableWith("data.flag", 1)
 	})
 
 	it("takes a field that holds a string or a struct", () => {
