@@ -892,6 +892,70 @@ describe("Authorizer", () => {
 			}),
 	)
 
+	it.effect(
+		"does not give one cached policy to two principals with dates in another order",
+		() =>
+			Effect.gen(function* () {
+				// The Schema makes the dates when it decodes, in an order that
+				// comes from the time now. A date has no own fields.
+				const clock = { now: 0 }
+				const early = new Date("2020-01-01T00:00:00Z")
+				const late = new Date("2030-01-01T00:00:00Z")
+				const Stored = Schema.Struct({ id: Schema.String })
+				const Session = Schema.Struct({
+					id: Schema.String,
+					dates: Schema.ReadonlySet(Schema.Date),
+				})
+				const dates = (earlyFirst: boolean) =>
+					new Set(earlyFirst ? [early, late] : [late, early])
+				const Dated = Stored.pipe(
+					Schema.decodeTo(
+						Session,
+						SchemaTransformation.transform({
+							decode: (stored): typeof Session.Type => ({
+								...stored,
+								dates: dates(clock.now === 0),
+							}),
+							encode: ({ id }) => ({ id }),
+						}),
+					),
+				)
+				const Dateds = Domain.make({ principal: Dated, resources: [Bot] })
+				class CurrentDated extends Context.Service<
+					CurrentDated,
+					typeof Session.Type
+				>()("@nmnmcc/ability/tests/Authorizer.test/CurrentDated") {}
+				class DatedAuth extends Authorizer.Service<DatedAuth>()(
+					"test/DatedAuth",
+					{ domain: Dateds, principal: CurrentDated },
+				) {}
+				const layer = Authorizer.layer(DatedAuth, {
+					policy: (session) =>
+						Effect.succeed(
+							Policy.define(Dateds)(function* (_) {
+								if (Array.from(session.dates)[0] === early) {
+									yield* _.allow("read", Bot)
+								}
+							}),
+						),
+				})
+				const exit = yield* Effect.gen(function* () {
+					yield* Effect.provideService(
+						DatedAuth.check({ action: "read", resource: aliceBot }),
+						CurrentDated,
+						{ id: "s", dates: dates(true) },
+					)
+					clock.now = 1
+					yield* Effect.provideService(
+						DatedAuth.check({ action: "read", resource: aliceBot }),
+						CurrentDated,
+						{ id: "s", dates: dates(false) },
+					)
+				}).pipe(Effect.provide(layer), Effect.exit)
+				assert.strictEqual(failureTag(exit), "Forbidden")
+			}),
+	)
+
 	it.effect("checks a principal with a loop back to itself", () =>
 		Effect.gen(function* () {
 			// The Schema puts the loop back when it decodes.

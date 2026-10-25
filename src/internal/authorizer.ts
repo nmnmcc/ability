@@ -17,6 +17,7 @@ import * as Hash from "effect/Hash"
 import * as HashMap from "effect/HashMap"
 import * as HashSet from "effect/HashSet"
 import * as Layer from "effect/Layer"
+import * as Option from "effect/Option"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import type * as Authorizer from "../Authorizer.ts"
@@ -148,6 +149,11 @@ class PrincipalKey implements Equal.Equal {
  * part does not make the text very long. The numbers are in a native `Map`,
  * because the walk must find an object by the object itself. The map belongs
  * to one walk.
+ *
+ * A value that keeps its data inside, with no own fields, as a `Date`, a
+ * `URL` or a `RegExp`, is in the text with its data, and so is an `Option`.
+ * For another such value, the walk can not see the data, so it throws, and
+ * the principal gets no key: it is not kept.
  */
 const orderOf = (root: unknown): string => {
 	const ids = new Map<object, number>()
@@ -168,6 +174,20 @@ const orderOf = (root: unknown): string => {
 		ids.set(value, ids.size)
 		const items = (list: ReadonlyArray<unknown>) =>
 			R.forEach(list, (item) => child(item, depth + 1))
+		if (value instanceof Date) {
+			return R.succeed(`date:${String(value.getTime())}`)
+		}
+		if (value instanceof URL) {
+			return R.succeed(`url:${JSON.stringify(value.href)}`)
+		}
+		if (value instanceof RegExp) {
+			return R.succeed(`regexp:${JSON.stringify(String(value))}`)
+		}
+		if (Option.isOption(value)) {
+			return Option.isSome(value)
+				? R.map(child(value.value, depth + 1), (text) => `some(${text})`)
+				: R.succeed("none")
+		}
 		if (Array.isArray(value)) {
 			return R.map(items(value), (texts) => `[${texts.join(",")}]`)
 		}
@@ -184,6 +204,14 @@ const orderOf = (root: unknown): string => {
 			)
 		}
 		const names = Object.keys(value)
+		const prototype: unknown = Object.getPrototypeOf(value)
+		if (
+			names.length === 0 &&
+			prototype !== Object.prototype &&
+			prototype !== null
+		) {
+			throw new Error("The data of a part of the principal is not in fields")
+		}
 		return R.map(
 			items(Arr.map(names, (name) => (value as Record<string, unknown>)[name])),
 			(texts) =>
