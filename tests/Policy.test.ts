@@ -4401,6 +4401,52 @@ describe("Policy", () => {
 		)
 	})
 
+	it("tests a field pattern that a rule names many times one time on a long field", () => {
+		interface Node {
+			readonly a: Node | null
+			readonly allowed: string
+			readonly blocked: string
+		}
+		const Node: Schema.Codec<Node> = Schema.Struct({
+			a: Schema.NullOr(Schema.suspend((): Schema.Codec<Node> => Node)),
+			allowed: Schema.String,
+			blocked: Schema.String,
+		})
+		const Tree = Resource.make("Tree", {
+			actions: ["read"],
+			fields: { root: Node },
+		})
+		const Trees = Domain.make({
+			principal: Caller,
+			resources: [Tree],
+			limits: { searchSteps: 10_000 },
+		})
+		const pattern = `root.${"**.a.".repeat(100)}allowed`
+		const policy = Schema.decodeSync(Policy.schema(Trees))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Tree"],
+					fields: Arr.makeBy(1000, () => pattern),
+				},
+			],
+		})
+		const leaf: Node = { a: null, allowed: "", blocked: "" }
+		const start = Date.now()
+		const decision = Policy.decideSync(policy, {
+			principal: alice,
+			action: "read",
+			resource: Tree.make({ root: leaf }),
+			field: `root.${"a.".repeat(600)}blocked` as never,
+		})
+		assert.strictEqual(decision._tag, "NotApplicable")
+		// A test of each copy of the pattern took about nine seconds.
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
 	it("collects the rules of a deep tree with a rule at each level in a short time", () => {
 		const leaf = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot)

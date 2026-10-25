@@ -96,6 +96,8 @@ interface ResidualContext {
 	readonly fits: (pattern: string) => boolean
 	/** The most parts of a field path in the domain. */
 	readonly parts: number
+	/** The tests of the field patterns on the field, for this request. */
+	readonly fieldTest: RuleData.FieldTest | undefined
 	/** The steps of a residual, with the limits of the domain. */
 	readonly build: Build
 	/**
@@ -269,6 +271,7 @@ interface PredicateContext {
 	readonly field: string | undefined
 	readonly descriptor: Resource.Descriptor
 	readonly fits: (pattern: string) => boolean
+	readonly fieldTest: RuleData.FieldTest | undefined
 }
 
 /** Tests if a rule that the request may use has a predicate. */
@@ -366,6 +369,12 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 	if (scope._tag === "False") {
 		return inScope({ allow: never, deny: never })
 	}
+	// It is made once for the request, as the predicate below runs `decide`
+	// for each value.
+	const fieldTest =
+		request.field === undefined
+			? undefined
+			: RuleData.fieldTestOf(request.field, descriptor, parts)
 	const target = {
 		action: request.action,
 		kind: request.kind,
@@ -374,6 +383,7 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 		descriptor,
 		fits: RuleData.fitsOf(descriptor.catalog, parts),
 		parts,
+		fieldTest,
 		build,
 	}
 	const context: ResidualContext = {
@@ -410,6 +420,7 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 				descriptor,
 				fits: RuleData.fitsOf(descriptor.catalog, parts),
 				parts,
+				fieldTest,
 				trace: undefined,
 			},
 			undefined,

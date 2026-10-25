@@ -42,6 +42,8 @@ interface DecideContext {
 	readonly fits: (pattern: string) => boolean
 	/** The most parts of a field path in the domain. */
 	readonly parts: number
+	/** The tests of the field patterns on the field, for this decision. */
+	readonly fieldTest: RuleData.FieldTest | undefined
 	/** The rules that were tested, for {@link explain}. */
 	readonly trace: Ref.Ref<Chunk.Chunk<Step>> | undefined
 }
@@ -308,6 +310,14 @@ const makeContext = (
 		descriptor,
 		fits: RuleData.fitsOf(descriptor.catalog, domain.limits.fieldPathParts),
 		parts: domain.limits.fieldPathParts,
+		fieldTest:
+			request.field === undefined
+				? undefined
+				: RuleData.fieldTestOf(
+						request.field,
+						descriptor,
+						domain.limits.fieldPathParts,
+					),
 		trace,
 	}
 }
@@ -359,14 +369,14 @@ export const explain = (
 const deniesInside = (
 	rules: ReadonlyArray<RuleData.Rule>,
 	target: { readonly action: string; readonly kind: string },
-	field: string,
+	inside: (pattern: string) => boolean,
 ): boolean =>
 	Arr.some(
 		rules,
 		(value) =>
 			value._tag === "Deny" &&
 			value.fields !== undefined &&
-			value.fields.some((pattern) => RuleData.matchesInside(pattern, field)) &&
+			value.fields.some(inside) &&
 			(value.actions.includes("*") || value.actions.includes(target.action)) &&
 			(value.resources.includes("*") || value.resources.includes(target.kind)),
 	)
@@ -410,7 +420,11 @@ export const permittedFields = (
 						deniesInside(
 							rules,
 							{ ...request, kind: descriptor.kind },
-							field.text,
+							RuleData.fieldTestOf(
+								field.text,
+								descriptor,
+								policy.domain.limits.fieldPathParts,
+							).inside,
 						)
 					),
 			),

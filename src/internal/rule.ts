@@ -159,6 +159,57 @@ export const matchesField = (pattern: string, field: string): boolean =>
 export const matchesInside = (pattern: string, field: string): boolean =>
 	Patterns.matchesBelow(Patterns.parseBound(pattern), field.split("."))
 
+/** The tests of the field patterns of rules on the field of one request. */
+export interface FieldTest {
+	/**
+	 * Tells if the field holds parts, as a record does. A deny rule for a part
+	 * inside it covers a request for the whole field.
+	 */
+	readonly open: boolean
+	/** The test of {@link matchesField} on the field. */
+	readonly matches: (pattern: string) => boolean
+	/** The test of {@link matchesInside} on the field. */
+	readonly inside: (pattern: string) => boolean
+}
+
+/**
+ * Makes the tests of field patterns on the field of a request for one walk,
+ * such as one decision. A policy may name one pattern very many times, and
+ * a test of a long field is slow, so each test keeps its answers by the text
+ * of the pattern. The memos go away when the walk ends.
+ */
+export const fieldTestOf = (
+	field: string,
+	descriptor: Resource.Descriptor | undefined,
+	parts: number,
+): FieldTest => {
+	const path = field.split(".")
+	// Native maps: the hash of a string in Effect has no random seed, and a
+	// policy could hold very many patterns with one hash. The engine hashes a
+	// string with a random seed.
+	const remember = (
+		test: (pattern: Patterns.Pattern, path: ReadonlyArray<string>) => boolean,
+	): ((pattern: string) => boolean) => {
+		const memo = new Map<string, boolean>()
+		return (pattern) => {
+			const known = memo.get(pattern)
+			if (known !== undefined) {
+				return known
+			}
+			const found = test(Patterns.parseBound(pattern), path)
+			memo.set(pattern, found)
+			return found
+		}
+	}
+	return {
+		open:
+			descriptor !== undefined &&
+			(Catalog.lookup(descriptor.catalog, field, parts)?.open ?? false),
+		matches: remember(Patterns.matches),
+		inside: remember(Patterns.matchesBelow),
+	}
+}
+
 /**
  * Makes the test "a field pattern matches some field of the catalog" for one
  * walk, such as one decision. A policy may name one pattern very many times,
@@ -213,6 +264,8 @@ export const matchesTarget = (
 		readonly fits?: ((pattern: string) => boolean) | undefined
 		/** The most parts of a field path in the domain. */
 		readonly parts?: number | undefined
+		/** The tests of {@link fieldTestOf} for the field, for this walk. */
+		readonly fieldTest?: FieldTest | undefined
 	},
 ): boolean => {
 	if (!rule.actions.includes("*") && !rule.actions.includes(target.action)) {
@@ -241,17 +294,17 @@ export const matchesTarget = (
 				))
 		)
 	}
-	const field = target.field
-	// A field that holds parts, as a record does, shows its parts too. So a
-	// deny rule for a part inside it, as `data.secret` inside `data`, also
-	// covers a request for the whole field.
-	const open =
-		rule._tag === "Deny" &&
-		target.descriptor !== undefined &&
-		(Catalog.lookup(target.descriptor.catalog, field, target.parts)?.open ??
-			false)
+	// A deny rule for a part inside a field that holds parts, as
+	// `data.secret` inside `data`, also covers a request for the whole field.
+	const test =
+		target.fieldTest ??
+		fieldTestOf(
+			target.field,
+			target.descriptor,
+			target.parts ?? Limits.fieldPathParts,
+		)
+	const inside = rule._tag === "Deny" && test.open
 	return rule.fields.some(
-		(pattern) =>
-			matchesField(pattern, field) || (open && matchesInside(pattern, field)),
+		(pattern) => test.matches(pattern) || (inside && test.inside(pattern)),
 	)
 }
