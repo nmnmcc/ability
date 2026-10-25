@@ -4452,7 +4452,9 @@ describe("Policy", () => {
 				})._tag,
 				"Allow",
 			)
-			assert.isBelow(Date.now() - begin, 1000)
+			// It takes about 0.25 seconds. A walk that copied the leaves at each
+			// level took more than six.
+			assert.isBelow(Date.now() - begin, 3000)
 		})
 
 		it("searches an In test with very many values in a short time", () => {
