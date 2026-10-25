@@ -216,6 +216,66 @@ export type KindTarget<D> = {
 }[Domain.Kind<D>]
 
 /**
+ * A {@link Target} with a field of any length. A function that takes a
+ * target checks its field with {@link CheckField}, so a field of up to about
+ * 1000 parts is fine, and a field that is not a field of the kind is a type
+ * error.
+ *
+ * @stability stable
+ * @category models
+ * @since 2.1.0
+ */
+export type DeepTarget<D> = {
+	[K in Domain.Kind<D>]: {
+		readonly action: Domain.ActionOf<D, K>
+		readonly resource: Domain.ValueOf<D, K>
+		readonly field?: string
+		readonly kind?: never
+	}
+}[Domain.Kind<D>]
+
+/**
+ * A {@link KindTarget} with a field of any length. See {@link DeepTarget}.
+ *
+ * @stability stable
+ * @category models
+ * @since 2.1.0
+ */
+export type DeepKindTarget<D> = {
+	[K in Domain.Kind<D>]: {
+		readonly action: Domain.ActionOf<D, K>
+		readonly kind: K
+		readonly field?: string
+		readonly within?: Scope<D, K>
+		readonly resource?: never
+	}
+}[Domain.Kind<D>]
+
+/** The kind of a target: its `kind`, or the `_tag` of its resource value. */
+type KindOfTarget<T> = T extends { readonly kind: infer K extends string }
+	? K
+	: T extends { readonly resource: { readonly _tag: infer K extends string } }
+		? K
+		: never
+
+/**
+ * Checks the field of a target or a request: a field of its kind that a
+ * request may name, of any length up to about 1000 parts. See
+ * `Condition.SelectPath`. A target with no field needs no check.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 2.1.0
+ */
+export type CheckField<D, T> = T extends {
+	readonly field: infer F extends string
+}
+	? {
+			readonly field: Condition.SelectPath<Domain.DataOf<D, KindOfTarget<T>>, F>
+		}
+	: unknown
+
+/**
  * A request: a principal, an action, and a resource value.
  *
  * @stability stable
@@ -223,6 +283,17 @@ export type KindTarget<D> = {
  * @since 0.3.0
  */
 export type Request<D> = Target<D> & { readonly principal: Domain.Principal<D> }
+
+/**
+ * A {@link Request} with a field of any length. See {@link DeepTarget}.
+ *
+ * @stability stable
+ * @category models
+ * @since 2.1.0
+ */
+export type DeepRequest<D> = DeepTarget<D> & {
+	readonly principal: Domain.Principal<D>
+}
 
 /**
  * A {@link Request} with no field.
@@ -243,6 +314,17 @@ export type FieldlessRequest<D> = FieldlessTarget<D> & {
  * @since 0.3.0
  */
 export type KindRequest<D> = KindTarget<D> & {
+	readonly principal: Domain.Principal<D>
+}
+
+/**
+ * A {@link KindRequest} with a field of any length. See {@link DeepTarget}.
+ *
+ * @stability stable
+ * @category models
+ * @since 2.1.0
+ */
+export type DeepKindRequest<D> = DeepKindTarget<D> & {
 	readonly principal: Domain.Principal<D>
 }
 
@@ -711,9 +793,13 @@ export const provideContext: {
  * @category evaluation
  * @since 0.3.0
  */
-export const decide: <D extends Domain.Any, X>(
+export const decide: <
+	D extends Domain.Any,
+	X,
+	const Req extends DeepRequest<NoInfer<D>>,
+>(
 	policy: Policy<D, X>,
-	request: Request<NoInfer<D>>,
+	request: Req & CheckField<NoInfer<D>, Req>,
 ) => Effect.Effect<
 	Decision.Decision,
 	Condition.ErrorOf<X>,
@@ -727,9 +813,12 @@ export const decide: <D extends Domain.Any, X>(
  * @category evaluation
  * @since 0.3.0
  */
-export const decideSync: <D extends Domain.Any>(
+export const decideSync: <
+	D extends Domain.Any,
+	const Req extends DeepRequest<NoInfer<D>>,
+>(
 	policy: Policy<D>,
-	request: Request<NoInfer<D>>,
+	request: Req & CheckField<NoInfer<D>, Req>,
 ) => Decision.Decision = Decide.decideSync
 
 /**
@@ -742,9 +831,13 @@ export const decideSync: <D extends Domain.Any>(
  * @category evaluation
  * @since 0.3.0
  */
-export const explain: <D extends Domain.Any, X>(
+export const explain: <
+	D extends Domain.Any,
+	X,
+	const Req extends DeepRequest<NoInfer<D>>,
+>(
 	policy: Policy<D, X>,
-	request: Request<NoInfer<D>>,
+	request: Req & CheckField<NoInfer<D>, Req>,
 ) => Effect.Effect<Explanation, Condition.ErrorOf<X>, Condition.ServicesOf<X>> =
 	Decide.explain as never
 
@@ -822,10 +915,10 @@ export type ResidualReads<D, K> = Condition.Reads<
 export const residual: <
 	D extends Domain.Any,
 	X,
-	const Req extends KindRequest<NoInfer<D>>,
+	const Req extends DeepKindRequest<NoInfer<D>>,
 >(
 	policy: Policy<D, X>,
-	request: Req,
+	request: Req & CheckField<NoInfer<D>, Req>,
 ) => Condition.Condition<ResidualReads<D, Req["kind"]>, X> =
 	Analysis.residual as never
 
@@ -884,10 +977,10 @@ export type Coverage<I = unknown, X = never> = Data.TaggedEnum<{
 export const coverage: <
 	D extends Domain.Any,
 	X,
-	const Req extends KindRequest<NoInfer<D>>,
+	const Req extends DeepKindRequest<NoInfer<D>>,
 >(
 	policy: Policy<D, X>,
-	request: Req,
+	request: Req & CheckField<NoInfer<D>, Req>,
 ) => Coverage<ResidualReads<D, Req["kind"]>, X> = Analysis.coverageAny as never
 
 // Schema

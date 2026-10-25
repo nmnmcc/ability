@@ -108,6 +108,16 @@ export type Pending = Internal.Pending
 export type Target<D> = Policy.Target<D> | Policy.KindTarget<D>
 
 /**
+ * A {@link Target} with a field of any length, which a check checks with
+ * `Policy.CheckField`.
+ *
+ * @stability stable
+ * @category models
+ * @since 2.1.0
+ */
+export type DeepTarget<D> = Policy.DeepTarget<D> | Policy.DeepKindTarget<D>
+
+/**
  * A request to the decider.
  *
  * @stability stable
@@ -164,12 +174,12 @@ export interface Authorizer<D extends Domain.Any, E, R> {
 		R
 	>
 	/** Gives the decision of the policy. It does not ask the decider. */
-	readonly decide: (
-		target: Policy.Target<D>,
+	readonly decide: <const T extends Policy.DeepTarget<D>>(
+		target: T & Policy.CheckField<D, T>,
 	) => Effect.Effect<Decision.Decision, PolicyUnavailable | E, R>
 	/** Succeeds when the principal may do the act, and fails when it may not. */
-	readonly check: (
-		target: Target<D>,
+	readonly check: <const T extends DeepTarget<D>>(
+		target: T & Policy.CheckField<D, T>,
 	) => Effect.Effect<void, Forbidden | Pending | PolicyUnavailable | E, R>
 	/**
 	 * Checks the read action first, and fails with the error of `hide` when the
@@ -177,8 +187,8 @@ export interface Authorizer<D extends Domain.Any, E, R> {
 	 * answer "not found" to a principal that may not know that a resource
 	 * exists.
 	 */
-	readonly guard: <const T extends Policy.Target<D>, E2>(
-		target: T,
+	readonly guard: <const T extends Policy.DeepTarget<D>, E2>(
+		target: T & Policy.CheckField<D, T>,
 		options: GuardOptions<D, E2, T["resource"]["_tag"]>,
 	) => Effect.Effect<void, E2 | Forbidden | Pending | PolicyUnavailable | E, R>
 	/**
@@ -187,8 +197,8 @@ export interface Authorizer<D extends Domain.Any, E, R> {
 	 * with `Condition.fold`. It is `False` when the principal may act on no
 	 * value, so the list is empty: it is not an error.
 	 */
-	readonly filter: <const T extends Policy.KindTarget<D>>(
-		target: T,
+	readonly filter: <const T extends Policy.DeepKindTarget<D>>(
+		target: T & Policy.CheckField<D, T>,
 	) => Effect.Effect<
 		Condition.Condition<
 			Policy.ResidualReads<D, T["kind"]>,
@@ -202,8 +212,8 @@ export interface Authorizer<D extends Domain.Any, E, R> {
 	 * the scope of the target. See `Policy.coverage`. Use it to show a button
 	 * only when the answer is not `None`.
 	 */
-	readonly coverage: <const T extends Policy.KindTarget<D>>(
-		target: T,
+	readonly coverage: <const T extends Policy.DeepKindTarget<D>>(
+		target: T & Policy.CheckField<D, T>,
 	) => Effect.Effect<
 		Policy.Coverage<Policy.ResidualReads<D, T["kind"]>, Condition.Opaque<E>>,
 		PolicyUnavailable | E,
@@ -238,26 +248,26 @@ export interface ServiceClass<
 	readonly domain: D
 	/** The Effect that gives the principal of the current request. */
 	readonly principal: Effect.Effect<Domain.Principal<D>, E, R>
-	readonly decide: (
-		target: Policy.Target<D>,
+	readonly decide: <const T extends Policy.DeepTarget<D>>(
+		target: T & Policy.CheckField<D, T>,
 	) => Effect.Effect<Decision.Decision, PolicyUnavailable | E, R | Self>
-	readonly check: (
-		target: Target<D>,
+	readonly check: <const T extends DeepTarget<D>>(
+		target: T & Policy.CheckField<D, T>,
 	) => Effect.Effect<
 		void,
 		Forbidden | Pending | PolicyUnavailable | E,
 		R | Self
 	>
-	readonly guard: <const T extends Policy.Target<D>, E2>(
-		target: T,
+	readonly guard: <const T extends Policy.DeepTarget<D>, E2>(
+		target: T & Policy.CheckField<D, T>,
 		options: GuardOptions<D, E2, T["resource"]["_tag"]>,
 	) => Effect.Effect<
 		void,
 		E2 | Forbidden | Pending | PolicyUnavailable | E,
 		R | Self
 	>
-	readonly filter: <const T extends Policy.KindTarget<D>>(
-		target: T,
+	readonly filter: <const T extends Policy.DeepKindTarget<D>>(
+		target: T & Policy.CheckField<D, T>,
 	) => Effect.Effect<
 		Condition.Condition<
 			Policy.ResidualReads<D, T["kind"]>,
@@ -266,8 +276,8 @@ export interface ServiceClass<
 		PolicyUnavailable | E,
 		R | Self
 	>
-	readonly coverage: <const T extends Policy.KindTarget<D>>(
-		target: T,
+	readonly coverage: <const T extends Policy.DeepKindTarget<D>>(
+		target: T & Policy.CheckField<D, T>,
 	) => Effect.Effect<
 		Policy.Coverage<Policy.ResidualReads<D, T["kind"]>, Condition.Opaque<E>>,
 		PolicyUnavailable | E,
