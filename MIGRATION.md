@@ -155,7 +155,7 @@ for a value that comes from code.
 ### Limits
 
 Each limit is in the new `Limits` module. A condition may have at most 100000
-nodes and 1000 levels, and a policy tree at most 256 levels and 100000 nodes. A
+nodes and 500 levels, and a policy tree at most 256 levels and 100000 nodes. A
 shared part counts for each place. The builder and the combinators throw an
 error past a limit, so no policy can make a check slow. A field path may have at
 most 5 parts. The decoders read at most 1000000 objects and array items.

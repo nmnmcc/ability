@@ -19,7 +19,7 @@ export const patternParts = 16
 export const conditionNodes = 100_000
 
 /** The most levels of one condition. */
-export const conditionDepth = 1_000
+export const conditionDepth = 500
 
 /** The most nodes of one residual condition. */
 export const residualNodes = 10_000

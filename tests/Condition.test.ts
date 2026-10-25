@@ -322,7 +322,7 @@ describe("Condition", () => {
 		const exit = Schema.decodeUnknownExit(Condition.schema)(deep)
 		assert.isTrue(Exit.isFailure(exit))
 		assert.include(String(Exit.isFailure(exit) ? exit.cause : ""), "levels")
-		const shallow = Array.from({ length: 900 }).reduce<unknown>(
+		const shallow = Array.from({ length: 400 }).reduce<unknown>(
 			(condition) => ({ _tag: "Not", condition }),
 			{ _tag: "True" },
 		)
@@ -595,7 +595,7 @@ describe("Condition node properties", () => {
 	it.prop(
 		"decodes a chain of Not nodes only up to the most levels",
 		{
-			levels: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 3000 })),
+			levels: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1500 })),
 		},
 		({ levels }) => {
 			const chain = Array.from({ length: levels - 1 }).reduce<unknown>(
@@ -604,7 +604,7 @@ describe("Condition node properties", () => {
 			)
 			return (
 				Exit.isSuccess(Schema.decodeUnknownExit(Condition.schema)(chain)) ===
-				levels <= 1000
+				levels <= 500
 			)
 		},
 	)

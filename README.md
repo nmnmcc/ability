@@ -243,7 +243,7 @@ So a predicate for a Document can not go into a rule for a Comment. Make
 conditions with the builder: a node made by hand, or a spread of a node, is not
 a condition, in the types or when the code runs.
 
-A condition may have at most 100000 nodes and 1000 levels, with a shared part
+A condition may have at most 100000 nodes and 500 levels, with a shared part
 counted for each place. The builder throws an error for a larger condition. So
 no condition can make a check slow or fill the stack.
 
@@ -615,7 +615,7 @@ error is never a "yes". The `Limits` module gives each value.
 | `fieldPathParts` | 5       | The parts of a field path, as in `settings.model`.      |
 | `patternParts`   | 16      | The parts of a field pattern.                           |
 | `conditionNodes` | 100000  | The nodes of a condition, a shared part for each place. |
-| `conditionDepth` | 1000    | The levels of a condition.                              |
+| `conditionDepth` | 500     | The levels of a condition.                              |
 | `residualNodes`  | 10000   | The nodes of a residual condition.                      |
 | `policyDepth`    | 256     | The levels of a policy tree.                            |
 | `policyNodes`    | 100000  | The nodes of a policy tree, with its rules.             |

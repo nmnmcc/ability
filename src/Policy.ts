@@ -916,7 +916,7 @@ export type EncodedNode =
  * every kind, action, field and principal field against the domain, and the
  * `meta` of each rule against the `meta` Schema of the domain.
  *
- * The decoder takes at most 256 levels of policies and 1000 levels of
+ * The decoder takes at most 256 levels of policies and 500 levels of
  * conditions, and at most 1000000 objects and array items, with a shared
  * object counted for each place. It reads only the own data fields of the
  * input.

@@ -511,7 +511,7 @@ describe("Policy", () => {
 			assert.isTrue(Exit.isFailure(exit))
 			assert.include(String(Exit.isFailure(exit) ? exit.cause : ""), "levels")
 			const when = Arr.reduce(
-				Arr.range(1, 900),
+				Arr.range(1, 400),
 				{ _tag: "True" } as unknown,
 				(inner) => ({ _tag: "Not", condition: inner }),
 			)
@@ -3292,7 +3292,7 @@ describe("Policy", () => {
 		const request = { principal: alice, action: "read", kind: "Bot" } as const
 		assert.throws(
 			() => Policy.residual(policy, request),
-			/levels. The most is 1000/,
+			/levels. The most is 500/,
 		)
 		const short = rulesOf(App, Arr.take(Rules, 400), {
 			algorithm: "firstApplicable",
