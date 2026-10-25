@@ -101,8 +101,13 @@ export const make = (data: Shape): Rule =>
 	// The data has no types here, as the code below works with no types.
 	new Rule({
 		_tag: data._tag,
-		actions: [...data.actions],
-		resources: [...data.resources],
+		// A rule may name one action or kind very many times, and each check
+		// of a request reads the lists. The binding takes only the actions and
+		// the kinds of the domain, so with one copy of each the lists are
+		// short. A native `Set` keeps the first copy of each name, in order: the
+		// names come from a policy, and it is faster than `Arr.dedupe`.
+		actions: Array.from(new Set(data.actions)),
+		resources: Array.from(new Set(data.resources)),
 		...(data.when === undefined ? {} : { when: data.when }),
 		...(data.fields === undefined ? {} : { fields: [...data.fields] }),
 		...(data.reason === undefined ? {} : { reason: data.reason }),

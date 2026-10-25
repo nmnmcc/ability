@@ -2148,6 +2148,52 @@ describe("Policy", () => {
 		)
 	})
 
+	it("keeps one copy of each action and kind of a rule", () => {
+		const kinds = Arr.makeBy(1000, (index) =>
+			Resource.make(`Edited${String(index)}`, {
+				actions: index === 0 ? ["read", "edit"] : ["read"],
+				fields: { name: Schema.String },
+			}),
+		)
+		const Edits = Domain.make({
+			principal: Caller,
+			resources: kinds,
+			limits: { searchSteps: 1 },
+		})
+		const codec = Policy.schema(Edits)
+		const start = Date.now()
+		const policy = Schema.decodeSync(codec)({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: Arr.makeBy(1_000_000, () => "edit"),
+					resources: [
+						...Arr.map(kinds, (kind) => kind.kind),
+						...Arr.map(kinds, (kind) => kind.kind),
+					],
+				},
+			],
+		})
+		const decision = Policy.decideSync(policy, {
+			principal: alice,
+			action: "edit",
+			resource: kinds[0]!.make({ name: "n" }),
+		})
+		assert.strictEqual(decision._tag, "Allow")
+		// Each check read the million copies, which took about eleven seconds.
+		assert.isBelow(Date.now() - start, 2000)
+		const json = Schema.encodeSync(codec)(policy) as {
+			readonly rules: ReadonlyArray<{
+				readonly actions: ReadonlyArray<string>
+				readonly resources: ReadonlyArray<string>
+			}>
+		}
+		assert.deepStrictEqual(json.rules[0]!.actions, ["edit"])
+		assert.strictEqual(json.rules[0]!.resources.length, 1000)
+	})
+
 	it("binds a rule with very many wrong kinds and actions in a short time", () => {
 		const Small = Domain.make({
 			principal: Caller,
