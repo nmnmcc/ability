@@ -835,6 +835,108 @@ describe("Authorizer", () => {
 			}),
 	)
 
+	it.effect(
+		"does not give one cached policy to a principal with 0 and one with -0",
+		() =>
+			Effect.gen(function* () {
+				// The Schema makes `n` when it decodes, from the time now. `Equal`
+				// takes `0` and `-0` as one.
+				const clock = { now: 0 }
+				const Stored = Schema.Struct({ id: Schema.String })
+				const Session = Schema.Struct({ id: Schema.String, n: Schema.Finite })
+				const Signed = Stored.pipe(
+					Schema.decodeTo(
+						Session,
+						SchemaTransformation.transform({
+							decode: (stored): typeof Session.Type => ({
+								...stored,
+								n: clock.now === 0 ? 0 : -0,
+							}),
+							encode: ({ id }) => ({ id }),
+						}),
+					),
+				)
+				const Signeds = Domain.make({ principal: Signed, resources: [Bot] })
+				class CurrentSigned extends Context.Service<
+					CurrentSigned,
+					typeof Session.Type
+				>()("@nmnmcc/ability/tests/Authorizer.test/CurrentSigned") {}
+				class SignedAuth extends Authorizer.Service<SignedAuth>()(
+					"test/SignedAuth",
+					{ domain: Signeds, principal: CurrentSigned },
+				) {}
+				const layer = Authorizer.layer(SignedAuth, {
+					policy: (session) =>
+						Effect.succeed(
+							Policy.define(Signeds)(function* (_) {
+								if (!Object.is(session.n, -0)) {
+									yield* _.allow("read", Bot)
+								}
+							}),
+						),
+				})
+				const exit = yield* Effect.gen(function* () {
+					yield* Effect.provideService(
+						SignedAuth.check({ action: "read", resource: aliceBot }),
+						CurrentSigned,
+						{ id: "s", n: 0 },
+					)
+					clock.now = 1
+					yield* Effect.provideService(
+						SignedAuth.check({ action: "read", resource: aliceBot }),
+						CurrentSigned,
+						{ id: "s", n: -0 },
+					)
+				}).pipe(Effect.provide(layer), Effect.exit)
+				assert.strictEqual(failureTag(exit), "Forbidden")
+			}),
+	)
+
+	it.effect("checks a principal with a loop back to itself", () =>
+		Effect.gen(function* () {
+			// The Schema puts the loop back when it decodes.
+			const Stored = Schema.Struct({ id: Schema.String })
+			const Session = Schema.Struct({ id: Schema.String, self: Schema.Unknown })
+			const withLoop = (id: string): typeof Session.Type => {
+				const session: { id: string; self: unknown } = { id, self: undefined }
+				session.self = session
+				return session
+			}
+			const Looped = Stored.pipe(
+				Schema.decodeTo(
+					Session,
+					SchemaTransformation.transform({
+						decode: (stored) => withLoop(stored.id),
+						encode: ({ id }) => ({ id }),
+					}),
+				),
+			)
+			const Loopeds = Domain.make({ principal: Looped, resources: [Bot] })
+			class CurrentLooped extends Context.Service<
+				CurrentLooped,
+				typeof Session.Type
+			>()("@nmnmcc/ability/tests/Authorizer.test/CurrentLooped") {}
+			class LoopedAuth extends Authorizer.Service<LoopedAuth>()(
+				"test/LoopedAuth",
+				{ domain: Loopeds, principal: CurrentLooped },
+			) {}
+			const layer = Authorizer.layer(LoopedAuth, {
+				policy: () =>
+					Effect.succeed(
+						Policy.define(Loopeds)(function* (_) {
+							yield* _.allow("read", Bot)
+						}),
+					),
+			})
+			const exit = yield* Effect.provideService(
+				LoopedAuth.check({ action: "read", resource: aliceBot }),
+				CurrentLooped,
+				withLoop("s"),
+			).pipe(Effect.provide(layer), Effect.exit)
+			assert.isTrue(Exit.isSuccess(exit))
+		}),
+	)
+
 	it.effect("keeps no policy of a principal with no JSON form", () =>
 		Effect.gen(function* () {
 			const role = Symbol.for("@nmnmcc/ability/tests/role")

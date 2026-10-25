@@ -139,43 +139,58 @@ class PrincipalKey implements Equal.Equal {
  * the order that a loop sees them. `Equal` does not see the order of the
  * fields of an object or of the items of a map, but a loader may read it, as
  * `Object.values` does. So two keys need the same order too. A scalar is in
- * the text with its type, so the items of a set or a map show their order.
+ * the text with its type, so the items of a set or a map show their order,
+ * and `-0` is not `0`: `Equal` takes them as one, but a loader may not.
+ *
+ * Each object gets a number at its first visit, and a later visit of it, as
+ * of a part that the value shares or of a loop back to a part above, writes
+ * `#` and the number. So the walk ends for a value with a loop, and a shared
+ * part does not make the text very long. The numbers are in a native `Map`,
+ * because the walk must find an object by the object itself. The map belongs
+ * to one walk.
  */
-const orderOf: (value: unknown) => string = Trampoline.adaptive<
-	unknown,
-	string
->((R, child) => (value, depth) => {
-	if (typeof value !== "object" || value === null) {
-		return R.succeed(
-			typeof value === "string"
-				? JSON.stringify(value)
-				: `${typeof value}:${String(value)}`,
-		)
-	}
-	const items = (list: ReadonlyArray<unknown>) =>
-		R.forEach(list, (item) => child(item, depth + 1))
-	if (Array.isArray(value)) {
-		return R.map(items(value), (texts) => `[${texts.join(",")}]`)
-	}
-	if (
-		value instanceof Map ||
-		value instanceof Set ||
-		HashMap.isHashMap(value) ||
-		HashSet.isHashSet(value) ||
-		Chunk.isChunk(value)
-	) {
+const orderOf = (root: unknown): string => {
+	const ids = new Map<object, number>()
+	return Trampoline.adaptive<unknown, string>((R, child) => (value, depth) => {
+		if (typeof value !== "object" || value === null) {
+			return R.succeed(
+				typeof value === "string"
+					? JSON.stringify(value)
+					: Object.is(value, -0)
+						? "number:-0"
+						: `${typeof value}:${String(value)}`,
+			)
+		}
+		const known = ids.get(value)
+		if (known !== undefined) {
+			return R.succeed(`#${String(known)}`)
+		}
+		ids.set(value, ids.size)
+		const items = (list: ReadonlyArray<unknown>) =>
+			R.forEach(list, (item) => child(item, depth + 1))
+		if (Array.isArray(value)) {
+			return R.map(items(value), (texts) => `[${texts.join(",")}]`)
+		}
+		if (
+			value instanceof Map ||
+			value instanceof Set ||
+			HashMap.isHashMap(value) ||
+			HashSet.isHashSet(value) ||
+			Chunk.isChunk(value)
+		) {
+			return R.map(
+				items(Array.from(value as Iterable<unknown>)),
+				(texts) => `<${texts.join(",")}>`,
+			)
+		}
+		const names = Object.keys(value)
 		return R.map(
-			items(Array.from(value as Iterable<unknown>)),
-			(texts) => `<${texts.join(",")}>`,
+			items(Arr.map(names, (name) => (value as Record<string, unknown>)[name])),
+			(texts) =>
+				`{${Arr.map(names, (name, index) => `${JSON.stringify(name)}:${texts[index]!}`).join(",")}}`,
 		)
-	}
-	const names = Object.keys(value)
-	return R.map(
-		items(Arr.map(names, (name) => (value as Record<string, unknown>)[name])),
-		(texts) =>
-			`{${Arr.map(names, (name, index) => `${JSON.stringify(name)}:${texts[index]!}`).join(",")}}`,
-	)
-})
+	})(root)
+}
 
 /**
  * Gives the JSON codec of a Schema, or `undefined` when the Schema has no JSON
