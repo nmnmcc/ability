@@ -4409,6 +4409,53 @@ describe("Policy", () => {
 		assert.strictEqual(covered._tag, "Unknown")
 	})
 
+	describe("deep chains and long lists", () => {
+		const load = (when: unknown) =>
+			Schema.decodeUnknownResult(PolicySchemaOfApp)({
+				_tag: "Rules",
+				algorithm: "denyOverrides",
+				rules: [{ _tag: "Allow", actions: ["read"], resources: ["Bot"], when }],
+			})
+		const leaves = Arr.makeBy(20_000, (index) => ({
+			_tag: "Compare",
+			op: "ne",
+			field: "id",
+			value: { _tag: "Literal", value: `i${String(index)}` },
+		}))
+
+		it("decides a deep chain of junctions over many leaves in a short time", () => {
+			const chain = Arr.reduce(
+				Arr.range(1, 300),
+				{ _tag: "And", conditions: leaves } as unknown,
+				(inner, level) =>
+					level % 2 === 0
+						? { _tag: "And", conditions: [inner] }
+						: {
+								_tag: "And",
+								conditions: [
+									{ _tag: "Or", conditions: [inner] },
+									{ _tag: "Exists", field: "name" },
+								],
+							},
+			)
+			const result = load(chain)
+			assert.isTrue(Result.isSuccess(result))
+			if (Result.isFailure(result)) {
+				return
+			}
+			const begin = Date.now()
+			assert.strictEqual(
+				Policy.decideSync(result.success, {
+					principal: alice,
+					action: "read",
+					resource: aliceBot,
+				})._tag,
+				"Allow",
+			)
+			assert.isBelow(Date.now() - begin, 1000)
+		})
+	})
+
 	it("searches many values of one field without a deep stack", () => {
 		const ids = Array.from({ length: 4000 }, (_, index) => `b${String(index)}`)
 		const policy = Policy.define(App)(function* (_) {

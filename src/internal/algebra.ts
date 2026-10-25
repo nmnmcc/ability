@@ -60,14 +60,45 @@ const shapeOf = (node: Node): unknown => {
  * with one text give the same answer for every value. It reads all of the
  * condition, so a search counts its size in the budget.
  */
-export const structureText = (node: Node): string =>
-	JSON.stringify(shapeOf(node))
+const structureText = (node: Node): string => JSON.stringify(shapeOf(node))
 
 /**
- * The most nodes of a condition that a smart constructor reads for its key.
- * A larger child is its own key, so the work of a constructor stays small.
+ * The work of the text of the structure of a condition: each node, and each
+ * value of an `In` test or an `Under` test. A node counts as one in `size`,
+ * also an `In` test with very many values. This walk reads the nodes only,
+ * so it takes `size` steps.
+ */
+const weightOf = (node: Node): number => {
+	switch (node._tag) {
+		case "In":
+			return 1 + node.values.length
+		case "Under":
+			return 1 + node.prefix.length
+		case "And":
+		case "Or":
+			return Arr.reduce(
+				node.conditions,
+				1,
+				(total, child) => total + weightOf(child),
+			)
+		case "Not":
+			return 1 + weightOf(node.condition)
+		default:
+			return 1
+	}
+}
+
+/**
+ * The most nodes of a condition that a smart constructor reads for its key,
+ * and the most children of a child that it puts into a node. A larger child
+ * is its own key, and it stays one child, so the work of a constructor stays
+ * small. A deep chain of `And` nodes, for one, does not copy all its leaves
+ * at each level.
  */
 const keyNodes = 64
+
+/** The most work of a key, with the values of its tests: see {@link weightOf}. */
+const keyWeight = 256
 
 /**
  * The key of a child in a smart constructor: the text of its structure, or
@@ -77,8 +108,10 @@ const keyNodes = 64
  * set would read all of them. A native `Set` finds a node by the node itself,
  * and it hashes a string with the random seed of the engine.
  */
-const keyOf = (node: Node): string | Node =>
-	node.size > keyNodes ? node : structureText(node)
+export const keyOf = (node: Node): string | Node =>
+	node.size > keyNodes || weightOf(node) > keyWeight
+		? node
+		: structureText(node)
 
 /**
  * Keeps the first node of each structure, in order. A large node is a copy
@@ -145,7 +178,8 @@ const shortCircuit = (
 /**
  * Makes an `And` or an `Or` of simple children, and makes it simple. It looks
  * one level down only:
- * - it puts the children of a child of the same kind into the node;
+ * - it puts the children of a child of the same kind into the node, when
+ *   the child has at most `keyNodes` of them;
  * - it stops at a `False` in an `And`, or at a `True` in an `Or`;
  * - it removes `True` from an `And`, `False` from an `Or`, copies, and the
  *   children that other children make useless.
@@ -158,7 +192,9 @@ const junction = (tag: "And" | "Or", children: ReadonlyArray<Node>): Node => {
 	const constant = tag === "And" ? "False" : "True"
 	const neutral = tag === "And" ? "True" : "False"
 	const flat = Arr.flatMap(children, (child) =>
-		child._tag === tag && !child.opaque ? child.conditions : [child],
+		child._tag === tag && !child.opaque && child.conditions.length <= keyNodes
+			? child.conditions
+			: [child],
 	)
 	return Option.match(
 		Arr.findFirstIndex(flat, (child) => child._tag === constant),
