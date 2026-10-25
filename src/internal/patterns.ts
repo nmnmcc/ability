@@ -39,19 +39,39 @@ const partOf = (text: string): Part =>
 			: { _tag: "Name", name: text }
 
 /**
+ * The size of a pattern: one for each part, and one more for each star inside
+ * a part. A match reads each text between the stars of a part, so a part with
+ * very many stars is as much work as very many parts.
+ */
+export const sizeOf = (pattern: Pattern): number =>
+	Arr.reduce(
+		pattern,
+		0,
+		(total, part) => total + (part._tag === "Glob" ? part.pieces.length : 1),
+	)
+
+/**
  * Reads a pattern. It fails with the problem when the pattern has `**`
- * inside a part, or has more parts than `parts`, the `patternParts` of a
- * domain.
+ * inside a part, or when its size, the parts and the stars inside them, is
+ * more than `parts`, the `patternParts` of a domain.
  */
 export const parse = (
 	text: string,
 	parts: number = Limits.patternParts,
 ): Result.Result<Pattern, string> => {
+	const tooLarge = Result.fail(
+		`The field pattern "${text}" has more than ${String(parts)} parts and stars inside parts. The most is ${String(parts)}.`,
+	)
 	const texts = text.split(".", parts + 1)
 	if (texts.length > parts) {
-		return Result.fail(
-			`The field pattern "${text}" has more than ${String(parts)} parts. The most is ${String(parts)}.`,
-		)
+		return tooLarge
+	}
+	// The stars inside the parts, with no list of the texts between them.
+	const stars = Arr.reduce(texts, 0, (total, part) =>
+		part === "**" ? total : total + part.split("*", parts + 1).length - 1,
+	)
+	if (texts.length + stars > parts) {
+		return tooLarge
 	}
 	if (Arr.some(texts, (part) => part !== "**" && part.includes("**"))) {
 		return Result.fail(

@@ -312,7 +312,7 @@ const patternIssues = (
 			if (!memo.matched.has(pattern)) {
 				memo.matched.add(pattern)
 				memo.work.steps +=
-					Math.max(parsed.length, 1) * memo.limits.fieldPathParts
+					Math.max(Patterns.sizeOf(parsed), 1) * memo.limits.fieldPathParts
 			}
 			// A rule with no known resource has an issue for that already. The
 			// pattern is checked on every kind, not only up to the first that it
@@ -331,7 +331,7 @@ const patternIssues = (
 							// with one issue, and the policy does not load.
 							memo.work.steps +=
 								Math.max(descriptor.catalog.edges, 1) *
-								Math.max(parsed.length, 1)
+								Math.max(Patterns.sizeOf(parsed), 1)
 							if (memo.work.steps > memo.limits.searchSteps) {
 								return true
 							}

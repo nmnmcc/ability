@@ -4933,6 +4933,49 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 500)
 	})
 
+	it("counts each star inside a part of a field pattern as a part", () => {
+		const Wide = Resource.make("StarWide", {
+			actions: ["read"],
+			fields: Object.fromEntries(
+				Arr.makeBy(1000, (index) => [`f${String(index)}`, Schema.String]),
+			) as Record<string, typeof Schema.String>,
+		})
+		const Wides = Domain.make({
+			principal: Caller,
+			resources: [Wide],
+			limits: { searchSteps: 5000 },
+		})
+		const decode = (pattern: string) =>
+			Schema.decodeExit(Policy.schema(Wides))({
+				_tag: "Rules",
+				algorithm: "denyOverrides",
+				rules: [
+					{
+						_tag: "Allow",
+						actions: ["read"],
+						resources: ["StarWide"],
+						fields: [pattern],
+					},
+				],
+			})
+		const start = Date.now()
+		// One part with a million stars. A match of it on each field took
+		// about twelve seconds.
+		const many = decode(`${"*a".repeat(1_000_000)}*`)
+		assert.isTrue(Exit.isFailure(many))
+		assert.include(
+			String(Exit.isFailure(many) ? many.cause : ""),
+			"parts and stars inside parts",
+		)
+		assert.isBelow(Date.now() - start, 1000)
+		// Within the parts, the stars still count in the work.
+		const work = decode(`${"*a".repeat(900)}*`)
+		assert.include(
+			String(Exit.isFailure(work) ? work.cause : ""),
+			"steps to check",
+		)
+	})
+
 	it("counts the work of each field pattern on the longest field of a request", () => {
 		interface Node {
 			readonly a: Node | null
