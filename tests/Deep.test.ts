@@ -226,6 +226,22 @@ describe("Deep inputs", () => {
 		assert.isFalse(Equal.equals(ruleOf("a"), ruleOf("b")))
 	})
 
+	it("compares the fields of a meta that have a symbol as their name", () => {
+		const Noted = Domain.make({
+			principal: App.principal,
+			resources: [Bot],
+			meta: Schema.Unknown,
+		})
+		const grant = Symbol("grant")
+		const policy = (value: string) =>
+			Policy.define(Noted)(function* (_) {
+				yield* _.allow("read", Bot, { meta: { [grant]: value } })
+			})
+		assert.isTrue(Equal.equals(policy("a"), policy("a")))
+		assert.isFalse(Equal.equals(policy("a"), policy("b")))
+		assert.strictEqual(HashSet.size(HashSet.make(policy("a"), policy("b"))), 2)
+	})
+
 	it("compares policies with a meta that holds itself", () => {
 		const Noted = Domain.make({
 			principal: App.principal,

@@ -69,6 +69,15 @@ const isRecord = (kind: Kind, u: unknown): u is object => {
 }
 
 /**
+ * The own fields of a record that a loop sees, with the ones that have a
+ * symbol as their name, as `Equal` reads them.
+ */
+const keysOf = (record: object): ReadonlyArray<PropertyKey> =>
+	Arr.filter(Reflect.ownKeys(record), (key) =>
+		Object.prototype.propertyIsEnumerable.call(record, key),
+	)
+
+/**
  * Tests if two nodes have the same data. Two nodes with other hashes are not
  * equal, so most tests end at once. The walk goes into the nodes, the lists
  * and the records, as the `meta` of a rule, which may have very many levels
@@ -108,12 +117,20 @@ export const equals = (kind: Kind, self: object, that: unknown): boolean => {
 					if (known(a, b)) {
 						return R.succeed(true)
 					}
-					const keys = Object.keys(a)
-					return keys.length === Object.keys(b).length &&
-						Arr.every(keys, (key) => Object.hasOwn(b, key))
+					const keys = keysOf(a)
+					return keys.length === keysOf(b).length &&
+						Arr.every(keys, (key) =>
+							Object.prototype.propertyIsEnumerable.call(b, key),
+						)
 						? pairs(
-								Arr.map(keys, (key) => (a as Record<string, unknown>)[key]),
-								Arr.map(keys, (key) => (b as Record<string, unknown>)[key]),
+								Arr.map(
+									keys,
+									(key) => (a as Record<PropertyKey, unknown>)[key],
+								),
+								Arr.map(
+									keys,
+									(key) => (b as Record<PropertyKey, unknown>)[key],
+								),
 							)
 						: R.succeed(false)
 				}
