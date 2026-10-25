@@ -133,6 +133,25 @@ describe("Rule", () => {
 		})
 	})
 
+	it("keeps the predicates of a policy with a mark of the type unknown", () => {
+		const widened: Policy.Policy<App, unknown> = Policy.define(App)(
+			function* (_) {
+				yield* _.allow("read", Bot)
+			},
+		)
+		expect(Policy.decideSync).type.not.toBeCallableWith(widened, {
+			principal: alice,
+			action: "read",
+			resource: aliceBot,
+		})
+		// Its services may be anything, so no context can give them all.
+		expect(Policy.provideContext).type.not.toBeCallableWith(
+			widened,
+			Context.empty(),
+		)
+		expect<Condition.ErrorOf<unknown>>().type.toBe<unknown>()
+	})
+
 	it("keeps an Exit as one field, as the catalog does", () => {
 		const Job = Resource.make("Job", {
 			actions: ["read"],
