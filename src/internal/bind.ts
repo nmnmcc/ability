@@ -287,6 +287,14 @@ const principalField = (
 	at: ReadonlyArray<PropertyKey>,
 ): Catalog.Field | Issue => {
 	const found = Catalog.lookup(context.domain.principalCatalog, ref)
+	// A read of the principal that is not plain data is a defect, as a read
+	// of a resource is: see `readIssues`.
+	if (found !== undefined && !found.plain) {
+		return {
+			path: at,
+			issue: `A condition may not read the field "${ref}" of the principal. A value above it may be an object that does not have it as a data field, as a class with a getter, a date or a list. Use a predicate for it.`,
+		}
+	}
 	return found !== undefined
 		? found
 		: {

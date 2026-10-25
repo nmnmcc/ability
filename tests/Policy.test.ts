@@ -3301,6 +3301,30 @@ describe("Policy", () => {
 		)
 	})
 
+	it("does not read a field of the principal that a class in a union does not have", () => {
+		class Guest extends Schema.Class<Guest>("GetterGuest")({
+			id: Schema.String,
+		}) {
+			get role(): string {
+				throw new globalThis.Error("no")
+			}
+		}
+		class Visitor extends Schema.Class<Visitor>("GetterVisitor")({
+			box: Schema.Union([Guest, Schema.Struct({ role: Schema.String })]),
+		}) {}
+		const Visits = Domain.make({ principal: Visitor, resources: [Bot] })
+		assert.throws(
+			() =>
+				Policy.define(Visits, { algorithm: "firstApplicable" })(function* (_) {
+					yield* _.allow("read", Bot)
+					yield* _.deny("read", Bot, {
+						when: ($) => $.eq("name", $.principal("box.role")),
+					})
+				}),
+			/may not read the field "box.role" of the principal/,
+		)
+	})
+
 	it("reads a field that one struct of a union does not have", () => {
 		class Owner extends Schema.Class<Owner>("NamedOwner")({
 			flag: Schema.String,
