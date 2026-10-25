@@ -699,6 +699,69 @@ describe("Authorizer", () => {
 			}),
 	)
 
+	it.effect(
+		"does not give one cached policy to two principals with fields in another order",
+		() =>
+			Effect.gen(function* () {
+				// The Schema makes the roles when it decodes, in an order that
+				// comes from the time now. `Equal` does not see the order.
+				const clock = { now: 0 }
+				const Stored = Schema.Struct({ id: Schema.String })
+				const Session = Schema.Struct({
+					id: Schema.String,
+					roles: Schema.Record(Schema.String, Schema.String),
+				})
+				const Ordered = Stored.pipe(
+					Schema.decodeTo(
+						Session,
+						SchemaTransformation.transform({
+							decode: (stored): typeof Session.Type => ({
+								...stored,
+								roles:
+									clock.now === 0
+										? { first: "admin", second: "guest" }
+										: { second: "guest", first: "admin" },
+							}),
+							encode: ({ id }) => ({ id }),
+						}),
+					),
+				)
+				const Ordereds = Domain.make({ principal: Ordered, resources: [Bot] })
+				class CurrentOrdered extends Context.Service<
+					CurrentOrdered,
+					typeof Session.Type
+				>()("@nmnmcc/ability/tests/Authorizer.test/CurrentOrdered") {}
+				class OrderedAuth extends Authorizer.Service<OrderedAuth>()(
+					"test/OrderedAuth",
+					{ domain: Ordereds, principal: CurrentOrdered },
+				) {}
+				const layer = Authorizer.layer(OrderedAuth, {
+					policy: (session) =>
+						Effect.succeed(
+							Policy.define(Ordereds)(function* (_) {
+								if (Object.values(session.roles)[0] === "admin") {
+									yield* _.allow("read", Bot)
+								}
+							}),
+						),
+				})
+				const exit = yield* Effect.gen(function* () {
+					yield* Effect.provideService(
+						OrderedAuth.check({ action: "read", resource: aliceBot }),
+						CurrentOrdered,
+						{ id: "s", roles: { first: "admin", second: "guest" } },
+					)
+					clock.now = 1
+					yield* Effect.provideService(
+						OrderedAuth.check({ action: "read", resource: aliceBot }),
+						CurrentOrdered,
+						{ id: "s", roles: { second: "guest", first: "admin" } },
+					)
+				}).pipe(Effect.provide(layer), Effect.exit)
+				assert.strictEqual(failureTag(exit), "Forbidden")
+			}),
+	)
+
 	it.effect("keeps no policy of a principal with no JSON form", () =>
 		Effect.gen(function* () {
 			const role = Symbol.for("@nmnmcc/ability/tests/role")

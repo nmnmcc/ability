@@ -7,11 +7,14 @@
 // language service check for `unknown` in an Effect is off here.
 // @effect-diagnostics anyUnknownInErrorContext:off
 import * as Cache from "effect/Cache"
+import * as Chunk from "effect/Chunk"
 import * as Context from "effect/Context"
 import type * as Duration from "effect/Duration"
 import * as Effect from "effect/Effect"
 import * as Equal from "effect/Equal"
 import * as Hash from "effect/Hash"
+import * as HashMap from "effect/HashMap"
+import * as HashSet from "effect/HashSet"
 import * as Layer from "effect/Layer"
 import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
@@ -103,18 +106,24 @@ type AnyTarget = {
 class PrincipalKey implements Equal.Equal {
 	readonly principal: object
 	readonly text: string
-	/** The key is the JSON form, so the decoded principals must be equal too. */
-	readonly exact: boolean
-	constructor(principal: object, text: string, exact: boolean) {
+	/**
+	 * The order of the parts of the decoded principal, from {@link orderOf},
+	 * when the key is the JSON form. The decoded principals must be equal
+	 * too, with their parts in the same order. `undefined` for a key from
+	 * `cache.key`.
+	 */
+	readonly order: string | undefined
+	constructor(principal: object, text: string, order: string | undefined) {
 		this.principal = principal
 		this.text = text
-		this.exact = exact
+		this.order = order
 	}
 	[Equal.symbol](that: unknown): boolean {
 		return (
 			that instanceof PrincipalKey &&
 			that.text === this.text &&
-			(!this.exact || Equal.equals(that.principal, this.principal))
+			that.order === this.order &&
+			(this.order === undefined || Equal.equals(that.principal, this.principal))
 		)
 	}
 	[Hash.symbol](): number {
@@ -123,14 +132,36 @@ class PrincipalKey implements Equal.Equal {
 }
 
 /**
- * Makes the cache key of a principal from its JSON form. The key keeps the
- * principal that the Schema decodes from that form, so the loader sees only
- * the data that the key shows. A principal gets no key when it does not
- * encode, or when the decoded value is not `Equal` to it. Two classes, or a
- * string and a number, may have one JSON form, as in a union, and `Equal`
- * tells them apart. So two principals with one key are equal, and the cache
- * can not give one the policy of the other.
+ * The text of the order of the parts of a value: the names of the fields of
+ * each object, and the items of each list, set and map, in the order that a
+ * loop sees them. `Equal` does not see this order, but a loader may read it,
+ * as `Object.values` does. So two keys need the same order too. A scalar has
+ * no parts, and `Equal` compares it.
  */
+const orderOf = (value: unknown): string => {
+	if (typeof value !== "object" || value === null) {
+		return ""
+	}
+	if (Array.isArray(value)) {
+		return `[${value.map(orderOf).join(",")}]`
+	}
+	if (
+		value instanceof Map ||
+		value instanceof Set ||
+		HashMap.isHashMap(value) ||
+		HashSet.isHashSet(value) ||
+		Chunk.isChunk(value)
+	) {
+		return `<${Array.from(value as Iterable<unknown>, orderOf).join(",")}>`
+	}
+	return `{${Object.keys(value)
+		.map(
+			(name) =>
+				`${JSON.stringify(name)}:${orderOf((value as Record<string, unknown>)[name])}`,
+		)
+		.join(",")}}`
+}
+
 /**
  * Gives the JSON codec of a Schema, or `undefined` when the Schema has no JSON
  * form, as a struct with a symbol key has none.
@@ -148,6 +179,17 @@ const jsonCodecOf = (
 	}
 }
 
+/**
+ * Makes the cache key of a principal from its JSON form. The key keeps the
+ * principal that the Schema decodes from that form, so the loader sees only
+ * the data that the key shows. A principal gets no key when it does not
+ * encode, or when the decoded value is not `Equal` to it. Two classes, or a
+ * string and a number, may have one JSON form, as in a union, and `Equal`
+ * tells them apart. A Schema may make data when it decodes, as the order of
+ * the fields of a record, so the key keeps that order too. So two
+ * principals with one key are equal, and the cache can not give one the
+ * policy of the other.
+ */
 const jsonKey = (
 	schema: Schema.Top,
 ): ((principal: object) => PrincipalKey | undefined) => {
@@ -170,7 +212,7 @@ const jsonKey = (
 					onFailure: () => undefined,
 					onSuccess: (decoded) =>
 						Equal.equals(decoded, principal)
-							? new PrincipalKey(decoded as object, text, true)
+							? new PrincipalKey(decoded as object, text, orderOf(decoded))
 							: undefined,
 				})
 			},
@@ -236,7 +278,7 @@ export const makeLayer = (
 		const text = custom(principal)
 		return text === undefined
 			? undefined
-			: new PrincipalKey(canonical?.principal ?? principal, text, false)
+			: new PrincipalKey(canonical?.principal ?? principal, text, undefined)
 	}
 	return Layer.effect(
 		service,
