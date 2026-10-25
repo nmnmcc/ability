@@ -2055,9 +2055,20 @@ const readsGetter = (
 	!readsOnly(
 		nodeOf(policy),
 		targetOf(request, descriptor),
-		(field) => !Resource.hasGetter(descriptor.schema, field),
+		(field) => !readsGetterAt(descriptor.schema, field),
 		new Map(),
 	)
+
+/**
+ * Tests if a read of a field may read a getter of a class: at the field, or
+ * at a field on the way to it, in any branch of a union.
+ */
+const readsGetterAt = (schema: Schema.Top, field: string): boolean => {
+	const parts = field.split(".")
+	return Arr.some(Arr.range(1, parts.length), (count) =>
+		Resource.hasGetter(schema, parts.slice(0, count).join(".")),
+	)
+}
 
 /**
  * Tests if the scope of a request reads a getter of a class. A scope is made
@@ -2070,7 +2081,7 @@ const scopeReadsGetter = (
 ): boolean =>
 	!Arr.every(
 		scopeFields(request.within),
-		(field) => !Resource.hasGetter(descriptor.schema, field),
+		(field) => !readsGetterAt(descriptor.schema, field),
 	)
 
 /**

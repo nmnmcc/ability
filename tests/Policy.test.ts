@@ -2634,6 +2634,38 @@ describe("Policy", () => {
 			within: ($) => $.or($.eq("info.allowed", true), Condition.always),
 		} satisfies Policy.KindRequest<typeof Boxes>
 		assert.strictEqual(Policy.coverage(open, scoped)._tag, "Unknown")
+		// A getter on the way to a field is a read of a getter too.
+		class Holder extends Schema.Class<Holder>("PathHolder")({
+			id: Schema.String,
+		}) {
+			get details(): { readonly flag: boolean } {
+				throw new globalThis.Error("no")
+			}
+		}
+		const Deep = Resource.make("DeepBox", {
+			actions: ["read"],
+			fields: {
+				owner: Schema.Union([
+					Holder,
+					Schema.Struct({ details: Schema.Struct({ flag: Schema.Boolean }) }),
+				]),
+			},
+		})
+		const Deeps = Domain.make({ principal: Caller, resources: [Deep] })
+		const deep = Policy.define(Deeps)(function* (_) {
+			yield* _.allow("read", Deep, {
+				when: ($) => $.or($.eq("owner.details.flag", true), Condition.always),
+			})
+		})
+		assert.throws(
+			() =>
+				Policy.residual(deep, {
+					principal: alice,
+					action: "read",
+					kind: "DeepBox",
+				}),
+			/reads a getter/,
+		)
 		// Also next to a predicate, which keeps the reads of the rules.
 		const withPredicate = Policy.define(Boxes)(function* (_) {
 			yield* _.allow("read", Box, {
