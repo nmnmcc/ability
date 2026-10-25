@@ -634,10 +634,12 @@ describe("Authorizer", () => {
 	)
 
 	it.effect(
-		"does not give one cached policy to two principals that one text decodes to",
+		"keeps the data that the Schema makes when it decodes until the entry ends",
 		() =>
 			Effect.gen(function* () {
-				// The Schema makes `expired` when it decodes, from the time now.
+				// The Schema makes `expired` when it decodes, from the time now. The
+				// cache key is the text, so the data is kept with the policy, as
+				// data that the loader reads is.
 				const clock = { now: 0 }
 				const Stored = Schema.Struct({
 					id: Schema.String,
@@ -672,438 +674,49 @@ describe("Authorizer", () => {
 						principal: CurrentTimed,
 					},
 				) {}
-				const layer = Authorizer.layer(TimedAuth, {
-					policy: (session) =>
-						Effect.succeed(
-							Policy.define(Timeds)(function* (_) {
-								if (!session.expired) {
-									yield* _.allow("read", Bot)
-								}
-							}),
-						),
-				})
-				const exit = yield* Effect.gen(function* () {
-					yield* Effect.provideService(
-						TimedAuth.check({ action: "read", resource: aliceBot }),
-						CurrentTimed,
-						{ id: "s", until: 10, expired: false },
-					)
-					clock.now = 20
-					yield* Effect.provideService(
-						TimedAuth.check({ action: "read", resource: aliceBot }),
-						CurrentTimed,
-						{ id: "s", until: 10, expired: true },
-					)
-				}).pipe(Effect.provide(layer), Effect.exit)
-				assert.strictEqual(failureTag(exit), "Forbidden")
+				const layerWith = (cache: false | undefined) =>
+					Authorizer.layer(TimedAuth, {
+						policy: (session) =>
+							Effect.succeed(
+								Policy.define(Timeds)(function* (_) {
+									if (!session.expired) {
+										yield* _.allow("read", Bot)
+									}
+								}),
+							),
+						...(cache === undefined ? {} : { cache }),
+					})
+				const later = (cache: false | undefined) =>
+					Effect.gen(function* () {
+						clock.now = 0
+						yield* Effect.provideService(
+							TimedAuth.check({ action: "read", resource: aliceBot }),
+							CurrentTimed,
+							{ id: "s", until: 10, expired: false },
+						)
+						clock.now = 20
+						const expired = { id: "s", until: 10, expired: true }
+						const kept = yield* Effect.provideService(
+							TimedAuth.check({ action: "read", resource: aliceBot }),
+							CurrentTimed,
+							expired,
+						).pipe(Effect.exit)
+						const auth = yield* TimedAuth
+						yield* auth.invalidate(expired)
+						const loaded = yield* Effect.provideService(
+							TimedAuth.check({ action: "read", resource: aliceBot }),
+							CurrentTimed,
+							expired,
+						).pipe(Effect.exit)
+						return [failureTag(kept), failureTag(loaded)]
+					}).pipe(Effect.provide(layerWith(cache)))
+				assert.deepStrictEqual(yield* later(undefined), [
+					"Success",
+					"Forbidden",
+				])
+				assert.deepStrictEqual(yield* later(false), ["Forbidden", "Forbidden"])
 			}),
 	)
-
-	it.effect(
-		"does not give one cached policy to two principals with fields in another order",
-		() =>
-			Effect.gen(function* () {
-				// The Schema makes the roles when it decodes, in an order that
-				// comes from the time now. `Equal` does not see the order.
-				const clock = { now: 0 }
-				const Stored = Schema.Struct({ id: Schema.String })
-				const Session = Schema.Struct({
-					id: Schema.String,
-					roles: Schema.Record(Schema.String, Schema.String),
-				})
-				const Ordered = Stored.pipe(
-					Schema.decodeTo(
-						Session,
-						SchemaTransformation.transform({
-							decode: (stored): typeof Session.Type => ({
-								...stored,
-								roles:
-									clock.now === 0
-										? { first: "admin", second: "guest" }
-										: { second: "guest", first: "admin" },
-							}),
-							encode: ({ id }) => ({ id }),
-						}),
-					),
-				)
-				const Ordereds = Domain.make({ principal: Ordered, resources: [Bot] })
-				class CurrentOrdered extends Context.Service<
-					CurrentOrdered,
-					typeof Session.Type
-				>()("@nmnmcc/ability/tests/Authorizer.test/CurrentOrdered") {}
-				class OrderedAuth extends Authorizer.Service<OrderedAuth>()(
-					"test/OrderedAuth",
-					{ domain: Ordereds, principal: CurrentOrdered },
-				) {}
-				const layer = Authorizer.layer(OrderedAuth, {
-					policy: (session) =>
-						Effect.succeed(
-							Policy.define(Ordereds)(function* (_) {
-								if (Object.values(session.roles)[0] === "admin") {
-									yield* _.allow("read", Bot)
-								}
-							}),
-						),
-				})
-				const exit = yield* Effect.gen(function* () {
-					yield* Effect.provideService(
-						OrderedAuth.check({ action: "read", resource: aliceBot }),
-						CurrentOrdered,
-						{ id: "s", roles: { first: "admin", second: "guest" } },
-					)
-					clock.now = 1
-					yield* Effect.provideService(
-						OrderedAuth.check({ action: "read", resource: aliceBot }),
-						CurrentOrdered,
-						{ id: "s", roles: { second: "guest", first: "admin" } },
-					)
-				}).pipe(Effect.provide(layer), Effect.exit)
-				assert.strictEqual(failureTag(exit), "Forbidden")
-			}),
-	)
-
-	it.effect(
-		"does not give one cached policy to two principals with a map in another order",
-		() =>
-			Effect.gen(function* () {
-				// The Schema makes the roles when it decodes, as a map in an order
-				// that comes from the time now. `Equal` does not see the order of
-				// a map.
-				const clock = { now: 0 }
-				const Stored = Schema.Struct({ id: Schema.String })
-				const Session = Schema.Struct({
-					id: Schema.String,
-					roles: Schema.ReadonlyMap(Schema.String, Schema.String),
-				})
-				const roles = (adminFirst: boolean) =>
-					new Map(
-						adminFirst
-							? [
-									["first", "admin"],
-									["second", "guest"],
-								]
-							: [
-									["second", "guest"],
-									["first", "admin"],
-								],
-					)
-				const Mapped = Stored.pipe(
-					Schema.decodeTo(
-						Session,
-						SchemaTransformation.transform({
-							decode: (stored): typeof Session.Type => ({
-								...stored,
-								roles: roles(clock.now === 0),
-							}),
-							encode: ({ id }) => ({ id }),
-						}),
-					),
-				)
-				const Mappeds = Domain.make({ principal: Mapped, resources: [Bot] })
-				class CurrentMapped extends Context.Service<
-					CurrentMapped,
-					typeof Session.Type
-				>()("@nmnmcc/ability/tests/Authorizer.test/CurrentMapped") {}
-				class MappedAuth extends Authorizer.Service<MappedAuth>()(
-					"test/MappedAuth",
-					{ domain: Mappeds, principal: CurrentMapped },
-				) {}
-				const layer = Authorizer.layer(MappedAuth, {
-					policy: (session) =>
-						Effect.succeed(
-							Policy.define(Mappeds)(function* (_) {
-								if (Array.from(session.roles.values())[0] === "admin") {
-									yield* _.allow("read", Bot)
-								}
-							}),
-						),
-				})
-				const exit = yield* Effect.gen(function* () {
-					yield* Effect.provideService(
-						MappedAuth.check({ action: "read", resource: aliceBot }),
-						CurrentMapped,
-						{ id: "s", roles: roles(true) },
-					)
-					clock.now = 1
-					yield* Effect.provideService(
-						MappedAuth.check({ action: "read", resource: aliceBot }),
-						CurrentMapped,
-						{ id: "s", roles: roles(false) },
-					)
-				}).pipe(Effect.provide(layer), Effect.exit)
-				assert.strictEqual(failureTag(exit), "Forbidden")
-			}),
-	)
-
-	it.effect(
-		"does not give one cached policy to a principal with 0 and one with -0",
-		() =>
-			Effect.gen(function* () {
-				// The Schema makes `n` when it decodes, from the time now. `Equal`
-				// takes `0` and `-0` as one.
-				const clock = { now: 0 }
-				const Stored = Schema.Struct({ id: Schema.String })
-				const Session = Schema.Struct({ id: Schema.String, n: Schema.Finite })
-				const Signed = Stored.pipe(
-					Schema.decodeTo(
-						Session,
-						SchemaTransformation.transform({
-							decode: (stored): typeof Session.Type => ({
-								...stored,
-								n: clock.now === 0 ? 0 : -0,
-							}),
-							encode: ({ id }) => ({ id }),
-						}),
-					),
-				)
-				const Signeds = Domain.make({ principal: Signed, resources: [Bot] })
-				class CurrentSigned extends Context.Service<
-					CurrentSigned,
-					typeof Session.Type
-				>()("@nmnmcc/ability/tests/Authorizer.test/CurrentSigned") {}
-				class SignedAuth extends Authorizer.Service<SignedAuth>()(
-					"test/SignedAuth",
-					{ domain: Signeds, principal: CurrentSigned },
-				) {}
-				const layer = Authorizer.layer(SignedAuth, {
-					policy: (session) =>
-						Effect.succeed(
-							Policy.define(Signeds)(function* (_) {
-								if (!Object.is(session.n, -0)) {
-									yield* _.allow("read", Bot)
-								}
-							}),
-						),
-				})
-				const exit = yield* Effect.gen(function* () {
-					yield* Effect.provideService(
-						SignedAuth.check({ action: "read", resource: aliceBot }),
-						CurrentSigned,
-						{ id: "s", n: 0 },
-					)
-					clock.now = 1
-					yield* Effect.provideService(
-						SignedAuth.check({ action: "read", resource: aliceBot }),
-						CurrentSigned,
-						{ id: "s", n: -0 },
-					)
-				}).pipe(Effect.provide(layer), Effect.exit)
-				assert.strictEqual(failureTag(exit), "Forbidden")
-			}),
-	)
-
-	it.effect(
-		"does not give one cached policy to two principals with dates in another order",
-		() =>
-			Effect.gen(function* () {
-				// The Schema makes the dates when it decodes, in an order that
-				// comes from the time now. A date has no own fields.
-				const clock = { now: 0 }
-				const early = new Date("2020-01-01T00:00:00Z")
-				const late = new Date("2030-01-01T00:00:00Z")
-				const Stored = Schema.Struct({ id: Schema.String })
-				const Session = Schema.Struct({
-					id: Schema.String,
-					dates: Schema.ReadonlySet(Schema.Date),
-				})
-				const dates = (earlyFirst: boolean) =>
-					new Set(earlyFirst ? [early, late] : [late, early])
-				const Dated = Stored.pipe(
-					Schema.decodeTo(
-						Session,
-						SchemaTransformation.transform({
-							decode: (stored): typeof Session.Type => ({
-								...stored,
-								dates: dates(clock.now === 0),
-							}),
-							encode: ({ id }) => ({ id }),
-						}),
-					),
-				)
-				const Dateds = Domain.make({ principal: Dated, resources: [Bot] })
-				class CurrentDated extends Context.Service<
-					CurrentDated,
-					typeof Session.Type
-				>()("@nmnmcc/ability/tests/Authorizer.test/CurrentDated") {}
-				class DatedAuth extends Authorizer.Service<DatedAuth>()(
-					"test/DatedAuth",
-					{ domain: Dateds, principal: CurrentDated },
-				) {}
-				const layer = Authorizer.layer(DatedAuth, {
-					policy: (session) =>
-						Effect.succeed(
-							Policy.define(Dateds)(function* (_) {
-								if (Array.from(session.dates)[0] === early) {
-									yield* _.allow("read", Bot)
-								}
-							}),
-						),
-				})
-				const exit = yield* Effect.gen(function* () {
-					yield* Effect.provideService(
-						DatedAuth.check({ action: "read", resource: aliceBot }),
-						CurrentDated,
-						{ id: "s", dates: dates(true) },
-					)
-					clock.now = 1
-					yield* Effect.provideService(
-						DatedAuth.check({ action: "read", resource: aliceBot }),
-						CurrentDated,
-						{ id: "s", dates: dates(false) },
-					)
-				}).pipe(Effect.provide(layer), Effect.exit)
-				assert.strictEqual(failureTag(exit), "Forbidden")
-			}),
-	)
-
-	it.effect(
-		"does not give one cached policy to two principals with a RegExp at another place",
-		() =>
-			Effect.gen(function* () {
-				// The Schema makes the pattern when it decodes, with the place of
-				// its next match from the time now. `Equal` does not see it.
-				const clock = { now: 0 }
-				const Stored = Schema.Struct({ id: Schema.String })
-				const Session = Schema.Struct({
-					id: Schema.String,
-					pattern: Schema.RegExp,
-				})
-				const pattern = (lastIndex: number) => {
-					const made = /a/g
-					made.lastIndex = lastIndex
-					return made
-				}
-				const Patterned = Stored.pipe(
-					Schema.decodeTo(
-						Session,
-						SchemaTransformation.transform({
-							decode: (stored): typeof Session.Type => ({
-								...stored,
-								pattern: pattern(clock.now),
-							}),
-							encode: ({ id }) => ({ id }),
-						}),
-					),
-				)
-				const Patterneds = Domain.make({
-					principal: Patterned,
-					resources: [Bot],
-				})
-				class CurrentPatterned extends Context.Service<
-					CurrentPatterned,
-					typeof Session.Type
-				>()("@nmnmcc/ability/tests/Authorizer.test/CurrentPatterned") {}
-				class PatternedAuth extends Authorizer.Service<PatternedAuth>()(
-					"test/PatternedAuth",
-					{ domain: Patterneds, principal: CurrentPatterned },
-				) {}
-				const layer = Authorizer.layer(PatternedAuth, {
-					policy: (session) =>
-						Effect.succeed(
-							Policy.define(Patterneds)(function* (_) {
-								if (session.pattern.lastIndex === 0) {
-									yield* _.allow("read", Bot)
-								}
-							}),
-						),
-				})
-				const exit = yield* Effect.gen(function* () {
-					yield* Effect.provideService(
-						PatternedAuth.check({ action: "read", resource: aliceBot }),
-						CurrentPatterned,
-						{ id: "s", pattern: pattern(0) },
-					)
-					clock.now = 1
-					yield* Effect.provideService(
-						PatternedAuth.check({ action: "read", resource: aliceBot }),
-						CurrentPatterned,
-						{ id: "s", pattern: pattern(1) },
-					)
-				}).pipe(Effect.provide(layer), Effect.exit)
-				assert.strictEqual(failureTag(exit), "Forbidden")
-			}),
-	)
-
-	describe("does not give one cached policy to two principals with other fields on a value", () => {
-		// The Schema makes the rights when it decodes, with the role from the
-		// time now, on a field of the array or a field that a loop can not
-		// see. `Equal` does not see either one.
-		const run = (rightsOf: (role: string) => ReadonlyArray<string>) =>
-			Effect.gen(function* () {
-				const clock = { role: "admin" }
-				const Stored = Schema.Struct({ id: Schema.String })
-				const Rights = Schema.declare((input): input is ReadonlyArray<string> =>
-					Array.isArray(input),
-				)
-				const Session = Schema.Struct({ id: Schema.String, rights: Rights })
-				const Righted = Stored.pipe(
-					Schema.decodeTo(
-						Session,
-						SchemaTransformation.transform({
-							decode: (stored): typeof Session.Type => ({
-								...stored,
-								rights: rightsOf(clock.role),
-							}),
-							encode: ({ id }) => ({ id }),
-						}),
-					),
-				)
-				const Righteds = Domain.make({ principal: Righted, resources: [Bot] })
-				class CurrentRighted extends Context.Service<
-					CurrentRighted,
-					typeof Session.Type
-				>()("@nmnmcc/ability/tests/Authorizer.test/CurrentRighted") {}
-				class RightedAuth extends Authorizer.Service<RightedAuth>()(
-					"test/RightedAuth",
-					{ domain: Righteds, principal: CurrentRighted },
-				) {}
-				const layer = Authorizer.layer(RightedAuth, {
-					policy: (session) =>
-						Effect.succeed(
-							Policy.define(Righteds)(function* (_) {
-								if (
-									(session.rights as unknown as { readonly role: unknown })
-										.role === "admin"
-								) {
-									yield* _.allow("read", Bot)
-								}
-							}),
-						),
-				})
-				return yield* Effect.gen(function* () {
-					yield* Effect.provideService(
-						RightedAuth.check({ action: "read", resource: aliceBot }),
-						CurrentRighted,
-						{ id: "s", rights: rightsOf("admin") },
-					)
-					clock.role = "guest"
-					yield* Effect.provideService(
-						RightedAuth.check({ action: "read", resource: aliceBot }),
-						CurrentRighted,
-						{ id: "s", rights: rightsOf("guest") },
-					)
-				}).pipe(Effect.provide(layer), Effect.exit)
-			})
-
-		it.effect("on a field of an array", () =>
-			Effect.gen(function* () {
-				const exit = yield* run((role) => Object.assign(["read"], { role }))
-				assert.strictEqual(failureTag(exit), "Forbidden")
-			}),
-		)
-
-		it.effect("on a field that a loop can not see", () =>
-			Effect.gen(function* () {
-				const exit = yield* run((role) =>
-					Object.defineProperty(["read"], "role", {
-						value: role,
-						enumerable: false,
-					}),
-				)
-				assert.strictEqual(failureTag(exit), "Forbidden")
-			}),
-		)
-	})
 
 	it.effect("checks a principal with a loop back to itself", () =>
 		Effect.gen(function* () {

@@ -465,12 +465,17 @@ The error type and the service type of every check come from the `principal`
 Effect.
 
 The cache key of a principal is the text of its JSON form, from the Schema of
-the principal of the domain. A principal is kept only when the value that the
-Schema decodes from that form is equal to it, so two principals with one key are
-equal. The loader always gets that decoded copy, also with no cache, so it must
-decide by the data of the principal, not by the identity of its objects. Give
-`cache: { key }` to make the key in another way, or `cache: false` to load the
-policy for each check.
+the principal of the domain. The loader gets the value that the Schema decodes
+from that text, also with no cache, so what the loader sees comes from the key.
+So the loader must decide by the data of the principal, not by the identity of
+its objects. A principal is kept only when that decoded copy is equal to it, as
+two classes of a union may have one JSON form.
+
+The Schema must decode one text to one value each time. Data that it makes when
+it decodes, as `expired` from the time now, stays with the policy until the
+entry ends, as data that the loader reads does. Use `timeToLive` or `invalidate`
+for such data. Give `cache: { key }` to make the key in another way, or
+`cache: false` to load the policy for each check.
 
 Use it in a handler:
 

@@ -18,6 +18,11 @@ change.
   `policyNodes`.
 - `JSON.stringify` of the JSON form of a very deep policy, with many thousands
   of levels, may fail. The engine writes JSON text with a walk of its own.
+- The cache key of the Authorizer is only the JSON text of the principal, and
+  the loader gets the value that the Schema decodes from the text. Before 2.1.7,
+  a key compared the decoded values too. Data that a Schema makes when it
+  decodes, as `expired` from the time now, now stays with the policy until the
+  entry ends. Use `timeToLive`, `invalidate` or `cache: { key }` for such data.
 - The types check each field path that you write, part by part, up to about 1000
   parts: in a condition, in the fields of a rule, and in the field of a request.
   `FieldPath`, `FieldSelector` and `FieldName` still list the paths down to 5
@@ -218,7 +223,8 @@ The cache key is the JSON text of the principal, from the Schema of the
 principal. A principal is kept only when the value that the Schema decodes from
 that text is equal to it. The loader always gets that decoded copy, also with no
 cache, so it must decide by the data of the principal, not by the identity of
-its objects. Give `cache: { key }` to make the key in another way.
+its objects. The Schema must decode one text to one value each time. Give
+`cache: { key }` to make the key in another way.
 
 ## Before you deploy
 

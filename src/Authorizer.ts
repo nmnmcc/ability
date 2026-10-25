@@ -349,13 +349,17 @@ export interface Options<D extends Domain.Any, E, R, EL, RL, RP> {
 	 * Give `false` to load the policy for each check.
 	 *
 	 * The key of a principal is the text of its JSON form, from the Schema of
-	 * the principal of the domain. A principal is kept only when the value that
-	 * the Schema decodes from that form is `Equal` to it. The loader always
-	 * gets that decoded copy, also with no cache, so two principals with one
-	 * key get one policy, and the cache can not change an answer. So the loader
-	 * must decide by the data of the principal, not by the identity of its
-	 * objects. A principal with no JSON form is not kept, and the loader gets
-	 * it as it is. Give `key` to make the key in another way.
+	 * the principal of the domain. The loader gets the value that the Schema
+	 * decodes from that text, also with no cache, so what the loader sees comes
+	 * from the key. So the loader must decide by the data of the principal, not
+	 * by the identity of its objects. A principal is kept only when that copy
+	 * is `Equal` to it. A principal with no JSON form is not kept, and the
+	 * loader gets it as it is.
+	 *
+	 * The Schema must decode one text to one value each time. Data that it
+	 * makes when it decodes, as `expired` from the time now, stays with the
+	 * policy until the entry ends, as data that the loader reads does. Give
+	 * `key` to make the key in another way.
 	 */
 	readonly cache?:
 		| {
