@@ -2634,6 +2634,47 @@ describe("Policy", () => {
 			within: ($) => $.or($.eq("info.allowed", true), Condition.always),
 		} satisfies Policy.KindRequest<typeof Boxes>
 		assert.strictEqual(Policy.coverage(open, scoped)._tag, "Unknown")
+		// Also next to a predicate, which keeps the reads of the rules.
+		const withPredicate = Policy.define(Boxes)(function* (_) {
+			yield* _.allow("read", Box, {
+				when: ($) => $.predicate("always", () => true),
+			})
+		})
+		assert.throws(
+			() => Policy.residual(withPredicate, scoped),
+			/scope of this request reads a getter/,
+		)
+	})
+
+	it("keeps a residual with a predicate in an unknown coverage", () => {
+		class Info extends Schema.Class<Info>("TrueInfo")({
+			id: Schema.String,
+		}) {
+			get allowed(): boolean {
+				return true
+			}
+		}
+		const Note = Resource.make("PredicateNote", {
+			actions: ["read"],
+			fields: { info: Info },
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.define(Notes)(function* (_) {
+			yield* _.allow("read", Note, {
+				when: ($) =>
+					$.and(
+						$.eq("info.allowed", true),
+						$.predicate("extra", () => true),
+					),
+			})
+		})
+		const covered = Policy.coverage(policy, {
+			principal: alice,
+			action: "read",
+			kind: "PredicateNote",
+		})
+		assert.strictEqual(covered._tag, "Unknown")
+		assert.notStrictEqual(covered.condition._tag, "False")
 	})
 
 	it("keeps the residual in an unknown coverage", () => {

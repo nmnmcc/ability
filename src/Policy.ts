@@ -1834,6 +1834,13 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 	if (descriptor === undefined || !fitsKind(descriptor, request)) {
 		return { scope: never, allow: never, deny: never, schema: undefined }
 	}
+	// A scope is made smaller below, and that may leave out a read of a
+	// getter that fails. So such a scope has no residual.
+	if (scopeReadsGetter(request, descriptor)) {
+		throw new globalThis.Error(
+			"The scope of this request reads a getter, so it has no residual condition",
+		)
+	}
 	const input = { principal: request.principal, path: descriptor.path }
 	const scope = scopeOf(request.within, input)
 	const build = makeBuild()
@@ -2043,19 +2050,42 @@ const readsGetter = (
 	policy: Any,
 	request: ScopedRequest,
 	descriptor: Resource.Descriptor,
-): boolean => {
-	const noGetter = (field: string) =>
-		!Resource.hasGetter(descriptor.schema, field)
-	return (
-		!Arr.every(scopeFields(request.within), noGetter) ||
-		!readsOnly(
-			nodeOf(policy),
-			targetOf(request, descriptor),
-			noGetter,
-			new Map(),
-		)
+): boolean =>
+	scopeReadsGetter(request, descriptor) ||
+	!readsOnly(
+		nodeOf(policy),
+		targetOf(request, descriptor),
+		(field) => !Resource.hasGetter(descriptor.schema, field),
+		new Map(),
 	)
-}
+
+/**
+ * Tests if the scope of a request reads a getter of a class. A scope is made
+ * smaller in each residual, also next to a predicate that runs `decide`, so
+ * such a scope has no residual.
+ */
+const scopeReadsGetter = (
+	request: ScopedRequest,
+	descriptor: Resource.Descriptor,
+): boolean =>
+	!Arr.every(
+		scopeFields(request.within),
+		(field) => !Resource.hasGetter(descriptor.schema, field),
+	)
+
+/**
+ * Tests if a request has no residual: its scope reads a getter, or it has a
+ * plain residual and a rule that it may use reads a getter. A residual with
+ * a predicate runs `decide`, so the reads of its rules stay.
+ */
+const hasNoResidual = (
+	policy: Any,
+	request: ScopedRequest,
+	descriptor: Resource.Descriptor,
+): boolean =>
+	scopeReadsGetter(request, descriptor) ||
+	(!usesPredicate(nodeOf(policy), targetOf(request, descriptor)) &&
+		readsGetter(policy, request, descriptor))
 
 /** The parts of a request that tell which rules it may use. */
 const targetOf = (
@@ -2107,8 +2137,8 @@ const readsOnly = (
 
 const coverageAny = (policy: Any, request: ScopedRequest): AnyCoverage => {
 	const descriptor = Domain.descriptorOf(policy.domain, request.kind)
-	// A read of a getter has no residual, so the condition is `False`.
-	if (descriptor !== undefined && readsGetter(policy, request, descriptor)) {
+	// A request with no residual has the condition `False`.
+	if (descriptor !== undefined && hasNoResidual(policy, request, descriptor)) {
 		return coverages.Unknown({ condition: never, reason: "schema" })
 	}
 	const scoped = scopedResiduals(policy, request)
@@ -2119,6 +2149,7 @@ const coverageAny = (policy: Any, request: ScopedRequest): AnyCoverage => {
 		const plain = (field: string) =>
 			Resource.isPlainField(descriptor.schema, field)
 		if (
+			readsGetter(policy, request, descriptor) ||
 			!Arr.every(scopeFields(request.within), plain) ||
 			!readsOnly(
 				nodeOf(policy),
