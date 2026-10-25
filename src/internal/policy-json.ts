@@ -6,7 +6,7 @@
  * after, in the Schema of the policy.
  */
 import * as Arr from "effect/Array"
-import * as Result from "effect/Result"
+import * as Effect from "effect/Effect"
 import * as Schema from "effect/Schema"
 import type * as Domain from "../Domain.ts"
 import * as Rule from "./rule.ts"
@@ -16,31 +16,47 @@ import * as PolicyNodes from "./policy-nodes.ts"
 
 type Node = PolicyNodes.Node
 
-/** Gives the JSON form of a rule. The domain of a rule is not in it. */
-const ruleJson = (rule: Rule.Rule, meta: Schema.Top | undefined): unknown => ({
-	_tag: rule._tag,
-	actions: rule.actions,
-	resources: rule.resources,
-	...(rule.when === undefined ? {} : { when: Json.toJson(rule.when as never) }),
-	...(rule.fields === undefined ? {} : { fields: rule.fields }),
-	...(rule.reason === undefined ? {} : { reason: rule.reason }),
-	...(rule.id === undefined ? {} : { id: rule.id }),
-	// The `meta` of a rule is a decoded value. Its JSON form comes from the
-	// `meta` Schema of the domain.
-	...(rule.meta === undefined || meta === undefined
-		? {}
-		: {
-				meta: Schema.encodeUnknownSync(meta as Schema.Codec<unknown, unknown>)(
+/** Gives the JSON form of the `meta` of a rule, or `undefined` for none. */
+export type MetaJson = (rule: Rule.Rule) => unknown
+
+/**
+ * Gives the JSON form of the `meta` of each rule at once, with the `meta`
+ * Schema of a domain. `JSON.stringify` needs it at once, so the Schema must
+ * not need an async step there.
+ */
+export const syncMeta =
+	(meta: Schema.Top | undefined): MetaJson =>
+	(rule) =>
+		rule.meta === undefined || meta === undefined
+			? undefined
+			: Schema.encodeUnknownSync(meta as Schema.Codec<unknown, unknown>)(
 					rule.meta,
-				),
-			}),
-})
+				)
+
+/** Gives the JSON form of a rule. The domain of a rule is not in it. */
+const ruleJson = (rule: Rule.Rule, metaJson: MetaJson): unknown => {
+	const meta = metaJson(rule)
+	return {
+		_tag: rule._tag,
+		actions: rule.actions,
+		resources: rule.resources,
+		...(rule.when === undefined
+			? {}
+			: { when: Json.toJson(rule.when as never) }),
+		...(rule.fields === undefined ? {} : { fields: rule.fields }),
+		...(rule.reason === undefined ? {} : { reason: rule.reason }),
+		...(rule.id === undefined ? {} : { id: rule.id }),
+		// The `meta` of a rule is a decoded value. Its JSON form comes from the
+		// `meta` Schema of the domain.
+		...(meta === undefined ? {} : { meta }),
+	}
+}
 
 /**
  * Gives the JSON form of a policy tree with no predicate. A condition with a
  * predicate has no JSON form, so it throws an error.
  */
-export const toJson = (node: Node, meta: Schema.Top | undefined): unknown => {
+export const toJson = (node: Node, meta: MetaJson): unknown => {
 	switch (node._tag) {
 		case "Rules":
 			return {
@@ -64,6 +80,47 @@ export const toJson = (node: Node, meta: Schema.Top | undefined): unknown => {
 	}
 }
 
+/** The rules of a tree, in order, once for each place. */
+const rulesOf = (node: Node): ReadonlyArray<Rule.Rule> => {
+	switch (node._tag) {
+		case "Rules":
+			return node.rules
+		case "All":
+		case "Any":
+		case "FirstOf":
+			return Arr.flatMap(node.policies, rulesOf)
+		case "Ceiling":
+			return [...rulesOf(node.cap), ...rulesOf(node.policy)]
+	}
+}
+
+/**
+ * Gives the JSON form of a policy tree as an Effect. The `meta` Schema of the
+ * domain may need an async step, so each `meta` is encoded as an Effect.
+ */
+export const encode = (
+	node: Node,
+	meta: Schema.Top | undefined,
+): Effect.Effect<unknown, Schema.SchemaError> =>
+	Effect.gen(function* () {
+		const rules = Arr.filter(rulesOf(node), (rule) => rule.meta !== undefined)
+		const encoded =
+			meta === undefined
+				? []
+				: yield* Effect.forEach(rules, (rule) =>
+						Effect.map(
+							Schema.encodeUnknownEffect(
+								meta as Schema.Codec<unknown, unknown>,
+							)(rule.meta),
+							(json) => [rule, json] as const,
+						),
+					)
+		// A native map, because it must find a rule by the rule itself: two
+		// rules with the same data are `Equal`, and each keeps its own form.
+		const forms = new Map<Rule.Rule, unknown>(encoded)
+		return toJson(node, (rule) => forms.get(rule))
+	})
+
 const algorithms: ReadonlyArray<string> = [
 	"denyOverrides",
 	"permitOverrides",
@@ -85,12 +142,24 @@ const readStrings = (
 		return value
 	})
 
-/** Reads a field that a rule may leave out. */
+/**
+ * Reads a field that a rule may leave out. A field that the input has only
+ * from the prototype of a class is not plain data, so it is a problem: a rule
+ * that loses its condition would allow more.
+ */
 const readOptional = <A>(
 	input: object,
 	name: string,
+	path: ReadonlyArray<PropertyKey>,
 	read: () => A,
-): A | undefined => (Object.hasOwn(input, name) ? read() : undefined)
+): A | undefined => {
+	if (Object.hasOwn(input, name)) {
+		return read()
+	}
+	// A read of the field throws a problem when the field is not data.
+	Json.read(input, name, path)
+	return undefined
+}
 
 /** Counts the objects and items of a value, as the other parts count. */
 const spendValue = (
@@ -119,24 +188,6 @@ const spendValue = (
 			depth + 1,
 			budget,
 		),
-	)
-}
-
-const decodeMeta = (
-	value: unknown,
-	meta: Schema.Top | undefined,
-	path: ReadonlyArray<PropertyKey>,
-	budget: Json.Budget,
-): unknown => {
-	if (meta === undefined) {
-		throw Json.problem(path, "The domain has no Schema for meta")
-	}
-	// The Schema of `meta` reads all of it, so its size counts too.
-	spendValue(value, path, 1, budget)
-	return Result.getOrThrowWith(
-		Schema.decodeUnknownResult(meta as Schema.Codec<unknown, unknown>)(value),
-		(error) =>
-			new Json.Problem({ path, message: error.message, issue: error.issue }),
 	)
 }
 
@@ -173,10 +224,53 @@ type Plan =
 			readonly policy: Plan
 	  }
 
-const decodeRule = (
+/**
+ * Decodes the `meta` of a rule with the `meta` Schema of the domain, as an
+ * Effect, since the Schema may need an async step. The Schema reads all of
+ * the value, so its size counts in the budget.
+ */
+const decodeMeta = (
 	{ input, path }: RuleInput,
 	domain: Domain.Any,
 	budget: Json.Budget,
+): Effect.Effect<unknown, Json.Problem> =>
+	Effect.flatMap(
+		attempt(() =>
+			typeof input !== "object" || input === null
+				? undefined
+				: readOptional(input, "meta", path, () => {
+						const value = Json.read(input, "meta", path)
+						if (domain.meta === undefined) {
+							throw Json.problem(
+								[...path, "meta"],
+								"The domain has no Schema for meta",
+							)
+						}
+						spendValue(value, [...path, "meta"], 1, budget)
+						return { value }
+					}),
+		),
+		(found) =>
+			found === undefined
+				? Effect.void
+				: Effect.mapError(
+						Schema.decodeUnknownEffect(
+							domain.meta as Schema.Codec<unknown, unknown>,
+						)(found.value),
+						(error) =>
+							new Json.Problem({
+								path: [...path, "meta"],
+								message: error.message,
+								issue: error.issue,
+							}),
+					),
+	)
+
+const decodeRule = (
+	{ input, path }: RuleInput,
+	meta: unknown,
+	budget: Json.Budget,
+	domain: Domain.Any,
 ): Rule.Rule => {
 	if (typeof input !== "object" || input === null) {
 		throw Json.problem(path, "A rule must be an object")
@@ -186,23 +280,17 @@ const decodeRule = (
 	if (tag !== "Allow" && tag !== "Deny") {
 		throw Json.problem([...path, "_tag"], 'A rule must be "Allow" or "Deny"')
 	}
-	const when = readOptional(input, "when", () =>
+	const when = readOptional(input, "when", path, () =>
 		Json.decodeAt(Json.read(input, "when", path), [...path, "when"], budget),
 	)
-	const fields = readOptional(input, "fields", () =>
+	const fields = readOptional(input, "fields", path, () =>
 		readStrings(input, "fields", path, budget),
 	)
-	const reason = readOptional(input, "reason", () =>
+	const reason = readOptional(input, "reason", path, () =>
 		Json.readString(input, "reason", path),
 	)
-	const id = readOptional(input, "id", () => Json.readString(input, "id", path))
-	const meta = readOptional(input, "meta", () =>
-		decodeMeta(
-			Json.read(input, "meta", path),
-			domain.meta,
-			[...path, "meta"],
-			budget,
-		),
+	const id = readOptional(input, "id", path, () =>
+		Json.readString(input, "id", path),
 	)
 	// Each rule gets the domain of the Schema, as a rule from the builder of
 	// the domain has it.
@@ -341,21 +429,39 @@ const build = (plan: Plan, rules: ReadonlyArray<Rule.Rule>): Node => {
 	}
 }
 
-/** Decodes the JSON form of a policy tree for a domain. */
+/** Runs a step that may throw a problem, and puts the problem in the error. */
+const attempt = <A>(step: () => A): Effect.Effect<A, Json.Problem> =>
+	Effect.try({
+		try: step,
+		catch: (error) => {
+			if (error instanceof Json.Problem) {
+				return error
+			}
+			throw error
+		},
+	})
+
+/**
+ * Decodes the JSON form of a policy tree for a domain. It reads the tree
+ * first, then the `meta` of each rule as an Effect, then the rules, and it
+ * makes the nodes last.
+ */
 export const decode = (
 	input: unknown,
 	domain: Domain.Any,
-): Result.Result<Node, Json.Problem> => {
-	try {
+): Effect.Effect<Node, Json.Problem> =>
+	Effect.gen(function* () {
 		const budget: Json.Budget = { used: 0 }
+		// The rules of this decode. The list belongs to this decode.
 		const inputs: Array<RuleInput> = []
-		const plan = readTree(input, [], 1, budget, inputs)
-		const rules = Arr.map(inputs, (rule) => decodeRule(rule, domain, budget))
-		return Result.succeed(build(plan, rules))
-	} catch (error) {
-		if (error instanceof Json.Problem) {
-			return Result.fail(error)
-		}
-		throw error
-	}
-}
+		const plan = yield* attempt(() => readTree(input, [], 1, budget, inputs))
+		const metas = yield* Effect.forEach(inputs, (rule) =>
+			decodeMeta(rule, domain, budget),
+		)
+		const rules = yield* attempt(() =>
+			Arr.map(inputs, (rule, index) =>
+				decodeRule(rule, metas[index], budget, domain),
+			),
+		)
+		return yield* attempt(() => build(plan, rules))
+	})

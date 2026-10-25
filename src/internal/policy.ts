@@ -8,7 +8,6 @@ import * as Arr from "effect/Array"
 import * as Effect from "effect/Effect"
 import { dual } from "effect/Function"
 import * as Option from "effect/Option"
-import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import * as SchemaIssue from "effect/SchemaIssue"
 import * as SchemaTransformation from "effect/SchemaTransformation"
@@ -49,7 +48,7 @@ export class PolicyData<
 	declare readonly "~Domain": (domain: D) => D
 
 	toJSON(): unknown {
-		return PolicyJson.toJson(this.node, this.domain.meta)
+		return PolicyJson.toJson(this.node, PolicyJson.syncMeta(this.domain.meta))
 	}
 
 	/** Tests if a value is a policy, by its private field. */
@@ -228,10 +227,10 @@ export const schema = (domain: Domain.Any): Schema.Top =>
 			),
 			SchemaTransformation.transformEffect({
 				decode: (input: unknown, options) =>
-					Result.match(PolicyJson.decode(input, domain), {
-						onSuccess: (node) => Effect.succeed(fromNode(domain, node)),
-						onFailure: (problem) =>
-							Effect.fail(
+					PolicyJson.decode(input, domain).pipe(
+						Effect.map((node) => fromNode(domain, node)),
+						Effect.mapError(
+							(problem) =>
 								new SchemaIssue.Pointer(
 									problem.path,
 									problem.issue ??
@@ -241,10 +240,13 @@ export const schema = (domain: Domain.Any): Schema.Top =>
 											options,
 										),
 								),
-							),
-					}),
+						),
+					),
 				encode: (policy: Any) =>
-					Effect.sync(() => PolicyJson.toJson(nodeOf(policy), domain.meta)),
+					Effect.mapError(
+						PolicyJson.encode(nodeOf(policy), domain.meta),
+						(error) => error.issue,
+					),
 			}),
 		),
 	) as never

@@ -1,5 +1,12 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Array as Arr, Effect, Equal, Exit, Schema } from "effect"
+import {
+	Array as Arr,
+	Effect,
+	Equal,
+	Exit,
+	Schema,
+	SchemaTransformation,
+} from "effect"
 import { Condition, Decision, Domain, Policy, Resource } from "../src/index.ts"
 import * as RuleData from "../src/internal/rule.ts"
 import {
@@ -1889,6 +1896,29 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 2000)
 	})
 
+	it("does not take a condition or fields that a rule has from a class", () => {
+		class Shaped {
+			get when() {
+				return { _tag: "False" }
+			}
+		}
+		const rule = Object.assign(new Shaped(), {
+			_tag: "Allow",
+			actions: ["read"],
+			resources: ["Bot"],
+		})
+		const exit = Schema.decodeUnknownExit(PolicySchemaOfApp)({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [rule],
+		})
+		assert.isTrue(Exit.isFailure(exit))
+		assert.include(
+			String(Exit.isFailure(exit) ? exit.cause : ""),
+			"not plain data",
+		)
+	})
+
 	it("does not take a fixed value that is missing", () => {
 		const exit = Schema.decodeUnknownExit(PolicySchemaOfApp)({
 			_tag: "Rules",
@@ -1941,6 +1971,46 @@ describe("Policy", () => {
 		assert.isTrue(Exit.isFailure(exit))
 		assert.isBelow(Date.now() - start, 1000)
 	})
+
+	it.effect("decodes and encodes a meta Schema with an async step", () =>
+		Effect.gen(function* () {
+			const Later = Schema.String.pipe(
+				Schema.decodeTo(
+					Schema.String,
+					SchemaTransformation.transformEffect({
+						decode: (value: string) =>
+							Effect.promise(() => Promise.resolve(value)),
+						encode: (value: string) =>
+							Effect.promise(() => Promise.resolve(value)),
+					}),
+				),
+			)
+			const Metas = Domain.make({
+				principal: Caller,
+				resources: [Bot],
+				meta: Later,
+			})
+			const json = {
+				_tag: "Rules",
+				algorithm: "denyOverrides",
+				rules: [
+					{
+						_tag: "Allow",
+						actions: ["read"],
+						resources: ["Bot"],
+						meta: "once",
+					},
+				],
+			}
+			const policy = yield* Schema.decodeUnknownEffect(Policy.schema(Metas))(
+				json,
+			)
+			const again: unknown = yield* Schema.encodeEffect(Policy.schema(Metas))(
+				policy,
+			)
+			assert.deepStrictEqual(again, json)
+		}),
+	)
 
 	it("counts the meta of a rule in the budget of a decode", () => {
 		const Metas = Domain.make({
