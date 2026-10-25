@@ -616,9 +616,9 @@ export const rules: <
  * @example
  * ```ts
  * const policy = Policy.define(App)(function* (_) {
- *   yield* _.allow("read", Bot)
- *   yield* _.allow(["update", "delete"], Bot, {
- *     when: ($) => $.eq("ownerUserId", $.principal("userId")),
+ *   yield* _.allow("read", Document)
+ *   yield* _.allow(["update", "delete"], Document, {
+ *     when: ($) => $.eq("ownerId", $.principal("id")),
  *   })
  * })
  * ```

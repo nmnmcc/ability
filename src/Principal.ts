@@ -1,6 +1,6 @@
 /**
- * A principal is the one who asks to do an act. It may be a person, a user
- * token, or a Bot.
+ * A principal is the one who asks to do an act. It may be a person, an API
+ * token, or another service.
  *
  * A principal is a Schema. Make it with {@link Class}, in the same way as
  * `Schema.Class`, or use any `Schema.Struct`. Conditions can use the fields of

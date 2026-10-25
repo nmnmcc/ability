@@ -1,6 +1,6 @@
 /**
- * A resource is a kind of thing that a person may act on, such as a Bot or a
- * document. Each resource has a kind name, a list of actions, a Schema for its
+ * A resource is a kind of thing that a person may act on, such as a document
+ * or an invoice. Each resource has a kind name, a list of actions, a Schema for its
  * data, and an optional path.
  *
  * Make a resource in one of two ways:
@@ -15,7 +15,7 @@
  * constructor name.
  *
  * A path puts a resource inside a tree, such as
- * `["org", organizationId, "user", ownerUserId, "bot", id]`. A condition can
+ * `["org", organizationId, "team", teamId, "doc", id]`. A condition can
  * then ask if a value is under a part of the tree. See `Condition.under`.
  *
  * @stability stable
@@ -1668,16 +1668,16 @@ export type Class<
  * import { Schema } from "effect"
  * import { Resource } from "@nmnmcc/ability"
  *
- * class Bot extends Resource.Class<Bot>()("Bot", {
+ * class Document extends Resource.Class<Document>()("Document", {
  *   actions: ["read", "update"],
  *   fields: {
  *     id: Schema.String,
- *     ownerUserId: Schema.NullOr(Schema.String),
+ *     teamId: Schema.NullOr(Schema.String),
  *   },
- *   path: (f) => ["user", f.ownerUserId, "bot", f.id],
+ *   path: (f) => ["team", f.teamId, "doc", f.id],
  * }) {}
  *
- * const bot = new Bot({ id: "b1", ownerUserId: "u1" })
+ * const document = new Document({ id: "d1", teamId: "t1" })
  * ```
  *
  * @stability stable

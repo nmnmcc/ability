@@ -128,7 +128,12 @@ devenv shell -- pnpm test
 devenv shell -- pnpm test-types
 devenv shell -- node examples/basic.ts
 devenv shell -- node examples/authorizer.ts
-devenv shell -- node examples/openbot-rbac.ts
+devenv shell -- node examples/multi-tenant.ts
+devenv shell -- node examples/field-access.ts
+devenv shell -- node examples/stored-policies.ts
+devenv shell -- node examples/predicates.ts
+devenv shell -- node examples/algorithms.ts
+devenv shell -- node examples/http-api.ts
 git diff --check
 ```
 

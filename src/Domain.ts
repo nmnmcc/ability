@@ -8,7 +8,7 @@
  * ```ts
  * import { Domain } from "@nmnmcc/ability"
  *
- * const App = Domain.make({ principal: Caller, resources: [Bot, Trigger] })
+ * const App = Domain.make({ principal: Member, resources: [Document, Comment] })
  * ```
  *
  * @stability stable

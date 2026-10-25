@@ -15,12 +15,12 @@
  *   { requires: Identity }
  * >()("app/Authorization", { error: HttpApi.errors }) {}
  *
- * const endpoint = HttpApiEndpoint.patch("update", "/bots/:id", { ... })
+ * const endpoint = HttpApiEndpoint.patch("update", "/notes/:id", { ... })
  *   .annotate(HttpApi.Required, [
- *     HttpApi.requires(Auth, "update", "Bot", (params) => Bots.find(params.id)),
+ *     HttpApi.requires(Auth, "update", "Note", (params) => Notes.find(params.id)),
  *   ])
  *
- * const bots = HttpApiGroup.make("bots").add(endpoint).middleware(Authorization)
+ * const notes = HttpApiGroup.make("notes").add(endpoint).middleware(Authorization)
  *
  * const AuthorizationLive = HttpApi.layer(Authorization, Auth)
  * ```

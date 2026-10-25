@@ -20,7 +20,7 @@
  * Then use the service in a handler:
  *
  * ```ts
- * yield* Auth.check({ action: "update", resource: bot })
+ * yield* Auth.check({ action: "update", resource: document })
  * ```
  *
  * A "no" answer goes into the error channel as {@link Forbidden}. When the
@@ -29,7 +29,7 @@
  *
  * When no rule gives an answer, the authorizer asks the decider, if there is
  * one. A decider may answer at once, or fail with {@link Pending} when a person
- * or a Bot must answer later.
+ * or another service must answer later.
  *
  * @stability stable
  * @since 0.3.0

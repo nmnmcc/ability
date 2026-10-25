@@ -2,7 +2,7 @@
 
 Authorization tools for Effect programs. Authorization means the work of
 deciding if a principal may do an act. A principal is the one who asks: a
-person, a user token, or a Bot.
+person, an API token, or another service.
 
 The library is made with [Effect](https://effect.website) only:
 
@@ -140,35 +140,35 @@ There are two ways to make a resource:
 
 ```ts
 // A Schema class. Its body may have its own getters and methods.
-class Bot extends Resource.Class<Bot>()("Bot", {
+class Document extends Resource.Class<Document>()("Document", {
 	actions: ["read", "update"],
-	fields: { id: Schema.String, ownerUserId: Schema.NullOr(Schema.String) },
+	fields: { id: Schema.String, ownerId: Schema.NullOr(Schema.String) },
 }) {
-	get shared() {
-		return this.ownerUserId === null
+	get orphaned() {
+		return this.ownerId === null
 	}
 }
 
 // Plain objects with a `_tag` field.
-const Trigger = Resource.make("Trigger", {
+const Comment = Resource.make("Comment", {
 	actions: ["read", "write"],
-	fields: { id: Schema.String, enabled: Schema.Boolean },
+	fields: { id: Schema.String, hidden: Schema.Boolean },
 })
-const trigger = Trigger.make({ id: "t1", enabled: true })
+const comment = Comment.make({ id: "c1", hidden: false })
 ```
 
 A resource may have a path. The path puts the resource in a tree, so one rule
 can cover a part of the tree:
 
 ```ts
-class Bot extends Resource.Class<Bot>()("Bot", {
+class Document extends Resource.Class<Document>()("Document", {
 	actions: ["read", "update"],
 	fields: {
 		id: Schema.String,
 		organizationId: Schema.String,
-		ownerUserId: Schema.NullOr(Schema.String),
+		teamId: Schema.NullOr(Schema.String),
 	},
-	path: (f) => ["org", f.organizationId, "user", f.ownerUserId, "bot", f.id],
+	path: (f) => ["org", f.organizationId, "team", f.teamId, "doc", f.id],
 }) {}
 
 // Every resource of the organization of the principal.
@@ -216,8 +216,8 @@ The builder in `when` has these functions:
 
 A missing field of a resource has the value `null`. A field of the principal
 that is `null` or missing is different: a test with it is always false, also
-with `ne`. So a guest with no `userId` never matches a Bot with no owner. To
-test for `null`, use a fixed value, as in `$.eq("ownerUserId", null)`.
+with `ne`. So a guest with no `userId` never matches a document with no owner.
+To test for `null`, use a fixed value, as in `$.eq("ownerId", null)`.
 
 `predicate` is the one way out of plain data. Its test may give a boolean or an
 `Effect`. The error type and the service type of the `Effect` go into the types
@@ -225,8 +225,9 @@ of the policy and of every check. A policy with a predicate can not become JSON
 or a query, and the type system stops you when you try.
 
 A predicate also keeps the types of the value and the principal that it reads.
-So a predicate for a Bot can not go into a rule for a Trigger. Make conditions
-with the builder: a node made by hand is not a condition in the types.
+So a predicate for a Document can not go into a rule for a Comment. Make
+conditions with the builder: a node made by hand is not a condition in the
+types.
 
 ## Policies
 
@@ -400,7 +401,7 @@ function too. Take care with `null`: in this library `ne` is true when the field
 is `null`, but in SQL `x <> 'a'` is not true when `x` is `NULL`. Use
 `IS DISTINCT FROM` or a similar form. Give the values to the database as bound
 parameters. A value from a principal may have a quote in it, and in the SQL text
-it could change the query. `examples/openbot-rbac.ts` shows how.
+it could change the query. `examples/multi-tenant.ts` shows how.
 
 ## JSON
 
@@ -493,8 +494,8 @@ The errors of a check:
 ### Deciders
 
 When no rule gives an answer, the authorizer asks the decider, if there is one.
-A decider may answer at once, or fail with `Pending` when a person or a Bot must
-answer later:
+A decider may answer at once, or fail with `Pending` when a person or another
+service must answer later:
 
 ```ts
 Authorizer.layer(Auth, {
@@ -582,8 +583,20 @@ status codes: 403, 503, and 409.
 
 ## Examples
 
+Each example is a small program. Run it with Node.js, which runs `.ts` files
+itself:
+
 ```sh
 node examples/basic.ts
-node examples/authorizer.ts
-node examples/openbot-rbac.ts
 ```
+
+| Example                       | What it shows                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------------ |
+| `examples/basic.ts`           | A blog: a domain, a policy, field rules and a decision with a reason.                            |
+| `examples/authorizer.ts`      | Team documents: an authorizer service with a cache, `guard`, `filter`, coverage and a decider.   |
+| `examples/multi-tenant.ts`    | A task tracker for many teams: roles, API tokens, a platform limit, scopes and SQL list queries. |
+| `examples/field-access.ts`    | A staff list: rules for some fields, field patterns and `permittedFields`.                       |
+| `examples/stored-policies.ts` | A help desk: policies kept as JSON, `meta` on rules, checks when a policy loads, and `explain`.  |
+| `examples/predicates.ts`      | Meeting rooms: a predicate that asks an Effect service, its error type, and `provideContext`.    |
+| `examples/algorithms.ts`      | File sharing: the four combining algorithms, `any`, `firstOf` and `ceiling`.                     |
+| `examples/http-api.ts`        | A notes API: the `effect/http-api` middleware, one-value checks, list scopes and closed routes.  |

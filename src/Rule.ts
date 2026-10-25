@@ -392,8 +392,8 @@ const makeFromOptions =
  * @example
  * ```ts
  * const _ = Rule.builder(App)
- * const rule = _.allow("read", Bot, {
- *   when: ($) => $.eq("ownerUserId", $.principal("userId")),
+ * const rule = _.allow("read", Document, {
+ *   when: ($) => $.eq("ownerId", $.principal("id")),
  * })
  * ```
  *
