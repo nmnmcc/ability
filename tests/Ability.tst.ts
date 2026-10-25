@@ -387,6 +387,30 @@ describe("Rule", () => {
 		})
 	})
 
+	it("checks a field of a request that it may leave out", () => {
+		const policy = emptyOf(App)
+		const wrong: {
+			readonly principal: Caller
+			readonly action: "read"
+			readonly resource: Bot
+			readonly field?: "noSuchField"
+		} = { principal: alice, action: "read", resource: aliceBot }
+		const right: {
+			readonly principal: Caller
+			readonly action: "read"
+			readonly resource: Bot
+			readonly field?: "settings.model"
+		} = { principal: alice, action: "read", resource: aliceBot }
+		const typed: Policy.Request<App> = {
+			principal: alice,
+			action: "read",
+			resource: aliceBot,
+		}
+		expect(Policy.decideSync).type.not.toBeCallableWith(policy, wrong)
+		expect(Policy.decideSync).type.toBeCallableWith(policy, right)
+		expect(Policy.decideSync).type.toBeCallableWith(policy, typed)
+	})
+
 	it("takes a record as one field of a request", () => {
 		const Tagged = Resource.make("Tagged", {
 			actions: ["read"],

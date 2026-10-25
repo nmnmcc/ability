@@ -267,12 +267,17 @@ type KindOfTarget<T> = T extends { readonly kind: infer K extends string }
  * @category utility types
  * @since 2.1.0
  */
-export type CheckField<D, T> = T extends {
-	readonly field: infer F extends string
-}
-	? {
-			readonly field: Condition.SelectPath<Domain.DataOf<D, KindOfTarget<T>>, F>
-		}
+export type CheckField<D, T> = T extends { readonly field?: infer F }
+	? [Exclude<F, undefined>] extends [never]
+		? unknown
+		: {
+				// A field that the target may leave out is checked too, when it is
+				// there.
+				readonly field?: Condition.SelectPath<
+					Domain.DataOf<D, KindOfTarget<T>>,
+					Exclude<F, undefined> & string
+				>
+			}
 	: unknown
 
 /**

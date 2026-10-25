@@ -691,11 +691,15 @@ type PathEnd<
  * names them. For a union of types, a part must be in each of them.
  */
 type PathCheck<T, F extends string, R extends PathRules> = [T] extends [object]
-	? PathWalk<T, F, "", R, []> extends true
-		? F
-		: // The names come from parts of `F`. Inference must not find `F` in
-			// them, so a call gets its `F` from the path that it gives.
-			NoInfer<PathWalk<T, F, "", R, []>>
+	? // Each path of a union of paths, as of a field typed `FieldSelector`,
+		// is checked by itself.
+		F extends unknown
+		? PathWalk<T, F, "", R, []> extends true
+			? F
+			: // The names come from parts of `F`. Inference must not find `F`
+				// in them, so a call gets its `F` from the path that it gives.
+				NoInfer<PathWalk<T, F, "", R, []>>
+		: never
 	: never
 
 /**
