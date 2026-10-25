@@ -61,6 +61,11 @@ class Authorize extends HttpApiMiddleware.Service<
 	error: [...Authorization.errors, BotNotFound],
 }) {}
 
+/** The list of the bots of an organization, for the middleware and the handler. */
+const botsOfOrg = Authorization.lists(Auth, "read", "Bot", {
+	within: (params) => ($) => $.under("org", params["org"] ?? null),
+})
+
 const bots = new Map([
 	[aliceBot.id, aliceBot],
 	[sharedBot.id, sharedBot],
@@ -116,11 +121,7 @@ const Api = HttpApi.make("api").add(
 			HttpApiEndpoint.get("list", "/orgs/:org/bots", {
 				params: { org: Schema.String },
 				success: Schema.String,
-			}).annotate(Authorization.Required, [
-				Authorization.lists(Auth, "read", "Bot", {
-					within: (params) => ($) => $.under("org", params["org"] ?? null),
-				}),
-			]),
+			}).annotate(Authorization.Required, [botsOfOrg]),
 			HttpApiEndpoint.get("strictList", "/orgs/:org/strict-bots", {
 				params: { org: Schema.String },
 				success: Schema.String,
@@ -156,7 +157,7 @@ const Api = HttpApi.make("api").add(
 )
 
 const BotsLive = HttpApiBuilder.group(Api, "bots", (handlers) =>
-	Effect.succeed(
+	Effect.map(Auth, (auth) =>
 		handlers
 			.handle("rename", ({ params }) => Effect.succeed(`renamed ${params.id}`))
 			.handle("count", () => Effect.succeed(bots.size))
@@ -166,7 +167,10 @@ const BotsLive = HttpApiBuilder.group(Api, "bots", (handlers) =>
 			.handle("create", ({ params }) =>
 				Effect.succeed(`created in ${params.org}`),
 			)
-			.handle("list", () => Effect.succeed("listed"))
+			.handle("list", () =>
+				// The query of the principal in the scope of the requirement.
+				Effect.map(botsOfOrg.filter(auth), (where) => where._tag),
+			)
 			.handle("strictList", () => Effect.succeed("listed"))
 			.handle("careless", () => Effect.succeed("created")),
 	),
@@ -206,7 +210,7 @@ const AuthLive = Authorizer.layer(Auth, {
 const MiddlewareLive = Layer.mergeAll(
 	AuthenticationLive,
 	Authorization.layer(Authorize, Auth),
-).pipe(Layer.provide(AuthLive))
+).pipe(Layer.provideMerge(AuthLive))
 
 const PlatformLive = Layer.mergeAll(
 	FileSystem.layerNoop({}),
@@ -226,7 +230,8 @@ const BrokenServerLive = Layer.mergeAll(BotsLive, AdminLive).pipe(
 			AuthenticationLive,
 			Authorization.layer(Authorize, Auth),
 		).pipe(
-			Layer.provide(
+			// The handlers need the authorizer too, for the list query.
+			Layer.provideMerge(
 				Authorizer.layer(Auth, {
 					policy: () => Effect.fail({ password: "secret" }),
 				}),
@@ -242,7 +247,8 @@ const MixedServerLive = Layer.mergeAll(BotsLive, AdminLive).pipe(
 			AuthenticationLive,
 			Authorization.layer(Authorize, Auth),
 		).pipe(
-			Layer.provide(
+			// The handlers need the authorizer too, for the list query.
+			Layer.provideMerge(
 				Authorizer.layer(Auth, {
 					policy: () =>
 						Effect.succeed(
@@ -266,7 +272,8 @@ const UnknownServerLive = Layer.mergeAll(BotsLive, AdminLive).pipe(
 			AuthenticationLive,
 			Authorization.layer(Authorize, Auth),
 		).pipe(
-			Layer.provide(
+			// The handlers need the authorizer too, for the list query.
+			Layer.provideMerge(
 				Authorizer.layer(Auth, {
 					policy: () =>
 						Effect.succeed(
@@ -364,9 +371,11 @@ describe("HttpApi", () => {
 	it.effect("lets a list through when it is empty, unless it must not be", () =>
 		Effect.gen(function* () {
 			const client = yield* HttpApiTest.groups(Api, ["bots", "admin"])
+			// The guest may read no bot of the organization, so the query is
+			// False, and the list is empty.
 			assert.strictEqual(
 				yield* client.bots.list({ params: { org: "acme" } }),
-				"listed",
+				"False",
 			)
 			const strict = yield* Effect.exit(
 				client.bots.strictList({ params: { org: "acme" } }),

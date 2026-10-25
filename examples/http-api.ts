@@ -98,6 +98,12 @@ class Authentication extends HttpApiMiddleware.Service<
 	{ provides: Identity }
 >()("@nmnmcc/ability/examples/http-api/Authentication") {}
 
+// A list endpoint says its scope one time. The middleware and the handler
+// both use it.
+const notesOfAuthor = AbilityHttpApi.lists(Auth, "read", "Note", {
+	within: (params) => ($) => $.eq("authorId", params["user"] ?? ""),
+})
+
 const Api = HttpApi.make("notes").add(
 	HttpApiGroup.make("notes")
 		.add(
@@ -120,11 +126,7 @@ const Api = HttpApi.make("notes").add(
 			HttpApiEndpoint.get("byAuthor", "/users/:user/notes", {
 				params: { user: Schema.String },
 				success: Schema.Array(Schema.String),
-			}).annotate(AbilityHttpApi.Required, [
-				AbilityHttpApi.lists(Auth, "read", "Note", {
-					within: (params) => ($) => $.eq("authorId", params["user"] ?? ""),
-				}),
-			]),
+			}).annotate(AbilityHttpApi.Required, [notesOfAuthor]),
 			// Open to everyone: an empty list says that.
 			HttpApiEndpoint.get("health", "/health", {
 				success: Schema.String,
@@ -147,15 +149,11 @@ const NotesLive = HttpApiBuilder.group(Api, "notes", (handlers) =>
 				Effect.map(findNote(params.id), (note) => note.text),
 			)
 			.handle("update", ({ params }) => Effect.succeed(`updated ${params.id}`))
-			.handle("byAuthor", ({ params }) =>
+			.handle("byAuthor", () =>
 				Effect.gen(function* () {
-					// The filter of the principal for this scope, as a condition.
-					// A real handler changes it into a database query.
-					const where = yield* auth.filter({
-						action: "read",
-						kind: "Note",
-						within: ($) => $.eq("authorId", params.user),
-					})
+					// The filter of the principal in the scope of the requirement,
+					// as a condition. A real handler changes it into a query.
+					const where = yield* notesOfAuthor.filter(auth)
 					const notes = Array.from(HashMap.values(database))
 					const visible = yield* Effect.filter(notes, (note) =>
 						Condition.evaluate(where, { value: note }),

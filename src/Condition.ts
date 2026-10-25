@@ -746,16 +746,6 @@ export interface Input {
 const nodeOf = (condition: Ast): Nodes.Node => Nodes.toNode(condition)
 
 /**
- * True when a condition has a {@link Predicate}.
- *
- * @stability stable
- * @category predicates
- * @since 1.0.0
- */
-export const hasPredicate = (condition: Ast): boolean =>
-	nodeOf(condition).opaque
-
-/**
  * Gives the services in `context` to every predicate of a condition, so the
  * condition needs no services when it runs.
  *
@@ -1080,21 +1070,6 @@ export const satisfiable = (
 	)
 
 /**
- * Gives a condition as a value that `JSON.stringify` keeps with no loss. JSON
- * has no `Infinity`, `-Infinity` or `NaN`: it writes `null` in their place,
- * and a test with `null` has another meaning. Such a number becomes an object
- * that {@link schema} does not decode, so a policy with it fails to load and
- * never gives a wrong answer. A condition with a predicate has no JSON form,
- * so it throws an error.
- *
- * @stability stable
- * @category conversions
- * @since 1.0.0
- */
-export const toJsonValue = (condition: Ast): unknown =>
-	condition.pipe(nodeOf, Json.toJson)
-
-/**
  * The JSON form of an operand.
  *
  * @stability stable
@@ -1188,13 +1163,3 @@ export const schema: Schema.Codec<PlainCondition, Encoded> =
 			}),
 		),
 	) as never
-
-/**
- * Tests if a value is a whole condition: a node that a builder, a function of
- * this module or the Schema made. A plain object is not a condition.
- *
- * @stability stable
- * @category guards
- * @since 1.0.0
- */
-export const isAst = (u: unknown): u is Ast => Nodes.isNode(u)

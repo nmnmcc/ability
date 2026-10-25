@@ -9,7 +9,8 @@ import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
 import * as Condition from "../Condition.ts"
 import type * as Domain from "../Domain.ts"
-import * as Resource from "../Resource.ts"
+import type * as Resource from "../Resource.ts"
+import * as ResourceData from "./resource.ts"
 import * as Patterns from "./patterns.ts"
 
 /** The data of a rule. */
@@ -60,8 +61,8 @@ const toArray = <A>(value: A | ReadonlyArray<A>): ReadonlyArray<A> =>
 	Array.isArray(value) ? value : [value as A]
 
 const kindName = (target: unknown): string =>
-	Resource.isResource(target)
-		? Resource.descriptor(target).kind
+	ResourceData.isResource(target)
+		? ResourceData.descriptor(target).kind
 		: (target as string)
 
 /** The options of a rule from a builder, with no types. */

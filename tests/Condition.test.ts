@@ -277,7 +277,9 @@ describe("Condition", () => {
 			Equal.equals(decode({ _tag: "Or", conditions: [] }), Condition.or()),
 		)
 		assert.deepStrictEqual(
-			Condition.toJsonValue(decode({ _tag: "In", field: "a", values: [] })),
+			Schema.encodeSync(Condition.schema)(
+				decode({ _tag: "In", field: "a", values: [] }),
+			),
 			{ _tag: "In", field: "a", values: [] },
 		)
 	})

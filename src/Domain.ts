@@ -14,13 +14,11 @@
  * @stability stable
  * @since 0.3.0
  */
-import * as Arr from "effect/Array"
-import * as Data from "effect/Data"
-import * as HashMap from "effect/HashMap"
-import * as Option from "effect/Option"
+import type * as HashMap from "effect/HashMap"
 import type * as Schema from "effect/Schema"
-import * as Catalog from "./internal/catalog.ts"
-import * as Resource from "./Resource.ts"
+import type * as Catalog from "./internal/catalog.ts"
+import * as Internal from "./internal/domain.ts"
+import type * as Resource from "./Resource.ts"
 
 /** The Schema of a principal: a Schema of objects, such as a `Schema.Class`. */
 type PrincipalSchema = Schema.Top & { readonly Type: object }
@@ -171,16 +169,6 @@ export type ValueOf<D, K extends string> = Resource.Value<ResourceOf<D, K>>
 export type AnyValue<D> = Resource.Value<Resources<D>>
 
 /**
- * The class of every domain value. {@link isDomain} uses it to know a domain.
- */
-class DomainData extends Data.Class<{
-	readonly principal: PrincipalSchema
-	readonly principalCatalog: Catalog.Catalog
-	readonly resources: HashMap.HashMap<string, Resource.Descriptor>
-	readonly meta: Schema.Top | undefined
-}> {}
-
-/**
  * Makes a domain. Each resource must have its own kind name. Give `meta` when
  * rules must keep extra data, such as the scope of a grant. The `meta` Schema
  * may not need services, because `Policy.schema` gives a Schema that needs
@@ -198,56 +186,4 @@ export const make: <
 	readonly principal: P
 	readonly resources: Resources
 	readonly meta?: M
-}) => Domain<P["Type"], Resources[number], M["Type"]> = (options) => {
-	const descriptors = Arr.map(options.resources, Resource.descriptor)
-	const kinds = Arr.map(descriptors, (descriptor) => descriptor.kind)
-	// Two resources with one kind name is a mistake in the code, not in the
-	// data, so it is a defect.
-	const twice = Arr.findFirst(
-		kinds,
-		(kind, index) => kinds.indexOf(kind) !== index,
-	)
-	if (Option.isSome(twice)) {
-		throw new Error(`Two resources have the kind name "${twice.value}"`)
-	}
-	if (kinds.includes("*")) {
-		throw new Error(`A resource may not have the kind name "*"`)
-	}
-	const resources = HashMap.fromIterable(
-		Arr.map(
-			descriptors,
-			(descriptor) => [descriptor.kind, descriptor] as const,
-		),
-	)
-	// The catalog checks the field names of the principal, so a bad name is a
-	// defect when the domain is made.
-	return new DomainData({
-		principal: options.principal,
-		principalCatalog: Catalog.catalogOf(options.principal.ast),
-		resources,
-		meta: options.meta,
-	})
-}
-
-/**
- * Gives the descriptor of the resource with a kind name, or `undefined` when
- * the domain has no such resource.
- *
- * @stability stable
- * @category getters
- * @since 1.0.0
- */
-export const descriptorOf = (
-	domain: Any,
-	kind: string,
-): Resource.Descriptor | undefined =>
-	Option.getOrUndefined(HashMap.get(domain.resources, kind))
-
-/**
- * Tests if a value is a domain.
- *
- * @stability stable
- * @category guards
- * @since 0.3.0
- */
-export const isDomain = (u: unknown): u is Any => u instanceof DomainData
+}) => Domain<P["Type"], Resources[number], M["Type"]> = Internal.make as never

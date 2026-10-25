@@ -34,24 +34,15 @@
  * @stability stable
  * @since 0.3.0
  */
-// The service erases the error type and the service type of predicates,
-// principals and deciders to `unknown`. The public types keep them, so the
-// language service check for `unknown` in an Effect is off here.
-// @effect-diagnostics anyUnknownInErrorContext:off
-import * as Cache from "effect/Cache"
-import * as Context from "effect/Context"
+import type * as Context from "effect/Context"
 import type * as Duration from "effect/Duration"
-import * as Effect from "effect/Effect"
-import * as Equal from "effect/Equal"
-import * as Hash from "effect/Hash"
-import * as Layer from "effect/Layer"
-import * as Result from "effect/Result"
-import * as Schema from "effect/Schema"
-import * as Condition from "./Condition.ts"
-import * as Decision from "./Decision.ts"
-import * as Domain from "./Domain.ts"
-import * as Policy from "./Policy.ts"
-import * as Resource from "./Resource.ts"
+import type * as Effect from "effect/Effect"
+import type * as Layer from "effect/Layer"
+import type * as Condition from "./Condition.ts"
+import type * as Decision from "./Decision.ts"
+import type * as Domain from "./Domain.ts"
+import * as Internal from "./internal/authorizer.ts"
+import type * as Policy from "./Policy.ts"
 
 /**
  * The error when a policy says no.
@@ -60,14 +51,14 @@ import * as Resource from "./Resource.ts"
  * @category errors
  * @since 0.3.0
  */
-export class Forbidden extends Schema.TaggedError<Forbidden>(
-	"@nmnmcc/ability/Authorizer/Forbidden",
-)("Forbidden", {
-	action: Schema.String,
-	kind: Schema.String,
-	field: Schema.optionalKey(Schema.String),
-	reason: Schema.optionalKey(Schema.String),
-}) {}
+export const Forbidden: typeof Internal.Forbidden = Internal.Forbidden
+
+/**
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
+export type Forbidden = Internal.Forbidden
 
 /**
  * The error when the policy of the principal can not be loaded. The cause is
@@ -77,9 +68,15 @@ export class Forbidden extends Schema.TaggedError<Forbidden>(
  * @category errors
  * @since 0.3.0
  */
-export class PolicyUnavailable extends Schema.TaggedError<PolicyUnavailable>(
-	"@nmnmcc/ability/Authorizer/PolicyUnavailable",
-)("PolicyUnavailable", { cause: Schema.Defect() }) {}
+export const PolicyUnavailable: typeof Internal.PolicyUnavailable =
+	Internal.PolicyUnavailable
+
+/**
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
+export type PolicyUnavailable = Internal.PolicyUnavailable
 
 /**
  * The error when a decider must wait for an answer. `ticket` names the
@@ -89,12 +86,14 @@ export class PolicyUnavailable extends Schema.TaggedError<PolicyUnavailable>(
  * @category errors
  * @since 0.3.0
  */
-export class Pending extends Schema.TaggedError<Pending>(
-	"@nmnmcc/ability/Authorizer/Pending",
-)("Pending", {
-	ticket: Schema.String,
-	reason: Schema.optionalKey(Schema.String),
-}) {}
+export const Pending: typeof Internal.Pending = Internal.Pending
+
+/**
+ * @stability stable
+ * @category errors
+ * @since 0.3.0
+ */
+export type Pending = Internal.Pending
 
 /**
  * What a check is about: an act on a resource value, or an act on a kind of
@@ -310,40 +309,7 @@ export const Service: <Self>() => <
 		/** Gives the principal of the current request. */
 		readonly principal: Effect.Effect<Domain.Principal<NoInfer<D>>, E, R>
 	},
-) => ServiceClass<Self, Id, D, E, R> = (() =>
-	(
-		id: string,
-		options: {
-			readonly domain: Domain.Any
-			readonly principal: Effect.Effect<any, any, any>
-		},
-	) => {
-		const Base = Context.Service<any, any>()(id)
-		return class extends Base {
-			static readonly domain = options.domain
-			static readonly principal = options.principal
-			static readonly decide = (target: AnyTarget) =>
-				this.use((service: any) => service.decide(target))
-			static readonly check = (target: AnyTarget) =>
-				this.use((service: any) => service.check(target))
-			static readonly guard = (target: AnyTarget, options: unknown) =>
-				this.use((service: any) => service.guard(target, options))
-			static readonly filter = (target: AnyTarget) =>
-				this.use((service: any) => service.filter(target))
-			static readonly coverage = (target: AnyTarget) =>
-				this.use((service: any) => service.coverage(target))
-			static readonly permittedFields = (target: AnyTarget) =>
-				this.use((service: any) => service.permittedFields(target))
-		}
-	}) as never
-
-type AnyTarget = {
-	readonly action: string
-	readonly resource?: object
-	readonly kind?: string
-	readonly field?: string
-	readonly within?: unknown
-}
+) => ServiceClass<Self, Id, D, E, R> = Internal.Service as never
 
 /**
  * The options of {@link layer}.
@@ -391,298 +357,6 @@ export interface Options<D extends Domain.Any, E, R, EL, RL, RP> {
 }
 
 /**
- * A cache key for a principal. Two keys are equal when they have the same
- * text, so two principals with the same key share one policy. The key also
- * keeps the principal, so the cache can load its policy. A plain `Data` value
- * can not do both, so the key gives its own equality with `Equal.Equal`.
- */
-class PrincipalKey implements Equal.Equal {
-	readonly principal: object
-	readonly text: string
-	constructor(principal: object, text: string) {
-		this.principal = principal
-		this.text = text
-	}
-	[Equal.symbol](that: unknown): boolean {
-		return that instanceof PrincipalKey && that.text === this.text
-	}
-	[Hash.symbol](): number {
-		return Hash.string(this.text)
-	}
-}
-
-/**
- * Makes the cache key of a principal from its JSON form. The key keeps the
- * principal that the Schema decodes from that form, so the loader sees only
- * the data that the key shows. A principal gets no key when it does not
- * encode, or when the decoded value is not `Equal` to it. Two classes, or a
- * string and a number, may have one JSON form, as in a union, and `Equal`
- * tells them apart. So two principals with one key are equal, and the cache
- * can not give one the policy of the other.
- */
-const jsonKey = (
-	schema: Schema.Top,
-): ((principal: object) => PrincipalKey | undefined) => {
-	const codec = Schema.toCodecJson(schema) as unknown as Schema.Codec<
-		unknown,
-		unknown
-	>
-	const encode = Schema.encodeUnknownResult(codec)
-	const decode = Schema.decodeUnknownResult(codec)
-	const keyOf = (principal: object): PrincipalKey | undefined =>
-		Result.match(encode(principal), {
-			onFailure: () => undefined,
-			onSuccess: (json) =>
-				Result.match(decode(json), {
-					onFailure: () => undefined,
-					onSuccess: (decoded) =>
-						Equal.equals(decoded, principal)
-							? new PrincipalKey(decoded as object, JSON.stringify(json))
-							: undefined,
-				}),
-		})
-	return (principal) => {
-		// A very deep principal may fill the stack of the encoder or of
-		// `Equal`. Such a principal is not kept.
-		try {
-			return keyOf(principal)
-		} catch {
-			return undefined
-		}
-	}
-}
-
-const forbidden = (
-	target: AnyTarget,
-	kind: string,
-	reason: string | undefined,
-): Forbidden =>
-	Forbidden.make({
-		action: target.action,
-		kind,
-		...(target.field === undefined ? {} : { field: target.field }),
-		...(reason === undefined ? {} : { reason }),
-	})
-
-const makeLayer = (
-	service: AnyServiceClass,
-	options: {
-		readonly policy: (
-			principal: object,
-		) => Effect.Effect<Policy.Any, unknown, unknown>
-		readonly decider?: (
-			request: object,
-		) => Effect.Effect<Decision.Decision, unknown, unknown>
-		readonly cache?:
-			| {
-					readonly capacity?: number
-					readonly timeToLive?: Duration.Input
-					readonly key?: (principal: object) => string | undefined
-			  }
-			| false
-	},
-) => {
-	const domain: Domain.Any = service.domain
-	// It gives `undefined` when the principal has no key. Such a principal does
-	// not use the cache.
-	const custom = options.cache === false ? undefined : options.cache?.key
-	const keyOf: (principal: object) => PrincipalKey | undefined =
-		custom === undefined
-			? jsonKey(domain.principal)
-			: (principal) => {
-					const text = custom(principal)
-					return text === undefined
-						? undefined
-						: new PrincipalKey(principal, text)
-				}
-	return Layer.effect(
-		service,
-		Effect.gen(function* () {
-			// The services of the policy loader and of the predicates come from the
-			// layer, so a check does not need them.
-			const services = yield* Effect.context<never>()
-
-			// The predicates of the policy get the services of the layer, so the
-			// policy and its residual conditions need no services.
-			// A policy of another domain may have the same types, but its resources
-			// may have other paths. So it fails closed, as a policy that can not be
-			// loaded.
-			const load = (principal: object) =>
-				options.policy(principal).pipe(
-					Effect.provideContext(services),
-					Effect.filterOrFail(
-						(value) => value.domain === domain,
-						() =>
-							new globalThis.Error(
-								"The loaded policy is not a policy of this domain",
-							),
-					),
-					Effect.mapError((cause) => PolicyUnavailable.make({ cause })),
-					Effect.map((value) =>
-						Policy.provideContext(value, services as never),
-					),
-				)
-
-			const cache =
-				options.cache === false
-					? undefined
-					: yield* Cache.make({
-							capacity: options.cache?.capacity ?? 1000,
-							timeToLive: options.cache?.timeToLive ?? "30 seconds",
-							lookup: (key: PrincipalKey) => load(key.principal),
-						})
-
-			const policyFor = (principal: object) => {
-				const key = cache === undefined ? undefined : keyOf(principal)
-				if (cache === undefined || key === undefined) {
-					return load(principal)
-				}
-				// A failed lookup is kept in the cache. Remove it, so the next check
-				// tries again.
-				return Cache.get(cache, key).pipe(
-					Effect.tapError(() => Cache.invalidate(cache, key)),
-				)
-			}
-
-			const withServices = <A, E>(
-				effect: Effect.Effect<A, E, unknown>,
-			): Effect.Effect<A, E, unknown> => Effect.provideContext(effect, services)
-
-			const current = Effect.gen(function* () {
-				const principal = yield* service.principal
-				const value = yield* policyFor(principal)
-				return { principal, policy: value }
-			})
-
-			// The principal and its policy, loaded one time. A check that asks
-			// the policy two times, such as `guard`, uses one snapshot for both,
-			// so the two answers come from one principal.
-			type Snapshot = Effect.Success<typeof current>
-
-			const decideWith = Effect.fnUntraced(function* (
-				{ principal, policy: value }: Snapshot,
-				target: AnyTarget,
-			) {
-				const decision: Decision.Decision = yield* withServices(
-					Policy.decide(value, { ...target, principal } as never),
-				)
-				return decision
-			})
-
-			const decide = (target: AnyTarget) =>
-				Effect.flatMap(current, (snapshot) => decideWith(snapshot, target))
-
-			const checkWith = Effect.fnUntraced(function* (
-				{ principal, policy: value }: Snapshot,
-				target: AnyTarget,
-			) {
-				const kind =
-					target.resource === undefined
-						? (target.kind ?? "")
-						: (Resource.kindOf(target.resource) ?? "")
-				// A request that does not fit its kind gets a "no" at once. The
-				// decider must not say yes to an action that the kind does not have.
-				const descriptor = Domain.descriptorOf(domain, kind)
-				if (descriptor === undefined || !Policy.fitsKind(descriptor, target)) {
-					return yield* forbidden(target, kind, undefined)
-				}
-				const fromPolicy: Decision.Decision =
-					target.resource === undefined
-						? Policy.decideKind(value, { ...target, principal } as never)
-						: yield* withServices(
-								Policy.decide(value, { ...target, principal } as never),
-							)
-				// When no rule gives an answer, the decider gives it.
-				const decision: Decision.Decision =
-					fromPolicy._tag === "NotApplicable" && options.decider !== undefined
-						? yield* options.decider({ ...target, principal })
-						: fromPolicy
-				if (decision._tag !== "Allow") {
-					return yield* forbidden(target, kind, Decision.reason(decision))
-				}
-			})
-
-			const check = (target: AnyTarget) =>
-				Effect.flatMap(current, (snapshot) => checkWith(snapshot, target))
-
-			const guard = Effect.fnUntraced(function* (
-				target: AnyTarget,
-				guardOptions: {
-					readonly read?: string
-					readonly hide: () => unknown
-				},
-			) {
-				const snapshot = yield* current
-				const read = guardOptions.read ?? "read"
-				const { field: _field, ...rest } = target
-				const visible: Decision.Decision = yield* decideWith(snapshot, {
-					...rest,
-					action: read,
-				})
-				if (visible._tag !== "Allow") {
-					return yield* Effect.fail(guardOptions.hide())
-				}
-				if (target.action !== read || target.field !== undefined) {
-					yield* checkWith(snapshot, target)
-				}
-			})
-
-			// The filter is the condition of the coverage: the scope for `All`,
-			// `False` for `None`, and else the residual condition in the scope.
-			// The residual throws an error when it is too large, so the filter
-			// fails.
-			const filter = (
-				target: AnyTarget,
-			): Effect.Effect<Condition.Ast, unknown, unknown> =>
-				Effect.map(
-					current,
-					({ principal, policy: value }): Condition.Ast =>
-						Policy.coverage(value, { ...target, principal } as never)
-							.condition as Condition.Ast,
-				)
-
-			const coverage = (
-				target: AnyTarget,
-			): Effect.Effect<Policy.Coverage<any, any>, unknown, unknown> =>
-				Effect.map(current, ({ principal, policy: value }) =>
-					Policy.coverage(value, { ...target, principal } as never),
-				)
-
-			const permittedFields = Effect.fnUntraced(function* (target: AnyTarget) {
-				const { principal, policy: value } = yield* current
-				return yield* withServices(
-					Policy.permittedFields(value, { ...target, principal } as never),
-				)
-			})
-
-			const invalidate = (principal?: object) => {
-				if (cache === undefined) {
-					return Effect.void
-				}
-				if (principal === undefined) {
-					return Cache.invalidateAll(cache)
-				}
-				const key = keyOf(principal)
-				return key === undefined ? Effect.void : Cache.invalidate(cache, key)
-			}
-
-			return {
-				domain,
-				principal: service.principal,
-				policy: Effect.map(current, ({ policy: value }) => value),
-				decide,
-				check,
-				guard,
-				filter,
-				coverage,
-				permittedFields,
-				invalidate,
-			} as never
-		}),
-	)
-}
-
-/**
  * Makes the layer of an authorizer.
  *
  * @stability stable
@@ -701,4 +375,4 @@ export const layer: <
 >(
 	service: ServiceClass<Self, Id, D, E, R>,
 	options: Options<D, NoInfer<E>, NoInfer<R>, EL, RL, RP>,
-) => Layer.Layer<Self, never, RL | RP> = makeLayer as never
+) => Layer.Layer<Self, never, RL | RP> = Internal.makeLayer as never

@@ -15,7 +15,9 @@ import {
 	sharedBot,
 	Trigger,
 } from "./fixtures.ts"
+import * as Analysis from "../src/internal/analysis.ts"
 import * as Catalog from "../src/internal/catalog.ts"
+import * as ResourceData from "../src/internal/resource.ts"
 
 type App = typeof App
 
@@ -32,7 +34,7 @@ const PolicySchemaOfApp = Policy.schema(App)
 
 /** Tests if the catalog of a resource has a field at a path. */
 const hasField = (resource: Resource.Any, path: string): boolean =>
-	Catalog.lookup(Resource.descriptor(resource).catalog, path) !== undefined
+	Catalog.lookup(ResourceData.descriptor(resource).catalog, path) !== undefined
 
 describe("Policy", () => {
 	describe("algorithms", () => {
@@ -969,7 +971,7 @@ describe("Policy", () => {
 						resource: value,
 						...(scoped.field === undefined ? {} : { field: scoped.field }),
 					})._tag
-				switch (Policy.decideKind(policy, scoped)._tag) {
+				switch (Analysis.decideKind(policy, scoped)._tag) {
 					case "Allow":
 						return inside.every((value) => tagOf(value) === "Allow")
 					case "NotApplicable":
@@ -1009,7 +1011,7 @@ describe("Policy", () => {
 				// Each listed field that holds no parts is in the list when
 				// decide allows it.
 				const plain = Arr.filter(
-					Resource.descriptor(Bot).catalog.fields,
+					ResourceData.descriptor(Bot).catalog.fields,
 					(field) => field.listed && !field.open,
 				)
 				return (
@@ -1637,7 +1639,7 @@ describe("Policy", () => {
 				unknown
 			>().eq("pair.b", "b"),
 		)
-		const schema = Resource.descriptor(Pair).schema
+		const schema = ResourceData.descriptor(Pair).schema
 		// The shape of the union lets each field hold "a" or "b". The search
 		// does not tie the two fields together.
 		assert.strictEqual(
@@ -1671,7 +1673,7 @@ describe("Policy", () => {
 		const start = Date.now()
 		assert.strictEqual(
 			Condition.satisfiable(condition, {
-				schema: Resource.descriptor(Note).schema,
+				schema: ResourceData.descriptor(Note).schema,
 				budget: 0,
 			})._tag,
 			"Unknown",
@@ -1722,7 +1724,7 @@ describe("Policy", () => {
 			unknown,
 			unknown
 		>()
-		const schema = Resource.descriptor(Note).schema
+		const schema = ResourceData.descriptor(Note).schema
 		assert.strictEqual(
 			Condition.satisfiable($.and($.eq("info.a", null), $.eq("info.b", "x")), {
 				schema,

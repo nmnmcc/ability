@@ -15,6 +15,8 @@ The library is made with [Effect](https://effect.website) only:
 - An `Authorizer` is an Effect service. A "no" goes into the error channel. When
   a policy can not be loaded, the check fails, so an error is never a "yes".
 
+Version 2.0 changed the API. See [MIGRATION.md](MIGRATION.md) to move from 1.x.
+
 ## Requirements
 
 - Use strict type checking. Without it, the types do not give all of their
@@ -197,6 +199,19 @@ To know if a kind has a field that a pattern fits, the library reads the shape
 of the Schema of the kind: its fields and the keys of its records. A name in a
 pattern fits a key of a record when the Schema of the keys takes it. A part with
 a star fits any key.
+
+`Policy.define` checks every rule against the domain when the policy is made. A
+rule with a mistake is a `PolicyError`, with each problem and its path. For a
+name with a mistake, it gives the name that you may mean:
+
+```text
+A rule does not fit the domain: The field "titel" is not a field of every
+resource of the rule. Did you mean "title"?
+```
+
+A condition reads only the data fields of a value: an own field that a loop over
+the keys sees. A rule that names a getter of a class is a `PolicyError`. Use a
+predicate for a value that comes from code.
 
 ## Conditions
 
@@ -544,9 +559,9 @@ const AuthorizationLive = AbilityHttpApi.layer(Authorization, Auth)
 
 An act on a part of a kind takes a scope from the path parameters. A list takes
 `lists`: the middleware does not check every value, because the handler gets its
-query with `Auth.filter`, with the same scope. An empty list is not an error,
-unless you give `nonEmpty: true`. Then the middleware needs a coverage of `All`
-or `Some`, so `Unknown` fails too:
+query from the same requirement, with the same scope. An empty list is not an
+error, unless you give `nonEmpty: true`. Then the middleware needs a coverage of
+`All` or `Some`, so `Unknown` fails too:
 
 ```ts
 const create = HttpApiEndpoint.post("create", "/users/:user/posts", {
@@ -557,13 +572,24 @@ const create = HttpApiEndpoint.post("create", "/users/:user/posts", {
 	}),
 ])
 
+const postsOfUser = AbilityHttpApi.lists(Auth, "read", "Post", {
+	within: (params) => ($) => $.eq("authorId", params["user"] ?? ""),
+})
+
 const list = HttpApiEndpoint.get("list", "/users/:user/posts", {
 	params: { user: Schema.String },
-}).annotate(AbilityHttpApi.Required, [
-	AbilityHttpApi.lists(Auth, "read", "Post", {
-		within: (params) => ($) => $.eq("authorId", params["user"] ?? ""),
-	}),
-])
+}).annotate(AbilityHttpApi.Required, [postsOfUser])
+
+const PostsLive = HttpApiBuilder.group(Api, "posts", (handlers) =>
+	Effect.map(Auth, (auth) =>
+		handlers.handle("list", () =>
+			postsOfUser.filter(auth).pipe(
+				Effect.flatMap((where) => Condition.fold(where, toSql)),
+				Effect.flatMap(Posts.query),
+			),
+		),
+	),
+)
 ```
 
 A path parameter may be `undefined`. A scope with `undefined` in it is a defect,
@@ -576,6 +602,27 @@ group without the middleware is not checked.
 `GroupRequired` gives a default for a whole group: one list for GET requests and
 one for every other method. `AbilityHttpApi.errors` gives the errors with HTTP
 status codes: 403, 503, and 409.
+
+## Limits
+
+Each limit keeps a walk, a decoder or a search small, so no input can fill the
+stack or take a very long time. An input past a limit is an error, as in "A
+condition has 100001 nodes. The most is 100000.". In an `Authorizer`, such an
+error is never a "yes". The `Limits` module gives each value.
+
+| Limit            | Value   | What it limits                                          |
+| ---------------- | ------- | ------------------------------------------------------- |
+| `fieldPathParts` | 5       | The parts of a field path, as in `settings.model`.      |
+| `patternParts`   | 16      | The parts of a field pattern.                           |
+| `conditionNodes` | 100000  | The nodes of a condition, a shared part for each place. |
+| `conditionDepth` | 1000    | The levels of a condition.                              |
+| `residualNodes`  | 10000   | The nodes of a residual condition.                      |
+| `policyDepth`    | 256     | The levels of a policy tree.                            |
+| `policyNodes`    | 100000  | The nodes of a policy tree, with its rules.             |
+| `jsonNodes`      | 1000000 | The objects and items that a decoder reads.             |
+| `catalogFields`  | 10000   | The fields of the Schema of a resource.                 |
+| `searchSteps`    | 1000000 | The steps of one search, as in `Policy.coverage`.       |
+| `searchFields`   | 256     | The fields that one search may test.                    |
 
 ## Examples
 

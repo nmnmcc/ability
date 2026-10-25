@@ -44,9 +44,10 @@ import * as SchemaTransformation from "effect/SchemaTransformation"
 import { HttpRouter } from "effect/http"
 import { HttpApiSchema } from "effect/http-api"
 import * as Authorizer from "./Authorizer.ts"
+import type * as Condition from "./Condition.ts"
 import type * as Domain from "./Domain.ts"
 import type * as Policy from "./Policy.ts"
-import * as Resource from "./Resource.ts"
+import * as ResourceData from "./internal/resource.ts"
 
 /**
  * The path parameters of a request.
@@ -147,10 +148,48 @@ export const requires: <
 			: { action: action as string, kind, within: how.within }
 
 /**
+ * A {@link Requirement} for an endpoint that gives a list, with the list query
+ * for the handler. `filter` takes the authorizer, which the handler gets when
+ * its group is built. It reads the path parameters of the request, and it
+ * gives the condition of `Authorizer.filter` in the scope of the requirement.
+ * So the scope is written one time, for the middleware and for the handler.
+ *
+ * @stability unstable
+ * @category models
+ * @since 2.0.0
+ */
+export interface List<A, K extends string> extends Requirement {
+	readonly filter: A extends Authorizer.ServiceClass<
+		any,
+		any,
+		infer D,
+		infer E,
+		infer R
+	>
+		? (
+				authorizer: Authorizer.Authorizer<D, E, R>,
+			) => Effect.Effect<
+				Condition.Condition<Policy.ResidualReads<D, K>, Condition.Opaque<E>>,
+				Authorizer.PolicyUnavailable | E,
+				R | HttpRouter.RouteContext
+			>
+		: never
+}
+
+/**
  * Makes a {@link Requirement} for an endpoint that gives a list. The middleware
  * does not check that the principal may act on every value, because the list
  * shows only the values that it may act on. The handler gets the list query
- * with `Authorizer.filter`, with the same scope.
+ * from `filter` of the result, with the same scope:
+ *
+ * ```ts
+ * const byAuthor = HttpApi.lists(Auth, "read", "Note", {
+ *   within: (params) => ($) => $.eq("authorId", params.user ?? null),
+ * })
+ * // When the group is built: const auth = yield* Auth
+ * // In the handler:
+ * const where = yield* byAuthor.filter(auth)
+ * ```
  *
  * When the principal may act on no value, the list is empty: that is not an
  * error, so a client does not learn that hidden values are there. With
@@ -163,7 +202,7 @@ export const requires: <
  * @since 1.0.0
  */
 export const lists: <
-	A extends { readonly domain: Domain.Any },
+	A extends Authorizer.AnyServiceClass,
 	const K extends Domain.Kind<A["domain"]>,
 >(
 	authorizer: A,
@@ -173,12 +212,35 @@ export const lists: <
 		readonly within?: (params: Params) => Policy.Scope<A["domain"], K>
 		readonly nonEmpty?: boolean
 	},
-) => Requirement = (_authorizer, action, kind, options) => ({
-	action: action as string,
-	kind,
-	list: { nonEmpty: options?.nonEmpty ?? false },
-	...(options?.within === undefined ? {} : { within: options.within }),
-})
+) => List<A, K> = ((
+	_authorizer: Authorizer.AnyServiceClass,
+	action: string,
+	kind: string,
+	options?: {
+		readonly within?: (params: Params) => unknown
+		readonly nonEmpty?: boolean
+	},
+) => {
+	const within = options?.within
+	return {
+		action,
+		kind,
+		list: { nonEmpty: options?.nonEmpty ?? false },
+		...(within === undefined ? {} : { within }),
+		filter: (authorizer: {
+			readonly filter: (
+				target: object,
+			) => Effect.Effect<unknown, unknown, unknown>
+		}) =>
+			Effect.flatMap(HttpRouter.params, (params) =>
+				authorizer.filter({
+					action,
+					kind,
+					...(within === undefined ? {} : { within: within(params) }),
+				}),
+			),
+	}
+}) as never
 
 /**
  * The Schema of a `PolicyUnavailable` response. It encodes only the `_tag`, so
@@ -272,7 +334,7 @@ const makeLayer = (
 								// another kind is a mistake in `load`, and the check must
 								// not pass with the rules of that other kind.
 								Effect.filterOrElse(
-									(value) => Resource.kindOf(value) === kind,
+									(value) => ResourceData.kindOf(value) === kind,
 									() =>
 										Effect.die(
 											new Error(
