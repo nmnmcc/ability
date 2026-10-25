@@ -44,12 +44,15 @@ interface Memo {
 	readonly fits: MutableHashMap.MutableHashMap<string, boolean>
 	/** The count of the issues of conditions so far. It belongs to one binding. */
 	readonly issues: { count: number; noted: boolean }
+	/** The steps of the checks of patterns so far. It belongs to one binding. */
+	readonly work: { steps: number; noted: boolean }
 }
 
 const makeMemo = (): Memo => ({
 	suggestions: MutableHashMap.empty(),
 	fits: MutableHashMap.empty(),
 	issues: { count: 0, noted: false },
+	work: { steps: 0, noted: false },
 })
 
 /**
@@ -186,24 +189,44 @@ const patternIssues = (
 ): ReadonlyArray<Issue> =>
 	Result.match(Patterns.parse(pattern), {
 		onFailure: (issue) => [{ path: at, issue }],
-		onSuccess: (parsed) =>
+		onSuccess: (parsed) => {
 			// A rule with no known resource has an issue for that already.
-			known.length === 0 ||
-			Arr.some(known, (descriptor) => {
-				const key = `${descriptor.kind}\u0000${pattern}`
-				return Option.getOrElse(MutableHashMap.get(memo.fits, key), () => {
-					const fits = Patterns.fitsCatalog(parsed, descriptor.catalog)
-					MutableHashMap.set(memo.fits, key, fits)
-					return fits
+			const fits =
+				known.length === 0 ||
+				Arr.some(known, (descriptor) => {
+					const key = `${descriptor.kind}\u0000${pattern}`
+					return Option.getOrElse(MutableHashMap.get(memo.fits, key), () => {
+						// Each check of a pattern reads the fields of a catalog. The
+						// work of one binding has a limit, so very many patterns stop
+						// with one issue, and the policy does not load.
+						memo.work.steps +=
+							descriptor.catalog.fields.length * Math.max(parsed.length, 1)
+						if (memo.work.steps > Limits.searchSteps) {
+							return true
+						}
+						const found = Patterns.fitsCatalog(parsed, descriptor.catalog)
+						MutableHashMap.set(memo.fits, key, found)
+						return found
+					})
 				})
-			})
+			if (memo.work.steps > Limits.searchSteps && !memo.work.noted) {
+				memo.work.noted = true
+				return [
+					{
+						path: at,
+						issue: `The field patterns of the policy take more than ${String(Limits.searchSteps)} steps to check. The most is ${String(Limits.searchSteps)}.`,
+					},
+				]
+			}
+			return fits
 				? []
 				: [
 						{
 							path: at,
 							issue: `The field pattern "${pattern}" matches no field of the resources of the rule`,
 						},
-					],
+					]
+		},
 	})
 
 /** The fields of the resources that a test of the rule may read. */

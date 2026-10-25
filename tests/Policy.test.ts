@@ -2027,6 +2027,41 @@ describe("Policy", () => {
 		assert.include(text, "The first 100 are here")
 	})
 
+	it("stops the check of very many field patterns", () => {
+		const Wide = Resource.make("Wide", {
+			actions: ["read"],
+			fields: Object.fromEntries(
+				Array.from({ length: 1000 }, (_, index) => [
+					`field${String(index)}`,
+					Schema.String,
+				]),
+			),
+		})
+		const Wides = Domain.make({ principal: Caller, resources: [Wide] })
+		const start = Date.now()
+		const result = Schema.decodeResult(Policy.schema(Wides))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Wide"],
+					fields: Array.from(
+						{ length: 250_000 },
+						(_, index) => `missing${String(index)}*`,
+					),
+				},
+			],
+		})
+		assert.isTrue(Result.isFailure(result))
+		assert.include(
+			String(Result.isFailure(result) ? result.failure : ""),
+			"steps to check",
+		)
+		assert.isBelow(Date.now() - start, 3000)
+	})
+
 	it("binds a very long wrong name in a short time", () => {
 		const Wide = Resource.make("Wide", {
 			actions: ["read"],
