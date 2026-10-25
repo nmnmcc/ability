@@ -152,10 +152,45 @@ class PrincipalKey implements Equal.Equal {
  *
  * A value that keeps its data inside, with no own fields, as a `Date`, a
  * `URL` or a `RegExp` with the place of its next match, is in the text with
- * its data, and so is an `Option`.
+ * its data, and so is an `Option`. Such a value, or an array, may have fields
+ * too, and the text has them after the data.
  * For another such value, the walk can not see the data, so it throws, and
- * the principal gets no key: it is not kept.
+ * the principal gets no key: it is not kept. It throws for a field that a
+ * loop can not see, or with a symbol as its name, too.
  */
+/**
+ * Gives the names of the own fields of a value that a key shows: the fields
+ * that a loop sees, with no item of an array and no name in `inside`, which
+ * the key shows in another way. A field that a loop does not see, or that has
+ * a symbol as its name, can not be in the text, but a loader may read it. So
+ * for such a field it throws, and the principal gets no key.
+ */
+const shownFields = (
+	value: object,
+	inside: ReadonlyArray<PropertyKey>,
+): ReadonlyArray<string> =>
+	Arr.filter(Reflect.ownKeys(value), (name): name is string => {
+		if (
+			inside.includes(name) ||
+			(Array.isArray(value) && typeof name === "string" && isIndex(name))
+		) {
+			return false
+		}
+		if (
+			typeof name === "symbol" ||
+			!Object.prototype.propertyIsEnumerable.call(value, name)
+		) {
+			throw new Error(
+				"A part of the principal has a field that a loop can not see",
+			)
+		}
+		return true
+	})
+
+/** Tells if a name is the index of an item of an array. */
+const isIndex = (name: string): boolean =>
+	/^(?:0|[1-9]\d*)$/.test(name) && Number(name) < 2 ** 32 - 1
+
 const orderOf = (root: unknown): string => {
 	const ids = new Map<object, number>()
 	return Trampoline.adaptive<unknown, string>((R, child) => (value, depth) => {
@@ -175,17 +210,43 @@ const orderOf = (root: unknown): string => {
 		ids.set(value, ids.size)
 		const items = (list: ReadonlyArray<unknown>) =>
 			R.forEach(list, (item) => child(item, depth + 1))
+		// The fields of an object, in the order that a loop sees them.
+		const fieldsOf = (names: ReadonlyArray<string>) =>
+			R.map(
+				items(
+					Arr.map(names, (name) => (value as Record<string, unknown>)[name]),
+				),
+				(texts) =>
+					`{${Arr.map(names, (name, index) => `${JSON.stringify(name)}:${texts[index]!}`).join(",")}}`,
+			)
+		// A value that keeps its data inside may have fields too, as an array
+		// from `Object.assign(["read"], { role })`. `Equal` does not see them,
+		// but a loader may read them, so the text has them after the data.
+		const withFields = (
+			data: Trampoline.Step<string>,
+			inside: ReadonlyArray<PropertyKey>,
+		) => {
+			const names = shownFields(value, inside)
+			return names.length === 0
+				? data
+				: R.flatMap(data, (text) =>
+						R.map(fieldsOf(names), (fields) => `${text}&${fields}`),
+					)
+		}
 		if (value instanceof Date) {
-			return R.succeed(`date:${String(value.getTime())}`)
+			return withFields(R.succeed(`date:${String(value.getTime())}`), [])
 		}
 		if (value instanceof URL) {
-			return R.succeed(`url:${JSON.stringify(value.href)}`)
+			return withFields(R.succeed(`url:${JSON.stringify(value.href)}`), [])
 		}
 		if (value instanceof RegExp) {
 			// A `RegExp` with the flag `g` or `y` keeps the place of its next
 			// match in `lastIndex`, which `Equal` does not see.
-			return R.succeed(
-				`regexp:${JSON.stringify(String(value))}:${String(value.lastIndex)}`,
+			return withFields(
+				R.succeed(
+					`regexp:${JSON.stringify(String(value))}:${String(value.lastIndex)}`,
+				),
+				["lastIndex"],
 			)
 		}
 		if (Option.isOption(value)) {
@@ -194,11 +255,12 @@ const orderOf = (root: unknown): string => {
 				: R.succeed("none")
 		}
 		if (Array.isArray(value)) {
-			return R.map(items(value), (texts) => `[${texts.join(",")}]`)
+			return withFields(
+				R.map(items(value), (texts) => `[${texts.join(",")}]`),
+				["length"],
+			)
 		}
 		if (
-			value instanceof Map ||
-			value instanceof Set ||
 			HashMap.isHashMap(value) ||
 			HashSet.isHashSet(value) ||
 			Chunk.isChunk(value)
@@ -208,7 +270,16 @@ const orderOf = (root: unknown): string => {
 				(texts) => `<${texts.join(",")}>`,
 			)
 		}
-		const names = Object.keys(value)
+		if (value instanceof Map || value instanceof Set) {
+			return withFields(
+				R.map(
+					items(Array.from(value as Iterable<unknown>)),
+					(texts) => `<${texts.join(",")}>`,
+				),
+				[],
+			)
+		}
+		const names = shownFields(value, [])
 		const prototype: unknown = Object.getPrototypeOf(value)
 		if (
 			names.length === 0 &&
@@ -217,11 +288,7 @@ const orderOf = (root: unknown): string => {
 		) {
 			throw new Error("The data of a part of the principal is not in fields")
 		}
-		return R.map(
-			items(Arr.map(names, (name) => (value as Record<string, unknown>)[name])),
-			(texts) =>
-				`{${Arr.map(names, (name, index) => `${JSON.stringify(name)}:${texts[index]!}`).join(",")}}`,
-		)
+		return fieldsOf(names)
 	})(root)
 }
 

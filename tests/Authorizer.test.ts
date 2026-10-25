@@ -1024,6 +1024,87 @@ describe("Authorizer", () => {
 			}),
 	)
 
+	describe("does not give one cached policy to two principals with other fields on a value", () => {
+		// The Schema makes the rights when it decodes, with the role from the
+		// time now, on a field of the array or a field that a loop can not
+		// see. `Equal` does not see either one.
+		const run = (rightsOf: (role: string) => ReadonlyArray<string>) =>
+			Effect.gen(function* () {
+				const clock = { role: "admin" }
+				const Stored = Schema.Struct({ id: Schema.String })
+				const Rights = Schema.declare((input): input is ReadonlyArray<string> =>
+					Array.isArray(input),
+				)
+				const Session = Schema.Struct({ id: Schema.String, rights: Rights })
+				const Righted = Stored.pipe(
+					Schema.decodeTo(
+						Session,
+						SchemaTransformation.transform({
+							decode: (stored): typeof Session.Type => ({
+								...stored,
+								rights: rightsOf(clock.role),
+							}),
+							encode: ({ id }) => ({ id }),
+						}),
+					),
+				)
+				const Righteds = Domain.make({ principal: Righted, resources: [Bot] })
+				class CurrentRighted extends Context.Service<
+					CurrentRighted,
+					typeof Session.Type
+				>()("@nmnmcc/ability/tests/Authorizer.test/CurrentRighted") {}
+				class RightedAuth extends Authorizer.Service<RightedAuth>()(
+					"test/RightedAuth",
+					{ domain: Righteds, principal: CurrentRighted },
+				) {}
+				const layer = Authorizer.layer(RightedAuth, {
+					policy: (session) =>
+						Effect.succeed(
+							Policy.define(Righteds)(function* (_) {
+								if (
+									(session.rights as unknown as { readonly role: unknown })
+										.role === "admin"
+								) {
+									yield* _.allow("read", Bot)
+								}
+							}),
+						),
+				})
+				return yield* Effect.gen(function* () {
+					yield* Effect.provideService(
+						RightedAuth.check({ action: "read", resource: aliceBot }),
+						CurrentRighted,
+						{ id: "s", rights: rightsOf("admin") },
+					)
+					clock.role = "guest"
+					yield* Effect.provideService(
+						RightedAuth.check({ action: "read", resource: aliceBot }),
+						CurrentRighted,
+						{ id: "s", rights: rightsOf("guest") },
+					)
+				}).pipe(Effect.provide(layer), Effect.exit)
+			})
+
+		it.effect("on a field of an array", () =>
+			Effect.gen(function* () {
+				const exit = yield* run((role) => Object.assign(["read"], { role }))
+				assert.strictEqual(failureTag(exit), "Forbidden")
+			}),
+		)
+
+		it.effect("on a field that a loop can not see", () =>
+			Effect.gen(function* () {
+				const exit = yield* run((role) =>
+					Object.defineProperty(["read"], "role", {
+						value: role,
+						enumerable: false,
+					}),
+				)
+				assert.strictEqual(failureTag(exit), "Forbidden")
+			}),
+		)
+	})
+
 	it.effect("checks a principal with a loop back to itself", () =>
 		Effect.gen(function* () {
 			// The Schema puts the loop back when it decodes.
