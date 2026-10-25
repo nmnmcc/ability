@@ -25,10 +25,9 @@
  *   this kind?"
  * - {@link permittedFields}: the fields that the policy lets a request use.
  *
- * Each of them also takes the request first and the policy later. In a `pipe`,
- * the policy gives the domain. Outside a `pipe`, give the domain by hand, as
- * in `Policy.decide<typeof App>(request)`. Without it the request has the type
- * `never`, so TypeScript can still check it.
+ * Each of them takes the policy first and the request second, as in
+ * `Policy.decide(policy, request)`. The policy gives the domain, so
+ * TypeScript checks the request against it.
  *
  * A policy without predicates can become JSON with {@link schema}.
  *

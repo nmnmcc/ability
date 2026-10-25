@@ -39,7 +39,9 @@ A condition, a rule and a policy keep two type fields now:
 | `Condition<E, R, O, I>` | `Condition<I, X>` |
 | `Policy<D, E, R, O>`    | `Policy<D, X>`    |
 | `Coverage<E, R, O, I>`  | `Coverage<I, X>`  |
-| `Residuals<E, R, O, I>` | `Residuals<I, X>` |
+
+The `Residuals` type is gone, with `Policy.residuals`. Use `Policy.residual`,
+which gives a `Condition<I, X>`.
 
 `I` is what a condition reads, as before. `X` is `Condition.Opaque<E, R>` when
 there is a predicate, with its error type `E` and its service type `R`, and
