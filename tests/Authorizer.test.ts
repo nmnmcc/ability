@@ -594,6 +594,44 @@ describe("Authorizer", () => {
 			}),
 	)
 
+	it.effect(
+		"gives the loader the same principal with a cache and with none",
+		() =>
+			Effect.gen(function* () {
+				const Signed = Schema.Struct({ n: Schema.Finite })
+				const Signs = Domain.make({ principal: Signed, resources: [Bot] })
+				class CurrentSigned extends Context.Service<
+					CurrentSigned,
+					typeof Signed.Type
+				>()("@nmnmcc/ability/tests/Authorizer.test/CurrentSigned") {}
+				class SignAuth extends Authorizer.Service<SignAuth>()("test/SignAuth", {
+					domain: Signs,
+					principal: CurrentSigned,
+				}) {}
+				// The JSON form of `-0` is `0`, so the loader sees `0` in both cases.
+				const tagWith = (cache: false | undefined) =>
+					SignAuth.check({ action: "read", resource: aliceBot }).pipe(
+						Effect.provideService(CurrentSigned, { n: -0 }),
+						Effect.provide(
+							Authorizer.layer(SignAuth, {
+								policy: (signed) =>
+									Effect.succeed(
+										Policy.define(Signs)(function* (_) {
+											if (!Object.is(signed.n, -0)) {
+												yield* _.allow("read", Bot)
+											}
+										}),
+									),
+								...(cache === undefined ? {} : { cache }),
+							}),
+						),
+						Effect.exit,
+						Effect.map(failureTag),
+					)
+				assert.strictEqual(yield* tagWith(false), yield* tagWith(undefined))
+			}),
+	)
+
 	it.effect("keeps no policy of a principal with no JSON form", () =>
 		Effect.gen(function* () {
 			const role = Symbol.for("@nmnmcc/ability/tests/role")

@@ -208,22 +208,26 @@ export const makeLayer = (
 	},
 ) => {
 	const domain: Domain.Any = service.domain
+	// The JSON form of a principal, and the copy that the Schema decodes from
+	// it. The loader always gets the copy, with a cache or not, so a cache can
+	// not change an answer: a form may lose data that `Equal` does not see,
+	// as `-0` becomes `0`. A principal with no such form gives `undefined`.
+	const canonicalOf = jsonKey(domain.principal)
+	const custom = options.cache === false ? undefined : options.cache?.key
 	// It gives `undefined` when the principal has no key. Such a principal does
 	// not use the cache.
-	const custom = options.cache === false ? undefined : options.cache?.key
-	// With no cache, no key is made, so the Schema of the principal need not
-	// have a JSON form.
-	const keyOf: (principal: object) => PrincipalKey | undefined =
-		options.cache === false
-			? () => undefined
-			: custom === undefined
-				? jsonKey(domain.principal)
-				: (principal) => {
-						const text = custom(principal)
-						return text === undefined
-							? undefined
-							: new PrincipalKey(principal, text)
-					}
+	const keyOf = (
+		principal: object,
+		canonical: PrincipalKey | undefined,
+	): PrincipalKey | undefined => {
+		if (custom === undefined) {
+			return canonical
+		}
+		const text = custom(principal)
+		return text === undefined
+			? undefined
+			: new PrincipalKey(canonical?.principal ?? principal, text)
+	}
 	return Layer.effect(
 		service,
 		Effect.gen(function* () {
@@ -262,9 +266,11 @@ export const makeLayer = (
 						})
 
 			const policyFor = (principal: object) => {
-				const key = cache === undefined ? undefined : keyOf(principal)
+				const canonical = canonicalOf(principal)
+				const key =
+					cache === undefined ? undefined : keyOf(principal, canonical)
 				if (cache === undefined || key === undefined) {
-					return load(principal)
+					return load(canonical?.principal ?? principal)
 				}
 				// A failed lookup is kept in the cache. Remove it, so the next check
 				// tries again.
@@ -391,7 +397,7 @@ export const makeLayer = (
 				if (principal === undefined) {
 					return Cache.invalidateAll(cache)
 				}
-				const key = keyOf(principal)
+				const key = keyOf(principal, canonicalOf(principal))
 				return key === undefined ? Effect.void : Cache.invalidate(cache, key)
 			}
 

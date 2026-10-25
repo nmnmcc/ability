@@ -186,9 +186,9 @@ predicates run each time, and `Policy.explain` lists its rules each time.
 
 The cache key is the JSON text of the principal, from the Schema of the
 principal. A principal is kept only when the value that the Schema decodes from
-that text is equal to it. The loader gets that decoded copy, so it must decide
-by the data of the principal, not by the identity of its objects. Give
-`cache: { key }` to make the key in another way.
+that text is equal to it. The loader always gets that decoded copy, also with no
+cache, so it must decide by the data of the principal, not by the identity of
+its objects. Give `cache: { key }` to make the key in another way.
 
 ## Before you deploy
 
