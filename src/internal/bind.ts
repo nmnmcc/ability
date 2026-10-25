@@ -16,6 +16,7 @@ import * as Catalog from "./catalog.ts"
 import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
 import * as Patterns from "./patterns.ts"
+import * as Place from "./place.ts"
 import { withSuggestion } from "./suggest.ts"
 
 /** One problem of a rule or a policy, with its path. */
@@ -635,15 +636,18 @@ export const treeIssues = (
 	// The rules come out of the tree first, and each one is checked after.
 	// A check of a condition goes down its levels, so a check inside the walk
 	// of the tree would go down the levels of both.
+	// The place of each rule shares the path of its parent, and the full path
+	// is made only when its rule is checked. A deep tree with very many rules
+	// would need very much memory for a full copy of the path of each rule.
 	const rulesOf = (
 		node: TreeNode,
-		path: ReadonlyArray<PropertyKey>,
+		place: Place.Place | undefined,
 		level: number,
-	): ReadonlyArray<Issue | readonly [RuleData, ReadonlyArray<PropertyKey>]> => {
+	): ReadonlyArray<Issue | readonly [RuleData, Place.Place]> => {
 		if (level > Limits.policyDepth) {
 			return [
 				{
-					path,
+					path: Place.pathOf(place),
 					issue: `A policy tree has more than ${String(Limits.policyDepth)} levels. The most is ${String(Limits.policyDepth)}.`,
 				},
 			]
@@ -652,25 +656,25 @@ export const treeIssues = (
 			case "Rules":
 				return Arr.map(
 					node.rules,
-					(rule, index) => [rule, [...path, "rules", index]] as const,
+					(rule, index) => [rule, Place.at(place, "rules", index)] as const,
 				)
 			case "All":
 			case "Any":
 			case "FirstOf":
 				return Arr.flatMap(node.policies, (child, index) =>
-					rulesOf(child, [...path, "policies", index], level + 1),
+					rulesOf(child, Place.at(place, "policies", index), level + 1),
 				)
 			case "Ceiling":
 				return [
-					...rulesOf(node.cap, [...path, "cap"], level + 1),
-					...rulesOf(node.policy, [...path, "policy"], level + 1),
+					...rulesOf(node.cap, Place.at(place, "cap"), level + 1),
+					...rulesOf(node.policy, Place.at(place, "policy"), level + 1),
 				]
 		}
 	}
 	const memo = makeMemo()
-	return Arr.flatMap(rulesOf(root, [], 1), (found) =>
+	return Arr.flatMap(rulesOf(root, undefined, 1), (found) =>
 		Array.isArray(found)
-			? ruleIssues(domain, found[0], found[1], memo)
+			? ruleIssues(domain, found[0], Place.pathOf(found[1]), memo)
 			: [found as Issue],
 	)
 }

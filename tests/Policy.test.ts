@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
+import { execFileSync } from "node:child_process"
 import {
 	Array as Arr,
 	Context,
@@ -436,6 +437,18 @@ describe("Policy", () => {
 				Equal.equals(Schema.decodeUnknownSync(CountedSchema)(json), policy),
 			)
 		})
+
+		it("decodes a deep tree with very many rules in a small heap", () => {
+			const output = execFileSync(
+				process.execPath,
+				[
+					"--max-old-space-size=150",
+					new URL("./scripts/deep-policy.ts", import.meta.url).pathname,
+				],
+				{ encoding: "utf8" },
+			)
+			assert.strictEqual(output.trim(), "decoded")
+		}, 60_000)
 
 		it("does not decode a shared input that would be too large", () => {
 			const shared = Arr.reduce(

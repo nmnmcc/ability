@@ -12,6 +12,7 @@ import type * as Domain from "../Domain.ts"
 import * as Rule from "./rule.ts"
 import * as Json from "./json.ts"
 import * as Limits from "./limits.ts"
+import * as Place from "./place.ts"
 import * as PolicyNodes from "./policy-nodes.ts"
 
 type Node = PolicyNodes.Node
@@ -213,10 +214,13 @@ const spendValue = (
 	)
 }
 
-/** A rule in the input, with its place, to decode after the tree. */
+/**
+ * A rule in the input, with its place, to decode after the tree. The place
+ * shares the path of its parent: see `Place`.
+ */
 interface RuleInput {
 	readonly input: unknown
-	readonly path: ReadonlyArray<PropertyKey>
+	readonly place: Place.Place
 }
 
 /**
@@ -227,20 +231,20 @@ interface RuleInput {
 type Plan =
 	| {
 			readonly _tag: "Rules"
-			readonly path: ReadonlyArray<PropertyKey>
+			readonly place: Place.Place | undefined
 			readonly size: number
 			readonly algorithm: PolicyNodes.Algorithm
 			readonly rules: ReadonlyArray<number>
 	  }
 	| {
 			readonly _tag: "All" | "Any" | "FirstOf"
-			readonly path: ReadonlyArray<PropertyKey>
+			readonly place: Place.Place | undefined
 			readonly size: number
 			readonly policies: ReadonlyArray<Plan>
 	  }
 	| {
 			readonly _tag: "Ceiling"
-			readonly path: ReadonlyArray<PropertyKey>
+			readonly place: Place.Place | undefined
 			readonly size: number
 			readonly cap: Plan
 			readonly policy: Plan
@@ -252,11 +256,13 @@ type Plan =
  * the value, so its size counts in the budget.
  */
 const decodeMeta = (
-	{ input, path }: RuleInput,
+	rule: RuleInput,
 	domain: Domain.Any,
 	budget: Json.Budget,
-): Effect.Effect<unknown, Json.Problem> =>
-	Effect.flatMap(
+): Effect.Effect<unknown, Json.Problem> => {
+	const { input } = rule
+	const path = Place.pathOf(rule.place)
+	return Effect.flatMap(
 		attempt(() =>
 			typeof input !== "object" || input === null
 				? undefined
@@ -285,13 +291,16 @@ const decodeMeta = (
 							}),
 					),
 	)
+}
 
 const decodeRule = (
-	{ input, path }: RuleInput,
+	rule: RuleInput,
 	meta: unknown,
 	budget: Json.Budget,
 	domain: Domain.Any,
 ): Rule.Rule => {
+	const { input } = rule
+	const path = Place.pathOf(rule.place)
 	if (typeof input !== "object" || input === null) {
 		throw Json.problem(path, "A rule must be an object")
 	}
@@ -330,11 +339,13 @@ const decodeRule = (
 /**
  * Reads the shape of a tree, and puts each rule in `rules`. The rules are
  * decoded after the walk: a condition has levels of its own, and a decode
- * inside the walk would go down the levels of both.
+ * inside the walk would go down the levels of both. `path` is the path of the
+ * node for a problem here, and `place` keeps it for later.
  */
 const readTree = (
 	input: unknown,
 	path: ReadonlyArray<PropertyKey>,
+	place: Place.Place | undefined,
 	depth: number,
 	budget: Json.Budget,
 	// The rules of one decode. The list belongs to that decode.
@@ -350,8 +361,15 @@ const readTree = (
 		throw Json.problem(path, "A node of a policy must be an object")
 	}
 	Json.spend(budget, 1, path)
-	const child = (value: unknown, at: ReadonlyArray<PropertyKey>) =>
-		readTree(value, at, depth + 1, budget, rules)
+	const child = (value: unknown, ...parts: ReadonlyArray<PropertyKey>) =>
+		readTree(
+			value,
+			[...path, ...parts],
+			Place.at(place, ...parts),
+			depth + 1,
+			budget,
+			rules,
+		)
 	const tag = Json.read(input, "_tag", path)
 	switch (tag) {
 		case "Rules": {
@@ -365,11 +383,14 @@ const readTree = (
 			const found = Arr.map(
 				Json.readList(input, "rules", path, budget),
 				(rule, index) =>
-					rules.push({ input: rule, path: [...path, "rules", index] }) - 1,
+					rules.push({
+						input: rule,
+						place: Place.at(place, "rules", index),
+					}) - 1,
 			)
-			return sized({
+			return sized(path, {
 				_tag: "Rules",
-				path,
+				place,
 				size: 1 + found.length,
 				algorithm: algorithm as PolicyNodes.Algorithm,
 				rules: found,
@@ -380,24 +401,21 @@ const readTree = (
 		case "FirstOf": {
 			const policies = Arr.map(
 				Json.readList(input, "policies", path, budget),
-				(value, index) => child(value, [...path, "policies", index]),
+				(value, index) => child(value, "policies", index),
 			)
-			return sized({
+			return sized(path, {
 				_tag: tag,
-				path,
+				place,
 				size: Arr.reduce(policies, 1, (total, plan) => total + plan.size),
 				policies,
 			})
 		}
 		case "Ceiling": {
-			const cap = child(Json.read(input, "cap", path), [...path, "cap"])
-			const policy = child(Json.read(input, "policy", path), [
-				...path,
-				"policy",
-			])
-			return sized({
+			const cap = child(Json.read(input, "cap", path), "cap")
+			const policy = child(Json.read(input, "policy", path), "policy")
+			return sized(path, {
 				_tag: "Ceiling",
-				path,
+				place,
 				size: 1 + cap.size + policy.size,
 				cap,
 				policy,
@@ -409,10 +427,10 @@ const readTree = (
 }
 
 /** Stops a plan past `policyNodes`, with the message of the nodes. */
-const sized = (plan: Plan): Plan => {
+const sized = (path: ReadonlyArray<PropertyKey>, plan: Plan): Plan => {
 	if (plan.size > Limits.policyNodes) {
 		throw Json.problem(
-			plan.path,
+			path,
 			`A policy tree has ${String(plan.size)} nodes. The most is ${String(Limits.policyNodes)}.`,
 		)
 	}
@@ -443,7 +461,7 @@ const build = (plan: Plan, rules: ReadonlyArray<Rule.Rule>): Node => {
 	} catch (error) {
 		// A node past a limit is a problem at its place.
 		if (error instanceof Limits.LimitExceeded) {
-			throw Json.problem(plan.path, error.message)
+			throw Json.problem(Place.pathOf(plan.place), error.message)
 		}
 		throw error
 	}
@@ -474,7 +492,9 @@ export const decode = (
 		const budget: Json.Budget = { used: 0 }
 		// The rules of this decode. The list belongs to this decode.
 		const inputs: Array<RuleInput> = []
-		const plan = yield* attempt(() => readTree(input, [], 1, budget, inputs))
+		const plan = yield* attempt(() =>
+			readTree(input, [], undefined, 1, budget, inputs),
+		)
 		const metas = yield* Effect.forEach(inputs, (rule) =>
 			decodeMeta(rule, domain, budget),
 		)
