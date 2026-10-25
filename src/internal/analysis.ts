@@ -296,7 +296,7 @@ const scopeOf = (
 	const issues = Bind.ruleIssues(
 		domain,
 		{ actions: [request.action], resources: [request.kind], when: ast },
-		["within"],
+		() => ["within"],
 	)
 	if (issues.length > 0) {
 		throw new globalThis.Error(

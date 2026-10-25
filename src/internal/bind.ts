@@ -252,16 +252,8 @@ const patternIssues = (
 						}) || before
 					)
 				})
-			if (memo.work.steps > Limits.searchSteps && !memo.work.noted) {
-				memo.work.noted = true
-				return [
-					{
-						path: at,
-						issue: `The field patterns of the policy take more than ${String(Limits.searchSteps)} steps to check. The most is ${String(Limits.searchSteps)}.`,
-					},
-				]
-			}
-			return fits
+			// Past the limit of the work, `ruleIssues` gives one issue for it.
+			return fits || memo.work.steps > Limits.searchSteps
 				? []
 				: [
 						{
@@ -582,15 +574,18 @@ const hasAction = (
 	Arr.some(actions, (action) => descriptor.actions.includes(action))
 
 /**
- * Checks one rule against a domain. It gives one issue for each problem. `at`
- * is the path of the rule, for the paths of the issues.
+ * Checks one rule against a domain. It gives one issue for each problem, up
+ * to the most issues of the binding. `at` gives the path of the rule, and it
+ * is made only for an issue that the binding keeps: a rule with very many
+ * problems deep in a tree does not make a full path for each one.
  */
 export const ruleIssues = (
 	domain: Domain.Any,
 	rule: RuleData,
-	at: ReadonlyArray<PropertyKey>,
+	at: LazyPath,
 	memo: Memo = makeMemo(),
 ): ReadonlyArray<Issue> => {
+	const here = (issues: ReadonlyArray<Issue>) => under(memo, at, issues)
 	const all = rule.resources.includes("*")
 	// Each kind is checked one time, also when the list names it again. The
 	// names come from a policy, so a native `Set` finds the copies:
@@ -623,46 +618,72 @@ export const ruleIssues = (
 	const actions = Array.from(
 		new Set(Arr.flatMap(known, (descriptor) => descriptor.actions)),
 	)
-	return [
-		...Arr.map(
-			Arr.filter(names, (kind) => !HashMap.has(domain.resources, kind)),
-			(kind): Issue => ({
-				path: [...at, "resources"],
-				issue: suggestIn(
-					memo,
-					`There is no resource with the kind "${kind}"`,
-					kind,
-					"~kinds",
-					() => kinds,
-				),
-			}),
+	const fieldIssues = Arr.flatMap(rule.fields ?? [], (field, index) =>
+		here(
+			field.includes("*")
+				? patternIssues(memo, known, field, ["fields", index])
+				: fieldIssue(context, field, ["fields", index]),
 		),
-		...Arr.map(
+	)
+	const work = memo.work.steps > Limits.searchSteps && !memo.work.noted
+	memo.work.noted ||= work
+	return [
+		...Arr.flatMap(
+			Arr.filter(names, (kind) => !HashMap.has(domain.resources, kind)),
+			(kind: string) =>
+				here([
+					{
+						path: ["resources"],
+						issue: suggestIn(
+							memo,
+							`There is no resource with the kind "${kind}"`,
+							kind,
+							"~kinds",
+							() => kinds,
+						),
+					},
+				]),
+		),
+		...Arr.flatMap(
 			Arr.filter(
 				rule.actions,
 				(action) => action !== "*" && !actions.includes(action),
 			),
-			(action): Issue => ({
-				path: [...at, "actions"],
-				issue: suggestIn(
-					memo,
-					`The action "${action}" is not an action of these resources`,
-					action,
-					`~actions\u0000${names.join(",")}`,
-					() => actions,
-				),
-			}),
+			(action: string) =>
+				here([
+					{
+						path: ["actions"],
+						issue: suggestIn(
+							memo,
+							`The action "${action}" is not an action of these resources`,
+							action,
+							`~actions\u0000${names.join(",")}`,
+							() => actions,
+						),
+					},
+				]),
 		),
-		...Arr.flatMap(rule.fields ?? [], (field, index) =>
-			field.includes("*")
-				? patternIssues(memo, known, field, [...at, "fields", index])
-				: fieldIssue(context, field, [...at, "fields", index]),
-		),
+		...fieldIssues,
+		// The issue of the work of the patterns is not one of the most issues
+		// of the binding, so a policy past the limit always says why.
+		...(work
+			? [
+					{
+						path: [...at(), "fields"],
+						issue: `The field patterns of the policy take more than ${String(Limits.searchSteps)} steps to check. The most is ${String(Limits.searchSteps)}.`,
+					},
+				]
+			: []),
 		...(rule.when === undefined
 			? []
 			: Nodes.isNode(rule.when)
-				? conditionIssues(context, rule.when, () => [...at, "when"], new Set())
-				: [notWhole([...at, "when"])]),
+				? conditionIssues(
+						context,
+						rule.when,
+						() => [...at(), "when"],
+						new Set(),
+					)
+				: here([notWhole(["when"])])),
 	]
 }
 
@@ -725,7 +746,7 @@ export const treeIssues = (
 	const memo = makeMemo()
 	return Arr.flatMap(rulesOf(root, undefined, 1), (found) =>
 		Array.isArray(found)
-			? ruleIssues(domain, found[0], Place.pathOf(found[1]), memo)
+			? ruleIssues(domain, found[0], () => Place.pathOf(found[1]), memo)
 			: [found as Issue],
 	)
 }

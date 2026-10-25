@@ -451,6 +451,18 @@ describe("Policy", () => {
 			assert.strictEqual(output.trim(), "decoded")
 		}, 60_000)
 
+		it("binds a deep rule with very many problems in a small heap", () => {
+			const output = execFileSync(
+				process.execPath,
+				[
+					"--max-old-space-size=150",
+					new URL("./scripts/many-problems.ts", import.meta.url).pathname,
+				],
+				{ encoding: "utf8" },
+			)
+			assert.strictEqual(output.trim(), "failed")
+		}, 60_000)
+
 		it("does not decode a shared input that would be too large", () => {
 			const shared = Arr.reduce(
 				Arr.range(1, 26),
