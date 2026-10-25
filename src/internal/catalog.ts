@@ -298,6 +298,13 @@ const isStruct = (
 	ast !== undefined &&
 	(ast.propertySignatures.length > 0 || ast.indexSignatures.length > 0)
 
+/** Tests if a Schema holds only values that are not objects, as `bigint`. */
+const isPrimitive = (ast: SchemaAST.AST): boolean =>
+	ast._tag === "BigInt" ||
+	ast._tag === "Symbol" ||
+	ast._tag === "UniqueSymbol" ||
+	(ast._tag === "Literal" && typeof ast.literal === "bigint")
+
 /** The kinds of the values of a Schema that is not a struct. */
 const kindsOf = (ast: SchemaAST.AST): Kinds => {
 	switch (ast._tag) {
@@ -475,6 +482,15 @@ const placeOf = (place: Place): Made => {
 	const valueKinds = Arr.reduce(values, noKinds, (kinds, schema) =>
 		joinKinds(kinds, kindsOf(structOf(schema) ?? schema)),
 	)
+	// A value of a branch may be an object, with parts that the Schema does
+	// not name. A `bigint` or a `symbol` is not a scalar that a test takes,
+	// so its kinds say `object`, but it has no parts: a read below it gives
+	// `null`, as below a string.
+	const objects = Arr.some(
+		values,
+		(schema) =>
+			!isPrimitive(schema) && kindsOf(structOf(schema) ?? schema).object,
+	)
 	const kinds = place.top
 		? anyKinds
 		: joinKinds(
@@ -496,8 +512,7 @@ const placeOf = (place: Place): Made => {
 		// decision may get a value made by hand. A value that may be any
 		// object, as one of `Schema.Unknown` may, may have the name with any
 		// value too.
-		const top =
-			place.top || valueKinds.object || properties.length < structs.length
+		const top = place.top || objects || properties.length < structs.length
 		const below: Place = {
 			schemas: Arr.flatMap(properties, (property) =>
 				alternatives(property.type, new Set()),
@@ -516,8 +531,7 @@ const placeOf = (place: Place): Made => {
 		return [name, below] as const
 	})
 	const signatures = Arr.flatMap(records, (struct) => struct.indexSignatures)
-	const keyTop =
-		place.top || valueKinds.object || records.length < structs.length
+	const keyTop = place.top || objects || records.length < structs.length
 	return {
 		branch: {
 			kinds,
@@ -525,11 +539,7 @@ const placeOf = (place: Place): Made => {
 			structs: structs.length > 0,
 			// A field that is a scalar in one branch of a union and a struct in
 			// another holds parts too.
-			open:
-				records.length > 0 ||
-				structs.length > 0 ||
-				valueKinds.object ||
-				place.top,
+			open: records.length > 0 || structs.length > 0 || objects || place.top,
 			plain: place.plain,
 			key:
 				signatures.length === 0

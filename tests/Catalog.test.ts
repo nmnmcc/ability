@@ -171,6 +171,19 @@ describe("Catalog", () => {
 		assert.isFalse(fieldOf(schema, "named.other").plain)
 		assert.isFalse(fieldOf(schema, "dated.flag").plain)
 		assert.isTrue(fieldOf(schema, "text.flag").plain)
+		// A read below a `bigint` or a `symbol` gives `null`, as below a string.
+		const primitives = Schema.Struct({
+			big: Schema.Union([
+				Schema.BigInt,
+				Schema.Struct({ owner: Schema.String }),
+			]),
+			sym: Schema.Union([
+				Schema.Symbol,
+				Schema.Struct({ owner: Schema.String }),
+			]),
+		})
+		assert.isTrue(fieldOf(primitives, "big.owner").plain)
+		assert.isTrue(fieldOf(primitives, "sym.owner").plain)
 		assert.isFalse(fieldOf(schema, "any.flag").plain)
 		assert.isTrue(fieldOf(schema, "dated").plain)
 	})
