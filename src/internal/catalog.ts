@@ -788,30 +788,30 @@ export const lookup = (
 	if (names.length > parts) {
 		return undefined
 	}
+	// The segments of the path go into one list, in order: a step that made
+	// a new list with the segments above would copy the path at each part.
+	// The list belongs to this lookup.
+	const segments: Array<Segment> = []
 	const found = Arr.reduce(
 		names,
-		{ branch: catalog.root, path: [] } as
-			| { readonly branch: Branch; readonly path: ReadonlyArray<Segment> }
-			| undefined,
-		(current, name) => {
-			if (current === undefined) {
+		catalog.root as Branch | undefined,
+		(branch, name) => {
+			if (branch === undefined) {
 				return undefined
 			}
-			const named = HashMap.get(current.branch.names, name)
+			const named = HashMap.get(branch.names, name)
 			if (Option.isSome(named)) {
-				return {
-					branch: catalog.branches[named.value]!,
-					path: [...current.path, name],
-				}
+				segments.push(name)
+				return catalog.branches[named.value]!
 			}
-			const key = current.branch.key
-			const keyBranch = current.branch.keyBranch
-			return key !== undefined && keyBranch !== undefined && keyFits(key, name)
-				? { branch: catalog.branches[keyBranch]!, path: [...current.path, key] }
-				: undefined
+			const key = branch.key
+			const keyBranch = branch.keyBranch
+			if (key !== undefined && keyBranch !== undefined && keyFits(key, name)) {
+				segments.push(key)
+				return catalog.branches[keyBranch]!
+			}
+			return undefined
 		},
 	)
-	return found === undefined
-		? undefined
-		: fieldAt(found.branch, found.path, parts)
+	return found === undefined ? undefined : fieldAt(found, segments, parts)
 }

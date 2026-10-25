@@ -4490,6 +4490,51 @@ describe("Policy", () => {
 		})
 	})
 
+	it("binds many tests on a field path of 1000 parts in a short time", () => {
+		interface Link {
+			readonly n: Link | null
+			readonly v: string
+		}
+		const Link: Schema.Codec<Link> = Schema.Struct({
+			n: Schema.NullOr(Schema.suspend((): Schema.Codec<Link> => Link)),
+			v: Schema.String,
+		})
+		const Chain = Resource.make("Chain", {
+			actions: ["read"],
+			fields: { l: Link },
+		})
+		const Chains = Domain.make({
+			principal: Caller,
+			resources: [Chain],
+			limits: { searchSteps: 2000 },
+		})
+		const field = `l.${"n.".repeat(998)}v`
+		const start = Date.now()
+		const exit = Schema.decodeUnknownExit(Policy.schema(Chains))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Chain"],
+					when: {
+						_tag: "Or",
+						conditions: Arr.makeBy(1000, (index) => ({
+							_tag: "Compare",
+							op: "eq",
+							field,
+							value: { _tag: "Literal", value: String(index) },
+						})),
+					},
+				},
+			],
+		})
+		assert.isTrue(Exit.isSuccess(exit))
+		// A lookup that copied the path at each part took about six seconds.
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
 	it("tests a field pattern that a rule names many times one time on a long field", () => {
 		interface Node {
 			readonly a: Node | null
