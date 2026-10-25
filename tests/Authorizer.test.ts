@@ -956,6 +956,74 @@ describe("Authorizer", () => {
 			}),
 	)
 
+	it.effect(
+		"does not give one cached policy to two principals with a RegExp at another place",
+		() =>
+			Effect.gen(function* () {
+				// The Schema makes the pattern when it decodes, with the place of
+				// its next match from the time now. `Equal` does not see it.
+				const clock = { now: 0 }
+				const Stored = Schema.Struct({ id: Schema.String })
+				const Session = Schema.Struct({
+					id: Schema.String,
+					pattern: Schema.RegExp,
+				})
+				const pattern = (lastIndex: number) => {
+					const made = /a/g
+					made.lastIndex = lastIndex
+					return made
+				}
+				const Patterned = Stored.pipe(
+					Schema.decodeTo(
+						Session,
+						SchemaTransformation.transform({
+							decode: (stored): typeof Session.Type => ({
+								...stored,
+								pattern: pattern(clock.now),
+							}),
+							encode: ({ id }) => ({ id }),
+						}),
+					),
+				)
+				const Patterneds = Domain.make({
+					principal: Patterned,
+					resources: [Bot],
+				})
+				class CurrentPatterned extends Context.Service<
+					CurrentPatterned,
+					typeof Session.Type
+				>()("@nmnmcc/ability/tests/Authorizer.test/CurrentPatterned") {}
+				class PatternedAuth extends Authorizer.Service<PatternedAuth>()(
+					"test/PatternedAuth",
+					{ domain: Patterneds, principal: CurrentPatterned },
+				) {}
+				const layer = Authorizer.layer(PatternedAuth, {
+					policy: (session) =>
+						Effect.succeed(
+							Policy.define(Patterneds)(function* (_) {
+								if (session.pattern.lastIndex === 0) {
+									yield* _.allow("read", Bot)
+								}
+							}),
+						),
+				})
+				const exit = yield* Effect.gen(function* () {
+					yield* Effect.provideService(
+						PatternedAuth.check({ action: "read", resource: aliceBot }),
+						CurrentPatterned,
+						{ id: "s", pattern: pattern(0) },
+					)
+					clock.now = 1
+					yield* Effect.provideService(
+						PatternedAuth.check({ action: "read", resource: aliceBot }),
+						CurrentPatterned,
+						{ id: "s", pattern: pattern(1) },
+					)
+				}).pipe(Effect.provide(layer), Effect.exit)
+				assert.strictEqual(failureTag(exit), "Forbidden")
+			}),
+	)
+
 	it.effect("checks a principal with a loop back to itself", () =>
 		Effect.gen(function* () {
 			// The Schema puts the loop back when it decodes.

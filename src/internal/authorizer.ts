@@ -151,7 +151,8 @@ class PrincipalKey implements Equal.Equal {
  * to one walk.
  *
  * A value that keeps its data inside, with no own fields, as a `Date`, a
- * `URL` or a `RegExp`, is in the text with its data, and so is an `Option`.
+ * `URL` or a `RegExp` with the place of its next match, is in the text with
+ * its data, and so is an `Option`.
  * For another such value, the walk can not see the data, so it throws, and
  * the principal gets no key: it is not kept.
  */
@@ -181,7 +182,11 @@ const orderOf = (root: unknown): string => {
 			return R.succeed(`url:${JSON.stringify(value.href)}`)
 		}
 		if (value instanceof RegExp) {
-			return R.succeed(`regexp:${JSON.stringify(String(value))}`)
+			// A `RegExp` with the flag `g` or `y` keeps the place of its next
+			// match in `lastIndex`, which `Equal` does not see.
+			return R.succeed(
+				`regexp:${JSON.stringify(String(value))}:${String(value.lastIndex)}`,
+			)
 		}
 		if (Option.isOption(value)) {
 			return Option.isSome(value)
