@@ -11,9 +11,6 @@
  */
 import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
-import * as HashMap from "effect/HashMap"
-import * as HashSet from "effect/HashSet"
-import * as MutableHashMap from "effect/MutableHashMap"
 import * as Option from "effect/Option"
 import { isObject } from "effect/Predicate"
 import * as Algebra from "./algebra.ts"
@@ -146,14 +143,24 @@ const cellText = (cell: unknown): string =>
 			? `number:${Object.is(cell, -0) ? "0" : String(cell)}`
 			: `${typeof cell}:${String(cell)}`
 
-/** Keeps the first cell of each text, in order. */
-const dedupeCells = (cells: ReadonlyArray<unknown>): ReadonlyArray<unknown> =>
-	Arr.flatten(
-		Arr.mapAccum(cells, HashSet.empty<string>(), (seen, cell) => {
-			const text = cellText(cell)
-			return [HashSet.add(seen, text), HashSet.has(seen, text) ? [] : [cell]]
-		})[1],
-	)
+/**
+ * Keeps the first cell of each text, in order. The texts come from the
+ * values of a policy, so they go into a native `Set`: the hash of a string in
+ * Effect has no random seed, and a policy could hold very many strings with
+ * one hash. The engine hashes a string with a random seed.
+ */
+const dedupeCells = (cells: ReadonlyArray<unknown>): ReadonlyArray<unknown> => {
+	// The set belongs to this call.
+	const seen = new Set<string>()
+	return Arr.filter(cells, (cell) => {
+		const text = cellText(cell)
+		if (seen.has(text)) {
+			return false
+		}
+		seen.add(text)
+		return true
+	})
+}
 
 /** Gives one value from each cell of a field. */
 const cellsOf = (
@@ -185,16 +192,22 @@ interface Search {
 	 * The texts of the values of each `In` test, so one test of a value does
 	 * not read every value of the test. It is a native `Map`, because it must
 	 * find a node by the node itself: a hash of a node reads all its values.
+	 * The texts are in a native `Set`, as in {@link dedupeCells}.
 	 */
-	readonly members: Map<Nodes.In, HashSet.HashSet<string>>
+	readonly members: Map<Nodes.In, Set<string>>
+	/**
+	 * The texts of the structure of the conditions that the search found to be
+	 * unsatisfiable. A condition with the same structure has the same free
+	 * fields, so its answer is the same. The set only grows, so the steps of a
+	 * search may share it. It is a native `Set`, as in {@link dedupeCells}.
+	 */
+	readonly failed: Set<string>
 	readonly budget: number
 }
 
 /** What a search has done up to now. Each step gives a new one. */
 interface SearchState {
 	readonly steps: number
-	/** The conditions that the search found to be unsatisfiable. */
-	readonly failed: HashSet.HashSet<Node>
 }
 
 interface Found {
@@ -228,13 +241,13 @@ const fixedValue = (
 				: null
 			: free
 
-const membersOf = (node: Nodes.In, search: Search): HashSet.HashSet<string> => {
+const membersOf = (node: Nodes.In, search: Search): Set<string> => {
 	const known = search.members.get(node)
 	if (known !== undefined) {
 		return known
 	}
 	// `===` finds no `NaN`, so the set has none, and `NaN` is in no test.
-	const members = HashSet.fromIterable(
+	const members = new Set(
 		Arr.map(
 			Arr.filter(
 				Arr.map(node.values, literalOf),
@@ -257,8 +270,7 @@ const testFixed = (
 			return Algebra.testCompare(node.op, value, literalOf(node.value))
 		case "In":
 			return (
-				!Number.isNaN(value) &&
-				HashSet.has(membersOf(node, search), cellText(value))
+				!Number.isNaN(value) && membersOf(node, search).has(cellText(value))
 			)
 		case "Exists":
 			return value !== null
@@ -318,13 +330,11 @@ const testedFields = (node: Node): ReadonlyArray<string> => {
  * and then the first name in order, so the choice is the same each time.
  */
 const nextField = (node: Node): string => {
-	const counts = MutableHashMap.empty<string, number>()
+	// A native `Map`, as in `dedupeCells`: a condition that is not bound to a
+	// domain may have any field names. The map belongs to this call.
+	const counts = new Map<string, number>()
 	Arr.forEach(testedFields(node), (field) =>
-		MutableHashMap.set(
-			counts,
-			field,
-			Option.getOrElse(MutableHashMap.get(counts, field), () => 0) + 1,
-		),
+		counts.set(field, (counts.get(field) ?? 0) + 1),
 	)
 	const depth = (field: string) => field.split(".").length
 	const [first, ...rest] = Array.from(counts)
@@ -351,7 +361,13 @@ const searchNode = (
 	if (node._tag === "True") {
 		return { assignment: Option.some(assignment), state }
 	}
-	if (node._tag === "False" || HashSet.has(state.failed, node)) {
+	if (node._tag === "False") {
+		return { assignment: Option.none(), state }
+	}
+	// The text reads all of the node. The step before counted the size of a
+	// larger node, so the budget counts this work too.
+	const text = Algebra.structureText(node)
+	if (search.failed.has(text)) {
 		return { assignment: Option.none(), state }
 	}
 	if (state.steps + node.size > search.budget) {
@@ -383,17 +399,10 @@ const searchNode = (
 			)
 		},
 	)
-	return Option.isSome(result.assignment)
-		? result
-		: {
-				assignment: Option.none(),
-				state: {
-					...result.state,
-					// A condition with the same structure has the same free fields,
-					// so its answer is the same.
-					failed: HashSet.add(result.state.failed, node),
-				},
-			}
+	if (Option.isNone(result.assignment)) {
+		search.failed.add(text)
+	}
+	return result
 }
 
 /**
@@ -434,10 +443,12 @@ const exampleOf = (
 		(root, [field, value]) => setPath(root, field.split("."), value),
 	)
 
-/** The constants that the tests of each field use. */
-const constantsOf = (
-	node: Node,
-): HashMap.HashMap<string, HashSet.HashSet<Nodes.Scalar>> => {
+/**
+ * The constants that the tests of each field use. They come from a policy, so
+ * they go into a native `Map` and `Set`, as in {@link dedupeCells}. The map
+ * belongs to one search.
+ */
+const constantsOf = (node: Node): Map<string, Set<Nodes.Scalar>> => {
 	const pairs = (
 		current: Node,
 	): ReadonlyArray<readonly [string, ReadonlyArray<Nodes.Scalar>]> => {
@@ -461,16 +472,13 @@ const constantsOf = (
 				return []
 		}
 	}
-	return Arr.reduce(pairs(node), HashMap.empty(), (all, [field, values]) =>
-		HashMap.set(
-			all,
-			field,
-			HashSet.union(
-				Option.getOrElse(HashMap.get(all, field), HashSet.empty),
-				HashSet.fromIterable(values),
-			),
-		),
-	)
+	const all = new Map<string, Set<Nodes.Scalar>>()
+	Arr.forEach(pairs(node), ([field, values]) => {
+		const known = all.get(field) ?? new Set<Nodes.Scalar>()
+		Arr.forEach(values, (value) => known.add(value))
+		all.set(field, known)
+	})
+	return all
 }
 
 /** Gives the kinds of each field of a catalog. A field that it does not have may hold any value. */
@@ -495,38 +503,33 @@ export const satisfiable = (
 	}
 	const constants = constantsOf(node)
 	// The search calls itself one time for each field that it fixes.
-	if (HashMap.size(constants) > Limits.searchFields) {
+	if (constants.size > Limits.searchFields) {
 		return satisfiability.Unknown({ reason: "budget" })
 	}
-	// The cells of each field. A field name is a string, so an Effect map
-	// finds it.
-	const cells = MutableHashMap.empty<string, ReadonlyArray<unknown>>()
+	// The cells of each field, in a native `Map` as the constants are.
+	const cells = new Map<string, ReadonlyArray<unknown>>()
 	const search: Search = {
 		members: new Map(),
-		cells: (field) =>
-			Option.getOrElse(MutableHashMap.get(cells, field), () => {
-				// The cells come from the constants, so many constants are work
-				// that the budget must count before the cells are made.
-				const known = Option.getOrElse(
-					HashMap.get(constants, field),
-					HashSet.empty,
-				)
-				if (HashSet.size(known) > budget) {
-					throw new OutOfBudget()
-				}
-				const found = cellsOf(kindsOf(field), Array.from(known))
-				MutableHashMap.set(cells, field, found)
-				return found
-			}),
+		failed: new Set(),
+		cells: (field) => {
+			const made = cells.get(field)
+			if (made !== undefined) {
+				return made
+			}
+			// The cells come from the constants, so many constants are work
+			// that the budget must count before the cells are made.
+			const known = constants.get(field) ?? new Set<Nodes.Scalar>()
+			if (known.size > budget) {
+				throw new OutOfBudget()
+			}
+			const found = cellsOf(kindsOf(field), Array.from(known))
+			cells.set(field, found)
+			return found
+		},
 		budget,
 	}
 	try {
-		const found = searchNode(
-			Algebra.simplify(node),
-			search,
-			{ steps: 0, failed: HashSet.empty() },
-			[],
-		)
+		const found = searchNode(Algebra.simplify(node), search, { steps: 0 }, [])
 		return Option.match(found.assignment, {
 			onNone: () => satisfiability.Unsatisfiable(),
 			onSome: (assignment) =>

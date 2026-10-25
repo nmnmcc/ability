@@ -1406,6 +1406,24 @@ describe("Policy", () => {
 			assert.strictEqual(new Set(Arr.map(strings, Hash.string)).size, 1)
 		})
 
+		it("searches the tests of them in a short time", () => {
+			const names = ["a", "b", "c", "d", "e", "f", "g", "h"] as const
+			const $ = Condition.builder<
+				Readonly<Record<(typeof names)[number], string>>,
+				unknown,
+				unknown
+			>()
+			const condition = $.and(
+				...Arr.flatMap(names, (name, index) => [
+					$.in(name, strings),
+					$.not($.in(name, strings.slice(index, index + 1000))),
+				]),
+			)
+			const begin = Date.now()
+			assert.strictEqual(Condition.satisfiable(condition)._tag, "Satisfiable")
+			assert.isBelow(Date.now() - begin, 1000)
+		})
+
 		it("decides and checks a policy with tests of them in a short time", () => {
 			const policy = Policy.define(App)(function* (_) {
 				yield* _.allow("read", Bot, {
