@@ -778,8 +778,10 @@ export type ResidualReads<D, K> = Condition.Reads<
 /**
  * Gives the condition on resource values for which the policy allows a
  * request. It has no principal fields and no `Under` nodes, so you can give it
- * to `Condition.fold`. It is `True` when the policy allows every value of the
- * kind, and `False` when it allows none.
+ * to `Condition.fold`. It is made smaller, so it is often `True` or `False`
+ * when the answer does not depend on the value, but it does no search: a
+ * condition that is true for every value may stay a test. To know if the
+ * policy allows every value, or some value, use {@link coverage}.
  *
  * With a scope (`within`), the condition is the scope and the residual
  * together, so it is false for every value outside the scope. Give the policy

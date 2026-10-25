@@ -311,9 +311,11 @@ authorizer with a decider asks the decider first.
 | `Policy.permittedFields` | The fields of a value that the policy lets a request use.      |
 
 `Policy.residual` puts the principal into every rule and gives a condition on
-the resource fields only. It is `True` when the policy allows every value of the
-kind, and `False` when it allows none. Use it to ask "may this principal do this
-act on some value of this kind?", or to make a database query.
+the resource fields only. Use it to make a database query. It makes the
+condition smaller, so it is often `True` or `False` when the answer does not
+depend on the value, but it does no search: a condition such as
+`owner = "a" OR owner <> "a"` stays as it is. To ask "may this principal do this
+act on every value, or on some value, of this kind?", use `Policy.coverage`.
 
 When a rule that the request may use has a predicate, the residual is one
 predicate with the name `"policy"`. It runs the whole policy for each value, so
