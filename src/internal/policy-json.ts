@@ -206,6 +206,10 @@ const spendValue = (budget: Json.Budget): ((part: Part) => void) =>
 		if (list) {
 			Json.spend(budget, 1 + value.length, at)
 		}
+		// The walk counts the fields that a loop sees, and the Schema of the
+		// `meta` reads the value after, so a hidden field is a problem: the
+		// walk would not count it.
+		Json.checkPlain(value, at)
 		const names = list
 			? Array.from({ length: value.length }, (_, index) => String(index))
 			: Object.keys(value)

@@ -65,6 +65,53 @@ export const spend = (
 }
 
 /**
+ * Checks that an object of the input is a plain object or a plain list. A
+ * list is a plain list only with the prototype of `Array`: a subclass of
+ * `Array` may have a field, as a getter `when`, too.
+ */
+const checkPrototype = (input: object, at: Place.Place | undefined): void => {
+	const prototype: unknown = Object.getPrototypeOf(input)
+	if (
+		prototype !== Object.prototype &&
+		prototype !== null &&
+		prototype !== Array.prototype
+	) {
+		throw problemAt(
+			at,
+			"A part of the input is not plain data: it is not a plain object",
+		)
+	}
+}
+
+/**
+ * Checks that an object of the input is plain JSON data: a plain object or
+ * a plain list, with no field that a loop over the keys does not see, other
+ * than the `length` of a list. A walk that counts the fields that a loop
+ * sees, as for a `meta`, must see every field that a Schema may read after.
+ */
+export const checkPlain = (
+	input: object,
+	at: Place.Place | undefined,
+): void => {
+	checkPrototype(input, at)
+	const list = Array.isArray(input)
+	if (
+		!Arr.every(
+			Reflect.ownKeys(input),
+			(key) =>
+				(list && key === "length") ||
+				(typeof key === "string" &&
+					Object.prototype.propertyIsEnumerable.call(input, key)),
+		)
+	) {
+		throw problemAt(
+			at,
+			"A part of the input is not plain data: it has a field that a loop does not see",
+		)
+	}
+}
+
+/**
  * Reads a field of the input at the place `at`. JSON has only plain objects
  * and lists, with fields that a loop over the keys sees. So an object with
  * another prototype, as a value of a class, is a problem: its prototype may
@@ -81,19 +128,7 @@ export const read = (
 	if (typeof input !== "object" || input === null) {
 		return null
 	}
-	const prototype: unknown = Object.getPrototypeOf(input)
-	// A list is a plain list only with the prototype of `Array`: a subclass
-	// of `Array` may have a field, as a getter `when`, too.
-	if (
-		prototype !== Object.prototype &&
-		prototype !== null &&
-		prototype !== Array.prototype
-	) {
-		throw problemAt(
-			at,
-			"A part of the input is not plain data: it is not a plain object",
-		)
-	}
+	checkPrototype(input, at)
 	const property = Object.getOwnPropertyDescriptor(input, name)
 	if (property === undefined) {
 		return null

@@ -2803,6 +2803,33 @@ describe("Policy", () => {
 		}),
 	)
 
+	it("does not take a meta with a field that a loop does not see", () => {
+		const Listed = Domain.make({
+			principal: Caller,
+			resources: [Bot],
+			meta: Schema.Struct({ entries: Schema.Array(Schema.String) }),
+			limits: { jsonNodes: 10 },
+		})
+		const decode = Schema.decodeUnknownExit(Policy.schema(Listed))
+		const rule = (meta: object) => ({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [{ _tag: "Allow", actions: ["read"], resources: ["Bot"], meta }],
+		})
+		const entries = Arr.makeBy(1000, (index) => String(index))
+		// The walk that counts the input does not see a hidden field, but the
+		// Schema of the meta reads it.
+		const hidden = decode(
+			rule(Object.defineProperty({}, "entries", { value: entries })),
+		)
+		assert.isTrue(Exit.isFailure(hidden))
+		assert.include(
+			String(Exit.isFailure(hidden) ? hidden.cause : ""),
+			"not plain data",
+		)
+		assert.isTrue(Exit.isFailure(decode(rule({ entries }))))
+	})
+
 	it("stops a sparse array in meta at once", () => {
 		const Metas = Domain.make({
 			principal: Caller,
