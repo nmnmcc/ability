@@ -76,8 +76,11 @@ describe("Patterns", () => {
 	it("does not take ** inside a part, or too many parts", () => {
 		assert.isTrue(Result.isFailure(Patterns.parse("a**")))
 		assert.isTrue(Result.isFailure(Patterns.parse("***")))
-		assert.isTrue(Result.isFailure(Patterns.parse("a.".repeat(16) + "a")))
-		assert.isTrue(Result.isSuccess(Patterns.parse("a.".repeat(15) + "a")))
+		// A pattern has at most the `patternParts` of its domain.
+		assert.isTrue(Result.isFailure(Patterns.parse("a.".repeat(16) + "a", 16)))
+		assert.isTrue(Result.isSuccess(Patterns.parse("a.".repeat(15) + "a", 16)))
+		assert.isTrue(Result.isSuccess(Patterns.parse("a.".repeat(999) + "a")))
+		assert.isTrue(Result.isFailure(Patterns.parse("a.".repeat(1000) + "a")))
 	})
 
 	it("matches a key of a record by its Schema, and any key by a star", () => {

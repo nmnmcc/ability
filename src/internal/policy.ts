@@ -15,6 +15,7 @@ import * as Condition from "../Condition.ts"
 import type * as Domain from "../Domain.ts"
 import type * as Policy from "../Policy.ts"
 import * as Bind from "./bind.ts"
+import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
 import * as PolicyJson from "./policy-json.ts"
 import * as PolicyNodes from "./policy-nodes.ts"
@@ -61,8 +62,24 @@ export class PolicyData<
 /** The node of a policy, with no types, for the code below. */
 export const nodeOf = (policy: Any): PolicyNodes.Node => policy.node as never
 
-export const fromNode = (domain: Domain.Any, node: PolicyNodes.Node): any =>
-	new PolicyData({ domain, node })
+/**
+ * Makes a policy of a domain from its tree. The constructors of the nodes
+ * check the ceiling of `policyNodes`, since a node does not know its domain,
+ * so this checks the limit of the domain.
+ */
+export const fromNode = (domain: Domain.Any, node: PolicyNodes.Node): any => {
+	const most = domain.limits.policyNodes
+	if (node.size > most) {
+		throw Limits.exceeded(
+			"A policy tree",
+			"policyNodes",
+			"nodes",
+			node.size,
+			most,
+		)
+	}
+	return new PolicyData({ domain, node })
+}
 
 /**
  * The error when a rule does not fit its domain. It has one issue for each

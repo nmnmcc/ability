@@ -52,25 +52,28 @@ interface Build {
 	readonly not: (value: Ast) => Ast
 }
 
-const limit = (node: Nodes.Node): Ast => {
-	// A residual grows by its nodes, as the conditions of the rules come
-	// together. Its values come from the policy, which has a limit of them.
-	if (node.size > Limits.residualNodes) {
-		throw Limits.exceeded(
-			"A residual condition",
-			"residualNodes",
-			"nodes",
-			node.size,
-			Limits.residualNodes,
-		)
+/** The steps of a residual for a domain with these limits. */
+const buildFor = (limits: Limits.Limits): Build => {
+	const most = limits.residualNodes
+	const limit = (node: Nodes.Node): Ast => {
+		// A residual grows by its nodes, as the conditions of the rules come
+		// together. Its values come from the policy, which has a limit of them.
+		if (node.size > most) {
+			throw Limits.exceeded(
+				"A residual condition",
+				"residualNodes",
+				"nodes",
+				node.size,
+				most,
+			)
+		}
+		return node
 	}
-	return node
-}
-
-const build: Build = {
-	and: (values) => limit(Algebra.and(values as ReadonlyArray<Nodes.Node>)),
-	or: (values) => limit(Algebra.or(values as ReadonlyArray<Nodes.Node>)),
-	not: (value) => (value as Nodes.Node).pipe(Algebra.not, limit),
+	return {
+		and: (values) => limit(Algebra.and(values as ReadonlyArray<Nodes.Node>)),
+		or: (values) => limit(Algebra.or(values as ReadonlyArray<Nodes.Node>)),
+		not: (value) => (value as Nodes.Node).pipe(Algebra.not, limit),
+	}
 }
 
 /** The two residual conditions of a node, with no types. */
@@ -91,6 +94,10 @@ interface ResidualContext {
 	readonly descriptor: Resource.Descriptor
 	/** The test of `RuleData.fitsOf` for the catalog, for this request. */
 	readonly fits: (pattern: string) => boolean
+	/** The most parts of a field path in the domain. */
+	readonly parts: number
+	/** The steps of a residual, with the limits of the domain. */
+	readonly build: Build
 	/**
 	 * The condition of each rule, with the principal in it. They are made
 	 * first, from a flat list of the rules, so the walk does not go down the
@@ -122,7 +129,7 @@ const firstApplicableResidual = (
 	values: ReadonlyArray<RuleData.Rule>,
 	context: ResidualContext,
 ): Pair => {
-	const { and, not, or } = build
+	const { and, not, or } = context.build
 	// The rules go in runs of one tag, from the last run to the first. The
 	// conditions of a run go into one node at once. With one node for each
 	// rule, each step would flatten the whole condition again.
@@ -155,7 +162,7 @@ const residualNode = (root: PolicyNodes.Node, context: ResidualContext): Pair =>
 	// The walk of the tree takes the steps of a trampoline, so a deep tree
 	// does not fill the stack.
 	Trampoline.run(root.depth, (R) => {
-		const { and, not, or } = build
+		const { and, not, or } = context.build
 		const children = (nodes: ReadonlyArray<PolicyNodes.Node>) =>
 			R.forEach(nodes, (child) => R.suspend(() => go(child)))
 		const go = (node: PolicyNodes.Node): Trampoline.Step<Pair> => {
@@ -211,7 +218,7 @@ const rulesResidual = (
 	node: PolicyNodes.Rules,
 	context: ResidualContext,
 ): Pair => {
-	const { and, not, or } = build
+	const { and, not, or } = context.build
 	switch (node.algorithm) {
 		case "denyOverrides": {
 			const deny = or(
@@ -325,24 +332,36 @@ interface Scoped extends Pair {
 	readonly scope: Ast
 	/** The catalog of the kind, when the request fits the kind. */
 	readonly catalog: Catalog.Catalog | undefined
+	/** The limits of the domain. */
+	readonly limits: Limits.Limits
 }
 
 export const residualsAny = (policy: Any, request: ScopedRequest): Pair =>
 	scopedResiduals(policy, request)
 
 const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
+	const limits = policy.domain.limits
+	const parts = limits.fieldPathParts
 	const descriptor = DomainData.descriptorOf(policy.domain, request.kind)
-	if (descriptor === undefined || !fitsKind(descriptor, request)) {
-		return { scope: never, allow: never, deny: never, catalog: undefined }
+	if (descriptor === undefined || !fitsKind(descriptor, request, parts)) {
+		return {
+			scope: never,
+			allow: never,
+			deny: never,
+			catalog: undefined,
+			limits,
+		}
 	}
 	const input = { principal: request.principal, path: descriptor.path }
 	const scope = scopeOf(request, policy.domain, input)
+	const build = buildFor(limits)
 	const and = build.and
 	const inScope = (pair: Pair): Scoped => ({
 		scope,
 		allow: and([scope, pair.allow]),
 		deny: and([scope, pair.deny]),
 		catalog: descriptor.catalog,
+		limits,
 	})
 	if (scope._tag === "False") {
 		return inScope({ allow: never, deny: never })
@@ -353,7 +372,9 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 		field: request.field,
 		input,
 		descriptor,
-		fits: RuleData.fitsOf(descriptor.catalog),
+		fits: RuleData.fitsOf(descriptor.catalog, parts),
+		parts,
+		build,
 	}
 	const context: ResidualContext = {
 		...target,
@@ -387,7 +408,8 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 					path: descriptor.path,
 				},
 				descriptor,
-				fits: RuleData.fitsOf(descriptor.catalog),
+				fits: RuleData.fitsOf(descriptor.catalog, parts),
+				parts,
 				trace: undefined,
 			},
 			undefined,
@@ -428,7 +450,12 @@ const coverages = Data.taggedEnum<AnyCoverage>()
 
 /** Searches for a value of the kind of a scope that makes a condition true. */
 const search = (scoped: Scoped, ast: Ast): Condition.Satisfiability =>
-	Search.satisfiable(ast as Nodes.Node, Search.kindsIn(scoped.catalog))
+	Search.satisfiable(
+		ast as Nodes.Node,
+		Search.kindsIn(scoped.catalog, scoped.limits.fieldPathParts),
+		scoped.limits.searchSteps,
+		scoped.limits.searchFields,
+	)
 
 /** The values in the scope that the policy does not allow. */
 const refusedOf = (scoped: Scoped): Ast =>

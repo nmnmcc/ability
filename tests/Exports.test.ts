@@ -40,8 +40,10 @@ const expected: Record<string, ReadonlyArray<string>> = {
 	Limits: [
 		"LimitExceeded",
 		"catalogFields",
+		"ceilings",
 		"conditionDepth",
 		"conditionNodes",
+		"defaults",
 		"fieldPathParts",
 		"jsonNodes",
 		"patternParts",

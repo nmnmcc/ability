@@ -40,6 +40,8 @@ interface DecideContext {
 	readonly descriptor: Resource.Descriptor
 	/** The test of `RuleData.fitsOf` for the catalog, for this decision. */
 	readonly fits: (pattern: string) => boolean
+	/** The most parts of a field path in the domain. */
+	readonly parts: number
 	/** The rules that were tested, for {@link explain}. */
 	readonly trace: Ref.Ref<Chunk.Chunk<Step>> | undefined
 }
@@ -273,10 +275,11 @@ export const decideNode = (
 export const fitsKind = (
 	descriptor: Resource.Descriptor,
 	request: { readonly action: string; readonly field?: string | undefined },
+	parts: number,
 ): boolean =>
 	descriptor.actions.includes(request.action) &&
 	(request.field === undefined ||
-		(Catalog.lookup(descriptor.catalog, request.field)?.listed ?? false))
+		(Catalog.lookup(descriptor.catalog, request.field, parts)?.listed ?? false))
 
 const makeContext = (
 	domain: Domain.Any,
@@ -289,7 +292,7 @@ const makeContext = (
 	if (
 		kind === undefined ||
 		descriptor === undefined ||
-		!fitsKind(descriptor, request)
+		!fitsKind(descriptor, request, domain.limits.fieldPathParts)
 	) {
 		return undefined
 	}
@@ -303,7 +306,8 @@ const makeContext = (
 			path: descriptor.path,
 		},
 		descriptor,
-		fits: RuleData.fitsOf(descriptor.catalog),
+		fits: RuleData.fitsOf(descriptor.catalog, domain.limits.fieldPathParts),
+		parts: domain.limits.fieldPathParts,
 		trace,
 	}
 }

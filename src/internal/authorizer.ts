@@ -385,7 +385,10 @@ export const makeLayer = (
 				// A request that does not fit its kind gets a "no" at once. The
 				// decider must not say yes to an action that the kind does not have.
 				const descriptor = DomainData.descriptorOf(domain, kind)
-				if (descriptor === undefined || !Decide.fitsKind(descriptor, target)) {
+				if (
+					descriptor === undefined ||
+					!Decide.fitsKind(descriptor, target, domain.limits.fieldPathParts)
+				) {
 					return yield* forbidden(target, kind, undefined)
 				}
 				const fromPolicy: Decision.Decision =

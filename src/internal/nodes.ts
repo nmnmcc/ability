@@ -84,14 +84,17 @@ const checkPath = (path: unknown): string => {
 	if (typeof path !== "string") {
 		throw new Error("A field path must be a string")
 	}
-	const parts = path.split(".", Limits.fieldPathParts + 1).length
-	if (parts > Limits.fieldPathParts) {
+	// A node does not know its domain, so it checks the ceiling. The binding
+	// to a domain checks the limit of the domain.
+	const most = Limits.ceilings.fieldPathParts
+	const parts = path.split(".", most + 1).length
+	if (parts > most) {
 		throw Limits.exceeded(
 			"A field path",
 			"fieldPathParts",
 			"parts",
 			parts,
-			Limits.fieldPathParts,
+			most,
 		)
 	}
 	return path
@@ -141,13 +144,15 @@ const valuesFacts = (values: ReadonlyArray<Operand>): Facts =>
 	checkWeight({ ...leaf, weight: 1 + values.length })
 
 const checkWeight = (facts: Facts): Facts => {
-	if (facts.weight > Limits.conditionNodes) {
+	// A node does not know its domain, so it checks the ceiling. The binding
+	// to a domain, and a decoder, check their limits.
+	if (facts.weight > Limits.ceilings.conditionNodes) {
 		throw Limits.exceeded(
 			"A condition",
 			"conditionNodes",
 			"nodes and values",
 			facts.weight,
-			Limits.conditionNodes,
+			Limits.ceilings.conditionNodes,
 		)
 	}
 	return facts
@@ -160,15 +165,6 @@ const factsOf = (children: ReadonlyArray<Node>): Facts => {
 	checkWeight({ ...leaf, weight })
 	const depth =
 		1 + Arr.reduce(children, 0, (top, child) => Math.max(top, child.depth))
-	if (depth > Limits.conditionDepth) {
-		throw Limits.exceeded(
-			"A condition",
-			"conditionDepth",
-			"levels",
-			depth,
-			Limits.conditionDepth,
-		)
-	}
 	return {
 		size,
 		weight,

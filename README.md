@@ -250,9 +250,11 @@ So a predicate for a Document can not go into a rule for a Comment. Make
 conditions with the builder: a node made by hand, or a spread of a node, is not
 a condition, in the types or when the code runs.
 
-A condition may have at most 100000 nodes and 500 levels, with a shared part
-counted for each place. The builder throws an error for a larger condition. So
-no condition can make a check slow or fill the stack.
+A condition of a domain may have at most `conditionNodes` nodes, 1000000 by
+default, with each value of an `In` test, and a shared part counted for each
+place. A larger condition is a `PolicyError`, so no condition can make a check
+slow. A condition may have any number of levels: no walk fills the stack. See
+[Limits](#limits).
 
 ## Policies
 
@@ -283,12 +285,13 @@ Put policies together:
 | `Policy.firstOf([a, b])`      | The first policy that allows or denies.                          |
 | `Policy.ceiling(policy, cap)` | A deny from `cap` always wins. An allow from `cap` does nothing. |
 
-A policy tree may have at most 256 levels and 100000 nodes, with its rules and
-the nodes of their conditions, and a shared part counted for each place. A
-combinator throws an error for a larger tree, and the policy Schema does not
-decode one. The decoder reads at most 1000000 objects and array items, so no
-input can fill the stack or take a very long time. A field path may have at most
-5 parts.
+A policy tree of a domain may have at most `policyNodes` nodes, 1000000 by
+default, with its rules and the nodes and values of their conditions, and a
+shared part counted for each place. A combinator throws an error for a larger
+tree, and the policy Schema does not decode one. The decoder reads at most
+`jsonNodes` objects and array items, so no input can take a very long time. A
+field path may have at most `fieldPathParts` parts, 1000 by default. A tree may
+have any number of levels. See [Limits](#limits).
 
 A shared part of a tree is decided again for each place, so its predicates run
 each time, and `Policy.explain` lists its rules each time.
@@ -614,24 +617,39 @@ status codes: 403, 503, and 409.
 
 ## Limits
 
-Each limit keeps a walk, a decoder or a search small, so no input can fill the
-stack or take a very long time. An input past a limit is an error, as in "A
-condition has 100001 nodes. The most is 100000.". In an `Authorizer`, such an
-error is never a "yes". The `Limits` module gives each value.
+Each limit keeps a decoder, a walk or a search small, so no input can take a
+very long time or very much memory. An input past a limit is an error, as in "A
+condition has 1000001 nodes and values. The most is 1000000.". In an
+`Authorizer`, such an error is never a "yes". The `Limits` module gives each
+default, and `Limits.ceilings` gives the most that a domain may set.
 
-| Limit            | Value   | What it limits                                                                                         |
-| ---------------- | ------- | ------------------------------------------------------------------------------------------------------ |
-| `fieldPathParts` | 5       | The parts of a field path, as in `settings.model`.                                                     |
-| `patternParts`   | 16      | The parts of a field pattern.                                                                          |
-| `conditionNodes` | 100000  | The nodes of a condition, a shared part for each place.                                                |
-| `conditionDepth` | 500     | The levels of a condition.                                                                             |
-| `residualNodes`  | 10000   | The nodes of a residual condition.                                                                     |
-| `policyDepth`    | 256     | The levels of a policy tree.                                                                           |
-| `policyNodes`    | 100000  | The nodes of a policy tree, with its rules.                                                            |
-| `jsonNodes`      | 1000000 | The objects and items that a decoder reads.                                                            |
-| `catalogFields`  | 10000   | The fields of the Schema of a resource.                                                                |
-| `searchSteps`    | 1000000 | The steps of one search, as in `Policy.coverage`, and of the checks of the field patterns of a policy. |
-| `searchFields`   | 256     | The fields that one search may test.                                                                   |
+A walk does not fill the stack at any depth: it runs on the stack for an input
+with few levels, and in the run loop of an Effect for a deeper one. The levels
+of an input are at most its nodes, so there is no limit of levels. Note that
+`JSON.stringify` of the JSON form of a very deep policy, with many thousands of
+levels, may fail: the engine writes JSON text with a walk of its own.
+
+A domain may set its own limits:
+
+```ts
+const Deep = Domain.make({
+	principal: User,
+	resources: [Post],
+	limits: { fieldPathParts: 2000, searchSteps: 5_000_000 },
+})
+```
+
+| Limit            | Default  | Ceiling    | What it limits                                                                                         |
+| ---------------- | -------- | ---------- | ------------------------------------------------------------------------------------------------------ |
+| `fieldPathParts` | 1000     | 10000      | The parts of a field path, as in `settings.model`.                                                     |
+| `patternParts`   | 1000     | 10000      | The parts of a field pattern.                                                                          |
+| `conditionNodes` | 1000000  | 100000000  | The nodes of a condition, with each value of an `In` test, and a shared part for each place.           |
+| `residualNodes`  | 100000   | 100000000  | The nodes of a residual condition.                                                                     |
+| `policyNodes`    | 1000000  | 100000000  | The nodes of a policy tree, with its rules and the nodes and values of their conditions.               |
+| `jsonNodes`      | 10000000 | 1000000000 | The objects and items that a decoder reads.                                                            |
+| `catalogFields`  | 100000   | 10000000   | The fields in the list of the fields of the Schema of a resource or of the principal.                  |
+| `searchSteps`    | 1000000  | 1000000000 | The steps of one search, as in `Policy.coverage`, and of the checks of the field patterns of a policy. |
+| `searchFields`   | 1000     | 100000     | The fields that one search may test.                                                                   |
 
 ## Examples
 

@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Equal, Exit, Schema } from "effect"
+import { Array as Arr, Effect, Equal, Exit, Schema } from "effect"
 import { Condition, Resource } from "../src/index.ts"
 import { alice, aliceBot, Bot, Caller, sharedBot } from "./fixtures.ts"
 
@@ -241,7 +241,7 @@ describe("Condition", () => {
 		)
 	})
 
-	it("stops a shared condition that is too large when it is made", () => {
+	it("stops a shared condition past the ceiling when it is made", () => {
 		const calls = { true: 0 }
 		const visit = Condition.fold<void>({
 			true: () => {
@@ -263,12 +263,27 @@ describe("Condition", () => {
 		// A shared child counts for each place: 15 levels have 65535 nodes.
 		Effect.runSync(visit(doubled(15)))
 		assert.strictEqual(calls.true, 2 ** 15)
+		// A node does not know its domain, so it checks the ceiling: 26 levels
+		// have 134217727 nodes.
 		const start = Date.now()
+		assert.doesNotThrow(() => doubled(25))
 		assert.throws(
-			() => doubled(16),
-			/131071 nodes and values. The most is 100000/,
+			() => doubled(26),
+			/134217727 nodes and values. The most is 100000000/,
 		)
 		assert.isBelow(Date.now() - start, 100)
+		// A decode checks the limit of the decode, with the default here.
+		const shared = Arr.reduce(
+			Arr.range(1, 20),
+			{ _tag: "True" } as unknown,
+			(inner) => ({ _tag: "And", conditions: [inner, inner] }),
+		)
+		const exit = Schema.decodeUnknownExit(Condition.schema)(shared)
+		assert.isTrue(Exit.isFailure(exit))
+		assert.include(
+			String(Exit.isFailure(exit) ? exit.cause : ""),
+			"The most is 1000000",
+		)
 	})
 
 	it("keeps a number that JSON can not hold out of the JSON text", () => {
@@ -299,22 +314,33 @@ describe("Condition", () => {
 		)
 	})
 
-	it("does not take a field path with more than 5 parts", () => {
-		const field = `${"x.".repeat(7000)}x`
+	it("does not take a field path with more parts than the limit", () => {
 		const exit = Schema.decodeExit(Condition.schema)({
 			_tag: "Compare",
 			op: "eq",
-			field,
+			field: `${"x.".repeat(1000)}x`,
 			value: { _tag: "Literal", value: "yes" },
 		})
 		assert.isTrue(Exit.isFailure(exit))
 		assert.include(
 			String(Exit.isFailure(exit) ? exit.cause : ""),
-			"The most is 5",
+			"A field path has more than 1000 parts. The most is 1000.",
 		)
+		assert.isTrue(
+			Exit.isSuccess(
+				Schema.decodeExit(Condition.schema)({
+					_tag: "Exists",
+					field: `${"x.".repeat(999)}x`,
+				}),
+			),
+		)
+		// A node does not know its domain, so it checks the ceiling.
 		assert.throws(
-			() => Condition.builder<any, unknown, unknown>().exists("a.b.c.d.e.f"),
-			/A field path has 6 parts/,
+			() =>
+				Condition.builder<any, unknown, unknown>().exists(
+					`${"x.".repeat(10_000)}x`,
+				),
+			/A field path has 10001 parts. The most is 10000./,
 		)
 	})
 
@@ -329,21 +355,29 @@ describe("Condition", () => {
 		assert.isTrue(test(either))
 	})
 
-	it("does not fill the stack with deep JSON", () => {
-		const deep = Array.from({ length: 5000 }).reduce<unknown>(
+	it("decodes and walks deep JSON without filling the stack", () => {
+		const deep = Array.from({ length: 100_000 }).reduce<unknown>(
 			(condition) => ({ _tag: "Not", condition }),
-			{ _tag: "True" },
+			{ _tag: "Exists", field: "a" },
 		)
 		const exit = Schema.decodeUnknownExit(Condition.schema)(deep)
-		assert.isTrue(Exit.isFailure(exit))
-		assert.include(String(Exit.isFailure(exit) ? exit.cause : ""), "levels")
-		const shallow = Array.from({ length: 400 }).reduce<unknown>(
-			(condition) => ({ _tag: "Not", condition }),
-			{ _tag: "True" },
+		assert.isTrue(Exit.isSuccess(exit))
+		if (Exit.isFailure(exit)) {
+			return
+		}
+		const condition = exit.value
+		// An even number of `Not` nodes gives the test back.
+		assert.isTrue(Condition.evaluateSync(condition, { value: { a: 1 } }))
+		assert.isFalse(Condition.evaluateSync(condition, { value: {} }))
+		assert.deepStrictEqual(Condition.fields(condition), ["a"])
+		// The JSON form decodes again. `JSON.stringify` of it is not in the
+		// test: the engine writes JSON text with a walk that fills the stack
+		// at this depth.
+		const again = condition.pipe(
+			Schema.encodeSync(Condition.schema),
+			Schema.decodeSync(Condition.schema),
 		)
-		assert.isTrue(
-			Exit.isSuccess(Schema.decodeUnknownExit(Condition.schema)(shallow)),
-		)
+		assert.isTrue(Condition.evaluateSync(again, { value: { a: 1 } }))
 	})
 
 	describe("satisfiable", () => {
@@ -608,18 +642,21 @@ describe("Condition node properties", () => {
 	)
 
 	it.prop(
-		"decodes a chain of Not nodes only up to the most levels",
+		"decodes a chain of Not nodes of any depth, and gives its meaning",
 		{
-			levels: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1500 })),
+			levels: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 5000 })),
 		},
 		({ levels }) => {
 			const chain = Array.from({ length: levels - 1 }).reduce<unknown>(
 				(condition) => ({ _tag: "Not", condition }),
 				{ _tag: "True" },
 			)
+			const exit = Schema.decodeUnknownExit(Condition.schema)(chain)
+			// An even number of `Not` nodes over `True` is true.
 			return (
-				Exit.isSuccess(Schema.decodeUnknownExit(Condition.schema)(chain)) ===
-				levels <= 500
+				Exit.isSuccess(exit) &&
+				Condition.evaluateSync(exit.value, { value: {} }) ===
+					((levels - 1) % 2 === 0)
 			)
 		},
 	)

@@ -1,6 +1,8 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Array as Arr, Option, Schema, type SchemaAST } from "effect"
+import { Domain, Resource } from "../src/index.ts"
 import * as Catalog from "../src/internal/catalog.ts"
+import { Caller } from "./fixtures.ts"
 import { readPart, readPath } from "../src/internal/read.ts"
 
 const catalogOf = (schema: Schema.Top) => Catalog.catalogOf(schema.ast)
@@ -170,17 +172,32 @@ describe("Catalog", () => {
 		assert.isTrue(fieldOf(schema, "dated").plain)
 	})
 
-	it("stops a recursive Schema at the most parts of a path", () => {
+	it("finds a field of a recursive Schema at any part, up to the limit", () => {
 		const schema = Schema.Struct({ root: Link })
-		assert.isDefined(Catalog.lookup(catalogOf(schema), "root.next.next.value"))
-		assert.isDefined(
-			Catalog.lookup(catalogOf(schema), "root.next.next.next.value"),
-		)
-		assert.isUndefined(
-			Catalog.lookup(catalogOf(schema), "root.next.next.next.next.value"),
-		)
+		const catalog = catalogOf(schema)
+		// `next` and `next.next` lead to one place.
+		assert.isTrue(catalog.branches.length < 10)
+		const deep = (links: number) =>
+			["root", ...Arr.makeBy(links, () => "next"), "value"].join(".")
+		assert.isDefined(Catalog.lookup(catalog, deep(998)))
+		assert.isUndefined(Catalog.lookup(catalog, deep(999)))
+		assert.isDefined(Catalog.lookup(catalog, deep(1998), 2000))
+		assert.isUndefined(Catalog.lookup(catalog, deep(3), 4))
 		// A struct at the last part is one field.
-		assert.isTrue(fieldOf(schema, "root.next.next.next.next").listed)
+		assert.isTrue(Catalog.lookup(catalog, "root", 1)!.listed)
+		assert.isFalse(Catalog.lookup(catalog, "root")!.listed)
+		// The list goes into each recursive place one time on each path. The
+		// place of `root.next.next` may be missing too, so it is not the place
+		// of `root.next`.
+		assert.deepStrictEqual(texts(schema), [
+			"root",
+			"root.value",
+			"root.next",
+			"root.next.value",
+			"root.next.next",
+			"root.next.next.value",
+			"root.next.next.next",
+		])
 	})
 
 	it("keeps a value with parts that it does not know as one field", () => {
@@ -208,16 +225,28 @@ describe("Catalog", () => {
 		)
 	})
 
-	it("stops a Schema with too many fields", () => {
-		const wide = Schema.Struct(
-			Object.fromEntries(
-				Array.from({ length: 10_001 }, (_, index) => [
+	it("stops a Schema with more fields than its domain takes", () => {
+		const wide = Resource.make("Wide", {
+			actions: ["read"],
+			fields: Object.fromEntries(
+				Array.from({ length: 1001 }, (_, index) => [
 					`f${String(index)}`,
 					Schema.String,
 				]),
 			),
+		})
+		assert.doesNotThrow(() =>
+			Domain.make({ principal: Caller, resources: [wide] }),
 		)
-		assert.throws(() => catalogOf(wide), /The most is 10000/)
+		assert.throws(
+			() =>
+				Domain.make({
+					principal: Caller,
+					resources: [wide],
+					limits: { catalogFields: 1000 },
+				}),
+			/The Schema of the resource "Wide" has 1001 fields. The most is 1000./,
+		)
 	})
 })
 

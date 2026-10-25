@@ -536,21 +536,30 @@ describe("Policy", () => {
 			)
 		})
 
-		it("does not fill the stack with deep JSON", () => {
+		it("decodes deep JSON without filling the stack", () => {
 			const one = Schema.encodeSync(PolicySchema)(
 				Policy.define(App)(function* (_) {
 					yield* _.allow("read", Bot)
 				}),
 			) as unknown
-			const deep = Arr.reduce(Arr.range(1, 5000), one, (inner) => ({
+			const deep = Arr.reduce(Arr.range(1, 50_000), one, (inner) => ({
 				_tag: "All",
 				policies: [inner],
 			}))
 			const exit = Schema.decodeUnknownExit(PolicySchema)(deep)
-			assert.isTrue(Exit.isFailure(exit))
-			assert.include(String(Exit.isFailure(exit) ? exit.cause : ""), "levels")
+			assert.isTrue(Exit.isSuccess(exit))
+			if (Exit.isSuccess(exit)) {
+				assert.strictEqual(
+					Policy.decideSync(exit.value, {
+						principal: alice,
+						action: "read",
+						resource: aliceBot,
+					})._tag,
+					"Allow",
+				)
+			}
 			const when = Arr.reduce(
-				Arr.range(1, 400),
+				Arr.range(1, 50_000),
 				{ _tag: "True" } as unknown,
 				(inner) => ({ _tag: "Not", condition: inner }),
 			)
@@ -1535,8 +1544,13 @@ describe("Policy", () => {
 		// walk that went into each place again for each path would not end in
 		// this time, but a busy machine may need more than one second.
 		assert.isBelow(Date.now() - start, 3000)
-		// A shared child counts for each place, so one more level is too many.
-		assert.throws(() => Policy.all([all, all]), /The most is 100000/)
+		// A shared child counts for each place. With 3 * 2 ** 19 - 1 nodes, four
+		// more levels are too many.
+		assert.throws(
+			() =>
+				Arr.reduce(Arr.range(1, 4), all, (inner) => Policy.all([inner, inner])),
+			/1572863 nodes. The most is 1000000/,
+		)
 	})
 
 	it("makes a residual of a shared condition in a short time", () => {
@@ -1949,8 +1963,13 @@ describe("Policy", () => {
 	})
 
 	it("counts the values of a shared In test in the limit of a policy", () => {
+		const Small = Domain.make({
+			principal: Caller,
+			resources: [Bot],
+			limits: { policyNodes: 100_000 },
+		})
 		const values = Arr.makeBy(1000, (index) => `b${String(index)}`)
-		const wide = Policy.define(App)(function* (_) {
+		const wide = Policy.define(Small)(function* (_) {
 			yield* _.allow("read", Bot, { when: ($) => $.in("id", values) })
 		})
 		// Each copy counts its 1,000 values, so 200 copies are past the limit.
@@ -2463,6 +2482,7 @@ describe("Policy", () => {
 			principal: Caller,
 			resources: [Bot],
 			meta: Schema.Array(Schema.Finite),
+			limits: { jsonNodes: 1_000_000 },
 		})
 		const exit = Schema.decodeExit(Policy.schema(Metas))({
 			_tag: "Rules",
@@ -3206,7 +3226,7 @@ describe("Policy", () => {
 						fields: [`${"a*b.".repeat(8000)}*`],
 					}),
 				]),
-			/more than 16 parts/,
+			/more than 1000 parts/,
 		)
 		assert.isBelow(Date.now() - start, 1000)
 	})
@@ -3796,8 +3816,13 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 100)
 	})
 
-	it("does not take a condition from JSON with too many nodes", () => {
-		const exit = Schema.decodeUnknownExit(PolicySchemaOfApp)({
+	it("does not take a condition from JSON with more nodes than the domain takes", () => {
+		const Small = Domain.make({
+			principal: Caller,
+			resources: [Bot],
+			limits: { conditionNodes: 100_000 },
+		})
+		const exit = Schema.decodeUnknownExit(Policy.schema(Small))({
 			_tag: "Rules",
 			algorithm: "denyOverrides",
 			rules: [
@@ -3817,7 +3842,7 @@ describe("Policy", () => {
 		assert.isTrue(Exit.isFailure(exit))
 		assert.include(
 			String(Exit.isFailure(exit) ? exit.cause : ""),
-			"The most is 100000",
+			"150001 nodes and values. The most is 100000",
 		)
 	})
 
@@ -4114,7 +4139,7 @@ describe("Policy", () => {
 		)
 	})
 
-	it("does not make a residual that would fill the stack", () => {
+	it("makes a deep residual without filling the stack", () => {
 		const Rules = Arr.map(Arr.range(0, 1999), (index) =>
 			Policy.rule({
 				_tag: index % 2 === 0 ? "Allow" : "Deny",
@@ -4128,43 +4153,46 @@ describe("Policy", () => {
 		)
 		const policy = rulesOf(App, Rules, { algorithm: "firstApplicable" })
 		const request = { principal: alice, action: "read", kind: "Bot" } as const
-		assert.throws(
-			() => Policy.residual(policy, request),
-			/levels. The most is 500/,
-		)
-		const short = rulesOf(App, Arr.take(Rules, 400), {
-			algorithm: "firstApplicable",
+		const residual = Policy.residual(policy, request)
+		// The residual agrees with the decision.
+		Arr.forEach(["0", "1", "1998", "1999", "x"], (id) => {
+			const resource = Bot.make({ ...aliceBot, id })
+			assert.strictEqual(
+				Condition.evaluateSync(residual, { value: resource }),
+				Policy.decideSync(policy, {
+					principal: alice,
+					action: "read",
+					resource,
+				})._tag === "Allow",
+			)
 		})
-		assert.strictEqual(Policy.coverage(short, request)._tag, "Some")
+		assert.strictEqual(Policy.coverage(policy, request)._tag, "Some")
 	})
 
-	it("does not make a policy tree that would fill the stack", () => {
+	it("makes and walks a deep policy tree without filling the stack", () => {
 		const one = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot)
 		})
-		const deep = (levels: number) =>
-			Arr.reduce(
-				Arr.range(1, levels),
-				one as Policy.Policy<typeof App>,
-				(inner) => Policy.all([inner]),
-			)
-		assert.strictEqual(
-			Policy.decideSync(deep(255), {
-				principal: alice,
-				action: "read",
-				resource: aliceBot,
-			})._tag,
-			"Allow",
+		const deep = Arr.reduce(
+			Arr.range(1, 20_000),
+			one as Policy.Policy<typeof App>,
+			(inner) => Policy.all([inner]),
 		)
-		assert.throws(() => deep(2500), /257 levels. The most is 256/)
-		const json = Arr.reduce(
-			Arr.range(1, 300),
-			Schema.encodeSync(Policy.schema(App))(one) as unknown,
-			(inner) => ({ _tag: "All", policies: [inner] }),
+		const request = {
+			principal: alice,
+			action: "read",
+			resource: aliceBot,
+		} as const
+		assert.strictEqual(Policy.decideSync(deep, request)._tag, "Allow")
+		const steps = Effect.runSync(Policy.explain(deep, request)).steps
+		assert.strictEqual(steps.length, 1)
+		assert.strictEqual(steps[0]!.path.length, 20_001)
+		assert.deepStrictEqual(
+			Policy.residual(deep, { principal: alice, action: "read", kind: "Bot" }),
+			Condition.always,
 		)
-		assert.isTrue(
-			Exit.isFailure(Schema.decodeUnknownExit(Policy.schema(App))(json)),
-		)
+		const json = Schema.encodeSync(Policy.schema(App))(deep)
+		assert.isTrue(Exit.isSuccess(Schema.decodeExit(Policy.schema(App))(json)))
 	})
 
 	it("does not take a getter of a class inside a codec", () => {

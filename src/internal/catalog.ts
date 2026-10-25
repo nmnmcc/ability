@@ -565,13 +565,13 @@ const branchesOf = (root: Place): ReadonlyArray<Branch> => {
 		if (known !== undefined) {
 			return known
 		}
-		if (queue.length >= Limits.catalogFields) {
+		if (queue.length >= Limits.ceilings.catalogFields) {
 			throw Limits.exceeded(
 				"A Schema",
 				"catalogFields",
 				"places",
 				queue.length + 1,
-				Limits.catalogFields,
+				Limits.ceilings.catalogFields,
 			)
 		}
 		placeIds.set(key, queue.length)
@@ -672,13 +672,13 @@ const listOf = (
 				visit.path.length === 0
 					? []
 					: [fieldAt(visit.branch, visit.path, parts)]
-			if (field.length > 0 && rest.length + 1 > Limits.catalogFields) {
+			if (field.length > 0 && rest.length + 1 > Limits.ceilings.catalogFields) {
 				throw Limits.exceeded(
 					"A Schema",
 					"catalogFields",
 					"fields",
 					rest.length + 1,
-					Limits.catalogFields,
+					Limits.ceilings.catalogFields,
 				)
 			}
 			return Option.some([field, rest] as const)
@@ -687,7 +687,20 @@ const listOf = (
 }
 
 /**
- * Makes the catalog of a Schema. It throws when a field name has a dot or is
+ * The fields that a list shows for paths of at most `parts` parts, as for a
+ * domain with that limit. See `Catalog.fields`.
+ */
+export const fieldsOf = (
+	catalog: Catalog,
+	parts: number,
+): ReadonlyArray<Field> =>
+	parts === Limits.fieldPathParts
+		? catalog.fields
+		: listOf(catalog.branches, parts)
+
+/**
+ * Makes the catalog of a Schema, with the list of its fields for the default
+ * limit of the parts of a path. It throws when a field name has a dot or is
  * empty, and when the Schema has more places or fields than the ceiling of
  * `catalogFields`. A domain checks the size of the list with its own limit.
  */

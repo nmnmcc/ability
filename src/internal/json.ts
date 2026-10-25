@@ -29,9 +29,13 @@ export class Problem extends Data.TaggedError("Problem")<{
 	readonly issue?: SchemaIssue.Issue | undefined
 }> {}
 
-/** The count of the objects and items that one decode has read. It belongs to one decode. */
+/**
+ * The count of the objects and items that one decode has read, with the
+ * limits of the decode. It belongs to one decode.
+ */
 export interface Budget {
 	used: number
+	readonly limits: Limits.Limits
 }
 
 export const problem = (path: ReadonlyArray<PropertyKey>, message: string) =>
@@ -52,10 +56,11 @@ export const spend = (
 	at: Place.Place | undefined,
 ): void => {
 	budget.used += count
-	if (budget.used > Limits.jsonNodes) {
+	const most = budget.limits.jsonNodes
+	if (budget.used > most) {
 		throw problemAt(
 			at,
-			`The input has more than ${String(Limits.jsonNodes)} objects and items. The most is ${String(Limits.jsonNodes)}.`,
+			`The input has more than ${String(most)} objects and items. The most is ${String(most)}.`,
 		)
 	}
 }
@@ -110,12 +115,35 @@ export const readList = (
 	)
 }
 
+/**
+ * Reads a field path, and stops one with more parts than the limit of the
+ * decode. A node checks the ceiling only, since it does not know its domain.
+ */
+const readPath = (
+	input: unknown,
+	name: string,
+	at: Place.Place | undefined,
+	budget: Budget,
+): string => {
+	const path = readString(input, name, at)
+	const most = budget.limits.fieldPathParts
+	const parts = path.split(".", most + 1).length
+	if (parts > most) {
+		throw problemAt(
+			Place.at(at, name),
+			`A field path has more than ${String(most)} parts. The most is ${String(most)}.`,
+		)
+	}
+	return path
+}
+
 const isJsonScalar = (value: unknown): value is Nodes.Scalar =>
 	Nodes.isScalar(value) && (typeof value !== "number" || Number.isFinite(value))
 
 const decodeOperand = (
 	input: unknown,
 	at: Place.Place | undefined,
+	budget: Budget,
 ): Nodes.Operand => {
 	const tag = read(input, "_tag", at)
 	if (tag === "Literal") {
@@ -138,7 +166,7 @@ const decodeOperand = (
 		return Nodes.literal(value)
 	}
 	if (tag === "Principal") {
-		return Nodes.principalRef(readString(input, "path", at))
+		return Nodes.principalRef(readPath(input, "path", at, budget))
 	}
 	throw problemAt(
 		Place.at(at, "_tag"),
@@ -153,7 +181,7 @@ const decodeOperands = (
 	budget: Budget,
 ): ReadonlyArray<Nodes.Operand> =>
 	Arr.map(readList(input, name, at, budget), (operand, index) =>
-		decodeOperand(operand, Place.at(at, name, index)),
+		decodeOperand(operand, Place.at(at, name, index), budget),
 	)
 
 /** A part of the input to decode, with its place. */
@@ -170,27 +198,32 @@ interface Part {
 const decoder = (budget: Budget): ((part: Part) => Node) =>
 	Trampoline.adaptive<Part, Node>((R, child) => (part, depth) => {
 		const { input, at } = part
-		if (depth > Limits.conditionDepth) {
-			throw problemAt(
-				at,
-				`A condition has more than ${String(Limits.conditionDepth)} levels. The most is ${String(Limits.conditionDepth)}.`,
-			)
-		}
 		if (typeof input !== "object" || input === null) {
 			throw problemAt(at, "A condition node must be an object")
 		}
 		spend(budget, 1, at)
 		// A node past a limit, such as a field path with too many parts, is a
-		// problem at its place.
+		// problem at its place. The constructor checks the ceilings, and the
+		// decoder checks the limits of the decode.
 		const make = (build: () => Node): Node => {
-			try {
-				return build()
-			} catch (error) {
-				if (error instanceof Limits.LimitExceeded) {
-					throw problemAt(at, error.message)
+			const node = (() => {
+				try {
+					return build()
+				} catch (error) {
+					if (error instanceof Limits.LimitExceeded) {
+						throw problemAt(at, error.message)
+					}
+					throw error
 				}
-				throw error
+			})()
+			const most = budget.limits.conditionNodes
+			if (node.weight > most) {
+				throw problemAt(
+					at,
+					`A condition has ${String(node.weight)} nodes and values. The most is ${String(most)}.`,
+				)
 			}
+			return node
 		}
 		const children = (name: string) =>
 			R.forEach(readList(input, name, at, budget), (item, index) =>
@@ -215,10 +248,11 @@ const decoder = (budget: Budget): ((part: Part) => Node) =>
 						() =>
 							new Nodes.Compare({
 								op,
-								field: readString(input, "field", at),
+								field: readPath(input, "field", at, budget),
 								value: decodeOperand(
 									read(input, "value", at),
 									Place.at(at, "value"),
+									budget,
 								),
 							}),
 					),
@@ -229,7 +263,7 @@ const decoder = (budget: Budget): ((part: Part) => Node) =>
 					make(
 						() =>
 							new Nodes.In({
-								field: readString(input, "field", at),
+								field: readPath(input, "field", at, budget),
 								values: decodeOperands(input, "values", at, budget),
 							}),
 					),
@@ -237,7 +271,8 @@ const decoder = (budget: Budget): ((part: Part) => Node) =>
 			case "Exists":
 				return R.succeed(
 					make(
-						() => new Nodes.Exists({ field: readString(input, "field", at) }),
+						() =>
+							new Nodes.Exists({ field: readPath(input, "field", at, budget) }),
 					),
 				)
 			case "Under":
@@ -283,10 +318,12 @@ export const decodeAt = (
 	budget: Budget,
 ): Node => decoder(budget)({ input, at })
 
-/** Decodes the JSON form of a condition. */
+/** Decodes the JSON form of a condition, with the default limits. */
 export const decode = (input: unknown): Result.Result<Node, Problem> => {
 	try {
-		return Result.succeed(decoder({ used: 0 })({ input, at: undefined }))
+		return Result.succeed(
+			decoder({ used: 0, limits: Limits.defaults })({ input, at: undefined }),
+		)
 	} catch (error) {
 		if (error instanceof Problem) {
 			return Result.fail(error)

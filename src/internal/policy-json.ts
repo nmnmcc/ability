@@ -200,12 +200,6 @@ const spendValue = (budget: Json.Budget): ((part: Part) => void) =>
 		if (typeof value !== "object" || value === null) {
 			return R.succeed(undefined)
 		}
-		if (depth > Limits.conditionDepth) {
-			throw Json.problemAt(
-				at,
-				`The value has more than ${String(Limits.conditionDepth)} levels. The most is ${String(Limits.conditionDepth)}.`,
-			)
-		}
 		// The length of an array counts before its items are read, so a sparse
 		// array with a very large length stops at once.
 		const list = Array.isArray(value)
@@ -373,12 +367,6 @@ const readTree = (
 ): ((part: TreePart) => Plan) =>
 	Trampoline.adaptive<TreePart, Plan>((R, child) => (part, depth) => {
 		const { input, at } = part
-		if (depth > Limits.policyDepth) {
-			throw Json.problemAt(
-				at,
-				`A policy tree has more than ${String(Limits.policyDepth)} levels. The most is ${String(Limits.policyDepth)}.`,
-			)
-		}
 		if (typeof input !== "object" || input === null) {
 			throw Json.problemAt(at, "A node of a policy must be an object")
 		}
@@ -404,7 +392,7 @@ const readTree = (
 						}) - 1,
 				)
 				return R.succeed(
-					sized({
+					sized(budget, {
 						_tag: "Rules",
 						place: at,
 						size: 1 + found.length,
@@ -422,7 +410,7 @@ const readTree = (
 						(value, index) => below(value, "policies", index),
 					),
 					(policies) =>
-						sized({
+						sized(budget, {
 							_tag: tag,
 							place: at,
 							size: Arr.reduce(policies, 1, (total, plan) => total + plan.size),
@@ -434,7 +422,7 @@ const readTree = (
 				const policy = Json.read(input, "policy", at)
 				return R.flatMap(below(cap, "cap"), (capPlan) =>
 					R.map(below(policy, "policy"), (policyPlan) =>
-						sized({
+						sized(budget, {
 							_tag: "Ceiling",
 							place: at,
 							size: 1 + capPlan.size + policyPlan.size,
@@ -450,11 +438,12 @@ const readTree = (
 	})
 
 /** Stops a plan past `policyNodes`, with the message of the nodes. */
-const sized = (plan: Plan): Plan => {
-	if (plan.size > Limits.policyNodes) {
+const sized = (budget: Json.Budget, plan: Plan): Plan => {
+	const most = budget.limits.policyNodes
+	if (plan.size > most) {
 		throw Json.problemAt(
 			plan.place,
-			`A policy tree has ${String(plan.size)} nodes. The most is ${String(Limits.policyNodes)}.`,
+			`A policy tree has ${String(plan.size)} nodes. The most is ${String(most)}.`,
 		)
 	}
 	return plan
@@ -464,18 +453,33 @@ const sized = (plan: Plan): Plan => {
  * Makes the nodes of a plan, with the decoded rules. It is a walk of the
  * trampoline, so a deep plan does not fill the stack.
  */
-const build = (rules: ReadonlyArray<Rule.Rule>): ((plan: Plan) => Node) =>
+const build = (
+	budget: Json.Budget,
+	rules: ReadonlyArray<Rule.Rule>,
+): ((plan: Plan) => Node) =>
 	Trampoline.adaptive<Plan, Node>((R, child) => (plan, depth) => {
-		// A node past a limit is a problem at its place.
-		const make = (node: () => Node): Node => {
-			try {
-				return node()
-			} catch (error) {
-				if (error instanceof Limits.LimitExceeded) {
-					throw Json.problemAt(plan.place, error.message)
+		// A node past a limit is a problem at its place. The constructor checks
+		// the ceilings, and the decoder checks the limits of the domain, with
+		// the nodes and values of the conditions.
+		const make = (made: () => Node): Node => {
+			const node = (() => {
+				try {
+					return made()
+				} catch (error) {
+					if (error instanceof Limits.LimitExceeded) {
+						throw Json.problemAt(plan.place, error.message)
+					}
+					throw error
 				}
-				throw error
+			})()
+			const most = budget.limits.policyNodes
+			if (node.size > most) {
+				throw Json.problemAt(
+					plan.place,
+					`A policy tree has ${String(node.size)} nodes. The most is ${String(most)}.`,
+				)
 			}
+			return node
 		}
 		switch (plan._tag) {
 			case "Rules":
@@ -528,7 +532,7 @@ export const decode = (
 	domain: Domain.Any,
 ): Effect.Effect<Node, Json.Problem> =>
 	Effect.gen(function* () {
-		const budget: Json.Budget = { used: 0 }
+		const budget: Json.Budget = { used: 0, limits: domain.limits }
 		// The rules of this decode. The list belongs to this decode.
 		const inputs: Array<RuleInput> = []
 		const plan = yield* attempt(() =>
@@ -542,5 +546,5 @@ export const decode = (
 				decodeRule(rule, metas[index], budget, domain),
 			),
 		)
-		return yield* attempt(() => build(rules)(plan))
+		return yield* attempt(() => build(budget, rules)(plan))
 	})

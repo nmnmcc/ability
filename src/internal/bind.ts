@@ -55,13 +55,16 @@ interface Memo {
 	readonly issues: { count: number; noted: boolean }
 	/** The steps of the checks of patterns so far. It belongs to one binding. */
 	readonly work: { steps: number; noted: boolean }
+	/** The limits of the domain. */
+	readonly limits: Limits.Limits
 }
 
-const makeMemo = (): Memo => ({
+const makeMemo = (limits: Limits.Limits): Memo => ({
 	suggestions: new Map(),
 	fits: new Map(),
 	issues: { count: 0, noted: false },
 	work: { steps: 0, noted: false },
+	limits,
 })
 
 /**
@@ -165,13 +168,23 @@ const fieldIssue = (
 	field: string,
 	at: ReadonlyArray<PropertyKey>,
 ): ReadonlyArray<Issue> => {
+	const parts = context.memo.limits.fieldPathParts
+	if (field.split(".", parts + 1).length > parts) {
+		return [
+			{
+				path: at,
+				issue: `The field path "${field}" has more than ${String(parts)} parts. The most is ${String(parts)}.`,
+			},
+		]
+	}
 	const message = `The field "${field}" is not a field of every resource of the rule`
 	if (context.all || context.named.length === 0) {
 		return [{ path: at, issue: message }]
 	}
 	const without = Arr.filter(
 		context.named,
-		(descriptor) => Catalog.lookup(descriptor.catalog, field) === undefined,
+		(descriptor) =>
+			Catalog.lookup(descriptor.catalog, field, parts) === undefined,
 	)
 	return without.length === 0
 		? []
@@ -204,7 +217,14 @@ const readIssues = (
 	}
 	return Arr.some(
 		context.named,
-		(descriptor) => !(Catalog.lookup(descriptor.catalog, field)?.plain ?? true),
+		(descriptor) =>
+			!(
+				Catalog.lookup(
+					descriptor.catalog,
+					field,
+					context.memo.limits.fieldPathParts,
+				)?.plain ?? true
+			),
 	)
 		? [
 				{
@@ -226,7 +246,7 @@ const patternIssues = (
 	pattern: string,
 	at: ReadonlyArray<PropertyKey>,
 ): ReadonlyArray<Issue> =>
-	Result.match(Patterns.parse(pattern), {
+	Result.match(Patterns.parse(pattern, memo.limits.patternParts), {
 		onFailure: (issue) => [{ path: at, issue }],
 		onSuccess: (parsed) => {
 			// A rule with no known resource has an issue for that already. The
@@ -245,17 +265,21 @@ const patternIssues = (
 							memo.work.steps +=
 								Math.max(descriptor.catalog.edges, 1) *
 								Math.max(parsed.length, 1)
-							if (memo.work.steps > Limits.searchSteps) {
+							if (memo.work.steps > memo.limits.searchSteps) {
 								return true
 							}
-							const found = Patterns.fitsCatalog(parsed, descriptor.catalog)
+							const found = Patterns.fitsCatalog(
+								parsed,
+								descriptor.catalog,
+								memo.limits.fieldPathParts,
+							)
 							memo.fits.set(key, found)
 							return found
 						}) || before
 					)
 				})
 			// Past the limit of the work, `ruleIssues` gives one issue for it.
-			return fits || memo.work.steps > Limits.searchSteps
+			return fits || memo.work.steps > memo.limits.searchSteps
 				? []
 				: [
 						{
@@ -272,7 +296,11 @@ const fieldsAt = (
 	field: string,
 ): ReadonlyArray<Catalog.Field> =>
 	Arr.flatMap(context.applicable, (descriptor) => {
-		const found = Catalog.lookup(descriptor.catalog, field)
+		const found = Catalog.lookup(
+			descriptor.catalog,
+			field,
+			context.memo.limits.fieldPathParts,
+		)
 		return found === undefined ? [] : [found]
 	})
 
@@ -282,7 +310,11 @@ const principalField = (
 	ref: string,
 	at: ReadonlyArray<PropertyKey>,
 ): Catalog.Field | Issue => {
-	const found = Catalog.lookup(context.domain.principalCatalog, ref)
+	const found = Catalog.lookup(
+		context.domain.principalCatalog,
+		ref,
+		context.memo.limits.fieldPathParts,
+	)
 	// A read of the principal that is not plain data is a defect, as a read
 	// of a resource is: see `readIssues`.
 	if (found !== undefined && !found.plain) {
@@ -335,7 +367,7 @@ const distinctFields = (
  */
 const spendChecks = (memo: Memo, values: number, fields: number): boolean => {
 	memo.work.steps += values * Math.max(fields, 1)
-	return memo.work.steps <= Limits.searchSteps
+	return memo.work.steps <= memo.limits.searchSteps
 }
 
 /** The issues of one operand of a test of a field, with its distinct fields. */
@@ -645,7 +677,7 @@ export const ruleIssues = (
 	domain: Domain.Any,
 	rule: RuleData,
 	at: At,
-	memo: Memo = makeMemo(),
+	memo: Memo = makeMemo(domain.limits),
 ): ReadonlyArray<Issue> => {
 	const here = (issues: ReadonlyArray<Issue>) => under(memo, at, issues)
 	const all = rule.resources.includes("*")
@@ -687,16 +719,26 @@ export const ruleIssues = (
 				: fieldIssue(context, field, ["fields", index]),
 		),
 	)
+	const conditionNodes = memo.limits.conditionNodes
 	const whenIssues =
 		rule.when === undefined
 			? []
-			: Nodes.isNode(rule.when)
-				? conditionIssues(context, rule.when, Place.at(at, "when"), new Set())
-				: here([notWhole(["when"])])
+			: !Nodes.isNode(rule.when)
+				? here([notWhole(["when"])])
+				: // The constructors of the nodes check the ceiling, so the binding
+					// checks the limit of the domain.
+					rule.when.weight > conditionNodes
+					? here([
+							{
+								path: ["when"],
+								issue: `A condition has ${String(rule.when.weight)} nodes and values. The most is ${String(conditionNodes)}.`,
+							},
+						])
+					: conditionIssues(context, rule.when, Place.at(at, "when"), new Set())
 	// The work is known only after every check of the rule. Past the limit, a
 	// check gives no issue, so this issue must come, or the policy would load
 	// with checks left out.
-	const work = memo.work.steps > Limits.searchSteps && !memo.work.noted
+	const work = memo.work.steps > memo.limits.searchSteps && !memo.work.noted
 	memo.work.noted ||= work
 	return [
 		...Arr.flatMap(
@@ -742,7 +784,7 @@ export const ruleIssues = (
 			? [
 					{
 						path: Place.pathOf(at),
-						issue: `The policy takes more than ${String(Limits.searchSteps)} steps to check: its field patterns, and the fields and values of its tests on each resource. The most is ${String(Limits.searchSteps)}.`,
+						issue: `The policy takes more than ${String(memo.limits.searchSteps)} steps to check: its field patterns, and the fields and values of its tests on each resource. The most is ${String(memo.limits.searchSteps)}.`,
 					},
 				]
 			: []),
@@ -778,14 +820,6 @@ export const treeIssues = (
 		{ readonly node: TreeNode; readonly at: At },
 		ReadonlyArray<Found>
 	>((R, child) => ({ node, at }, level) => {
-		if (level > Limits.policyDepth) {
-			return R.succeed([
-				{
-					path: Place.pathOf(at),
-					issue: `A policy tree has more than ${String(Limits.policyDepth)} levels. The most is ${String(Limits.policyDepth)}.`,
-				},
-			])
-		}
 		switch (node._tag) {
 			case "Rules":
 				return R.succeed(
@@ -819,7 +853,7 @@ export const treeIssues = (
 				)
 		}
 	})
-	const memo = makeMemo()
+	const memo = makeMemo(domain.limits)
 	return Arr.flatMap(rulesOf({ node: root, at: undefined }), (found) =>
 		Array.isArray(found)
 			? ruleIssues(domain, found[0], found[1], memo)

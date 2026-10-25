@@ -40,13 +40,17 @@ const partOf = (text: string): Part =>
 
 /**
  * Reads a pattern. It fails with the problem when the pattern has `**`
- * inside a part, or has more parts than `patternParts`.
+ * inside a part, or has more parts than `parts`, the `patternParts` of a
+ * domain.
  */
-export const parse = (text: string): Result.Result<Pattern, string> => {
-	const texts = text.split(".", Limits.patternParts + 1)
-	if (texts.length > Limits.patternParts) {
+export const parse = (
+	text: string,
+	parts: number = Limits.patternParts,
+): Result.Result<Pattern, string> => {
+	const texts = text.split(".", parts + 1)
+	if (texts.length > parts) {
 		return Result.fail(
-			`The field pattern "${text}" has more than ${String(Limits.patternParts)} parts. The most is ${String(Limits.patternParts)}.`,
+			`The field pattern "${text}" has more than ${String(parts)} parts. The most is ${String(parts)}.`,
 		)
 	}
 	if (Arr.some(texts, (part) => part !== "**" && part.includes("**"))) {
@@ -64,11 +68,15 @@ export const parse = (text: string): Result.Result<Pattern, string> => {
 }
 
 /**
- * Reads a pattern of a bound rule. The binding of the rule took the pattern,
- * so a problem here is a defect.
+ * Reads a pattern of a bound rule. The binding of the rule took the pattern
+ * with the limits of its domain, so this reads it up to the ceiling, and a
+ * problem here is a defect.
  */
 export const parseBound = (text: string): Pattern =>
-	Result.getOrThrowWith(parse(text), (problem) => new Error(problem))
+	Result.getOrThrowWith(
+		parse(text, Limits.ceilings.patternParts),
+		(problem) => new Error(problem),
+	)
 
 /** Tests if a name matches the pieces of a part with stars. */
 const globMatches = (pieces: ReadonlyArray<string>, name: string): boolean => {

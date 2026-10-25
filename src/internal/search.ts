@@ -531,9 +531,9 @@ const constantsOf = (node: Node): Map<string, Set<Nodes.Scalar>> => {
 
 /** Gives the kinds of each field of a catalog. A field that it does not have may hold any value. */
 export const kindsIn =
-	(catalog: Catalog.Catalog | undefined) =>
+	(catalog: Catalog.Catalog | undefined, parts?: number) =>
 	(field: string): Catalog.Kinds =>
-		(catalog === undefined ? undefined : Catalog.lookup(catalog, field))
+		(catalog === undefined ? undefined : Catalog.lookup(catalog, field, parts))
 			?.kinds ?? Catalog.anyKinds
 
 /**
@@ -545,13 +545,14 @@ export const satisfiable = (
 	node: Node,
 	kindsOf: (field: string) => Catalog.Kinds,
 	budget: number = Limits.searchSteps,
+	fields: number = Limits.searchFields,
 ): Satisfiability => {
 	if (node.opaque) {
 		return satisfiability.Unknown({ reason: "predicate" })
 	}
 	const constants = constantsOf(node)
 	// The search calls itself one time for each field that it fixes.
-	if (constants.size > Limits.searchFields) {
+	if (constants.size > fields) {
 		return satisfiability.Unknown({ reason: "budget" })
 	}
 	// The cells of each field, in a native `Map` as the constants are.

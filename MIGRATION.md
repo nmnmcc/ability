@@ -1,3 +1,24 @@
+# From 2.0 to 2.1
+
+Version 2.1 has higher limits, and a domain may set its own. No code needs a
+change.
+
+- A domain may set its limits: `Domain.make({ ..., limits: { ... } })`. Each one
+  is a whole number from 1 up to its ceiling in `Limits.ceilings`. The defaults
+  are in `Limits.defaults`, and the README has a table of them.
+- The defaults are higher. A field path and a field pattern may have 1000 parts,
+  a condition and a policy tree 1000000 nodes, and a decoder reads 10000000
+  objects and items.
+- There is no limit of levels. A walk runs on the stack for an input with few
+  levels, and in the run loop of an Effect for a deeper one, so no input fills
+  the stack. `Limits.conditionDepth` and `Limits.policyDepth` are `Infinity`,
+  and they will go in 3.0.
+- The limits of nodes count each value of an `In` or `Under` test as a node. A
+  policy with very large `In` tests may need a higher `conditionNodes` or
+  `policyNodes`.
+- `JSON.stringify` of the JSON form of a very deep policy, with many thousands
+  of levels, may fail. The engine writes JSON text with a walk of its own.
+
 # From 1.x to 2.0
 
 Version 2.0 makes the library smaller and stricter. Most programs need only the

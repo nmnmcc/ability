@@ -12,6 +12,7 @@ import type * as Domain from "../Domain.ts"
 import type * as Policy from "../Policy.ts"
 import type * as Resource from "../Resource.ts"
 import * as Catalog from "./catalog.ts"
+import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
 import * as ResourceData from "./resource.ts"
 import * as Patterns from "./patterns.ts"
@@ -167,6 +168,7 @@ export const matchesInside = (pattern: string, field: string): boolean =>
  */
 export const fitsOf = (
 	catalog: Catalog.Catalog,
+	parts: number,
 ): ((pattern: string) => boolean) => {
 	// A native `Map`: the hash of a string in Effect has no random seed, and a
 	// policy could hold very many patterns with one hash. The engine hashes a
@@ -177,7 +179,11 @@ export const fitsOf = (
 		if (known !== undefined) {
 			return known
 		}
-		const found = Patterns.fitsCatalog(Patterns.parseBound(pattern), catalog)
+		const found = Patterns.fitsCatalog(
+			Patterns.parseBound(pattern),
+			catalog,
+			parts,
+		)
 		memo.set(pattern, found)
 		return found
 	}
@@ -205,6 +211,8 @@ export const matchesTarget = (
 		readonly descriptor?: Resource.Descriptor | undefined
 		/** The test of {@link fitsOf} for the catalog of the descriptor. */
 		readonly fits?: ((pattern: string) => boolean) | undefined
+		/** The most parts of a field path in the domain. */
+		readonly parts?: number | undefined
 	},
 ): boolean => {
 	if (!rule.actions.includes("*") && !rule.actions.includes(target.action)) {
@@ -226,7 +234,11 @@ export const matchesTarget = (
 		return (
 			rule._tag === "Allow" &&
 			(descriptor === undefined ||
-				Arr.some(rule.fields, target.fits ?? fitsOf(descriptor.catalog)))
+				Arr.some(
+					rule.fields,
+					target.fits ??
+						fitsOf(descriptor.catalog, target.parts ?? Limits.fieldPathParts),
+				))
 		)
 	}
 	const field = target.field
@@ -236,7 +248,8 @@ export const matchesTarget = (
 	const open =
 		rule._tag === "Deny" &&
 		target.descriptor !== undefined &&
-		(Catalog.lookup(target.descriptor.catalog, field)?.open ?? false)
+		(Catalog.lookup(target.descriptor.catalog, field, target.parts)?.open ??
+			false)
 	return rule.fields.some(
 		(pattern) =>
 			matchesField(pattern, field) || (open && matchesInside(pattern, field)),

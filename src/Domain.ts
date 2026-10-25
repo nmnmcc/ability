@@ -18,6 +18,7 @@ import type * as HashMap from "effect/HashMap"
 import type * as Schema from "effect/Schema"
 import type * as Catalog from "./internal/catalog.ts"
 import * as Internal from "./internal/domain.ts"
+import type * as Limits from "./Limits.ts"
 import type * as Resource from "./Resource.ts"
 
 /** The Schema of a principal: a Schema of objects, such as a `Schema.Class`. */
@@ -42,6 +43,8 @@ export interface Domain<
 	/** The descriptor of each resource, by its kind name. */
 	readonly resources: HashMap.HashMap<string, Resource.Descriptor>
 	readonly meta: Schema.Top | undefined
+	/** The limits of the domain: see `Limits`. */
+	readonly limits: Limits.Limits
 	readonly "~Domain"?: {
 		readonly Principal: P
 		readonly Resources: Resources
@@ -174,6 +177,11 @@ export type AnyValue<D> = Resource.Value<Resources<D>>
  * may not need services, because `Policy.schema` gives a Schema that needs
  * none.
  *
+ * Give `limits` to set the limits of the domain, as
+ * `{ limits: { fieldPathParts: 2000 } }`. Each one is a whole number from 1
+ * up to its ceiling in `Limits.ceilings`, and a limit that you leave out has
+ * its default. A wrong value is a defect.
+ *
  * @stability stable
  * @category constructors
  * @since 0.3.0
@@ -186,4 +194,5 @@ export const make: <
 	readonly principal: P
 	readonly resources: Resources
 	readonly meta?: M
+	readonly limits?: Partial<Limits.Limits>
 }) => Domain<P["Type"], Resources[number], M["Type"]> = Internal.make as never

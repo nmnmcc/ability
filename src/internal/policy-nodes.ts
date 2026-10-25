@@ -42,22 +42,15 @@ interface Facts {
 
 /** Checks the facts of a node against the limits. */
 const checked = (facts: Facts): Facts => {
-	if (facts.size > Limits.policyNodes) {
+	// A node does not know its domain, so it checks the ceiling. A policy
+	// checks the limit of its domain.
+	if (facts.size > Limits.ceilings.policyNodes) {
 		throw Limits.exceeded(
 			"A policy tree",
 			"policyNodes",
 			"nodes",
 			facts.size,
-			Limits.policyNodes,
-		)
-	}
-	if (facts.depth > Limits.policyDepth) {
-		throw Limits.exceeded(
-			"A policy tree",
-			"policyDepth",
-			"levels",
-			facts.depth,
-			Limits.policyDepth,
+			Limits.ceilings.policyNodes,
 		)
 	}
 	return facts
