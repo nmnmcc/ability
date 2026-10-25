@@ -2436,7 +2436,7 @@ describe("Policy", () => {
 		)
 	})
 
-	it("lets a name that a union branch does not have hold any value", () => {
+	it("does not read a name that a struct of a union does not have", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],
 			fields: {
@@ -2447,26 +2447,24 @@ describe("Policy", () => {
 			},
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
-		const policy = rulesOf(Notes, [
-			Policy.builder(Notes).allow("read", Note),
-			Policy.rule({
-				_tag: "Deny",
-				actions: ["read"],
-				resources: ["Note"],
-				when: Condition.builder<
-					{ readonly info: { readonly owner: string } },
-					unknown,
-					unknown
-				>().eq("info.owner", "secret"),
-			}),
-		])
-		assert.notStrictEqual(
-			Policy.coverage(policy, {
-				principal: alice,
-				action: "read",
-				kind: "Note",
-			})._tag,
-			"All",
+		// A value made by hand, as `{ info: { other: "x", owner: [] } }`, fits
+		// the second struct, and its `owner` may be any value.
+		assert.throws(
+			() =>
+				rulesOf(Notes, [
+					Policy.builder(Notes).allow("read", Note),
+					Policy.rule({
+						_tag: "Deny",
+						actions: ["read"],
+						resources: ["Note"],
+						when: Condition.builder<
+							{ readonly info: { readonly owner: string } },
+							unknown,
+							unknown
+						>().eq("info.owner", "secret"),
+					}),
+				]),
+			/A condition may not read the field "info.owner"/,
 		)
 	})
 
@@ -3337,7 +3335,7 @@ describe("Policy", () => {
 		)
 	})
 
-	it("reads a field that one struct of a union does not have", () => {
+	it("reads a field that every struct of a union has", () => {
 		class Owner extends Schema.Class<Owner>("NamedOwner")({
 			flag: Schema.String,
 			open: Schema.Boolean,
@@ -3347,43 +3345,18 @@ describe("Policy", () => {
 			fields: {
 				box: Schema.Union([
 					Owner,
-					Schema.Struct({ open: Schema.Boolean }),
-					Schema.Struct({ kind: Schema.Literal("empty") }),
+					Schema.Struct({ flag: Schema.String, kind: Schema.String }),
 					Schema.String,
 				]),
 			},
 		})
 		const Boxes = Domain.make({ principal: Caller, resources: [Box] })
-		// A decode or a make copies a struct into a plain object, so a struct
-		// without `flag` or `open` gives `null` for it.
-		const policy = rulesOf(Boxes, [
-			Policy.rule({
-				_tag: "Allow",
-				actions: ["read"],
-				resources: ["PlainBox"],
-				when: Condition.builder<
-					{
-						readonly box: {
-							readonly flag: string | null
-							readonly open: boolean | null
-						}
-					},
-					unknown,
-					unknown
-				>().or(
-					Condition.builder<
-						{ readonly box: { readonly flag: string | null } },
-						unknown,
-						unknown
-					>().eq("box.flag", "yes"),
-					Condition.builder<
-						{ readonly box: { readonly open: boolean | null } },
-						unknown,
-						unknown
-					>().eq("box.open", true),
-				),
-			}),
-		])
+		// A string has no fields, so `box.flag` reads `null` for one.
+		const policy = Policy.define(Boxes)(function* (_) {
+			yield* _.allow("read", Box, {
+				when: ($) => $.eq("box.flag", "yes"),
+			})
+		})
 		const decide = (box: Resource.Data<typeof Box>["box"]) =>
 			Policy.decideSync(policy, {
 				principal: alice,
@@ -3394,10 +3367,26 @@ describe("Policy", () => {
 			decide(Owner.make({ flag: "yes", open: false })),
 			"Allow",
 		)
-		assert.strictEqual(decide({ open: true }), "Allow")
-		assert.strictEqual(decide({ open: false }), "NotApplicable")
-		assert.strictEqual(decide({ kind: "empty" }), "NotApplicable")
+		assert.strictEqual(decide({ flag: "yes", kind: "a" }), "Allow")
+		assert.strictEqual(decide({ flag: "no", kind: "a" }), "NotApplicable")
 		assert.strictEqual(decide("text"), "NotApplicable")
+		// The class does not have `kind`, so a read of it is not plain.
+		assert.throws(
+			() =>
+				rulesOf(Boxes, [
+					Policy.rule({
+						_tag: "Allow",
+						actions: ["read"],
+						resources: ["PlainBox"],
+						when: Condition.builder<
+							{ readonly box: { readonly kind: string | null } },
+							unknown,
+							unknown
+						>().eq("box.kind", "a"),
+					}),
+				]),
+			/A condition may not read the field "box.kind"/,
+		)
 	})
 
 	it("takes a field with a number key", () => {

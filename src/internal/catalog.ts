@@ -418,15 +418,6 @@ const namesOf = (
  */
 const branchOf = (place: Place, count: { size: number }): Branch => {
 	const structs = Arr.filter(Arr.map(place.schemas, structOf), isStruct)
-	// The structs of classes. A value of a class is not copied into a plain
-	// object, so it keeps its getters and methods.
-	const classes = Arr.filter(
-		Arr.map(
-			Arr.filter(place.schemas, (schema) => schema._tag === "Declaration"),
-			structOf,
-		),
-		isStruct,
-	)
 	const values = Arr.filter(
 		place.schemas,
 		(schema) => !isStruct(structOf(schema)),
@@ -488,12 +479,18 @@ const branchOf = (place: Place, count: { size: number }): Branch => {
 		}
 	}
 	const structProperties = Arr.map(structs, propertiesOf)
-	const classProperties = Arr.map(classes, propertiesOf)
 	const children = Arr.map(namesOf(structs), (name) => {
 		const properties = Arr.flatMap(structProperties, (named) => {
 			const property = named.get(name)
 			return property === undefined ? [] : [property]
 		})
+		// A struct without the name may still have it as an extra field, with
+		// any value: only a decode or a `make` takes extra fields away, and a
+		// decision may get a value made by hand. A value that may be any
+		// object, as one of `Schema.Unknown` may, may have the name with any
+		// value too.
+		const top =
+			place.top || valueKinds.object || properties.length < structs.length
 		const below: Place = {
 			path: [...place.path, name],
 			schemas: Arr.flatMap(properties, (property) =>
@@ -505,15 +502,10 @@ const branchOf = (place: Place, count: { size: number }): Branch => {
 				place.missing ||
 				values.length > 0 ||
 				Arr.some(properties, (property) => SchemaAST.isOptional(property.type)),
-			// A struct without the name may still have it as an extra field,
-			// with any value: only a decode takes extra fields away. A value
-			// that may be any object, as one of `Schema.Unknown` may, may have
-			// the name with any value too.
-			top: place.top || valueKinds.object || properties.length < structs.length,
-			plain:
-				place.plain &&
-				!valueKinds.object &&
-				Arr.every(classProperties, (named) => named.has(name)),
+			top,
+			// A value that may be anything may be a list, or have a getter, so
+			// a read below it may not find plain data.
+			plain: place.plain && !top,
 		}
 		return [name, branchOf(below, count)] as const
 	})
@@ -522,6 +514,8 @@ const branchOf = (place: Place, count: { size: number }): Branch => {
 	if (signatures.length === 0) {
 		return { field, children, names, key: undefined, keyBranch: undefined }
 	}
+	const keyTop =
+		place.top || valueKinds.object || records.length < structs.length
 	const key: Key = {
 		_tag: "Key",
 		parameters: Arr.map(signatures, (signature) => signature.parameter),
@@ -534,11 +528,8 @@ const branchOf = (place: Place, count: { size: number }): Branch => {
 			),
 			// A record may not have a given key.
 			missing: true,
-			top: place.top || valueKinds.object || records.length < structs.length,
-			plain:
-				place.plain &&
-				!valueKinds.object &&
-				Arr.every(classes, (struct) => struct.indexSignatures.length > 0),
+			top: keyTop,
+			plain: place.plain && !keyTop,
 		},
 		count,
 	)

@@ -157,11 +157,12 @@ describe("Catalog", () => {
 			]),
 		})
 		// The class `Owner` has a getter `label`, and no field of that name.
+		// The struct has no field `id`.
 		assert.isFalse(fieldOf(schema, "owner.label").plain)
-		assert.isTrue(fieldOf(schema, "owner.id").plain)
-		// A struct without the field is copied into a plain object, but a
-		// class without the field may have a getter of that name.
-		assert.isTrue(fieldOf(schema, "named.flag").plain)
+		assert.isFalse(fieldOf(schema, "owner.id").plain)
+		// A struct or a class without the field may have it with any value, as
+		// a list, or as a getter of a class.
+		assert.isFalse(fieldOf(schema, "named.flag").plain)
 		assert.isFalse(fieldOf(schema, "named.other").plain)
 		assert.isFalse(fieldOf(schema, "dated.flag").plain)
 		assert.isTrue(fieldOf(schema, "text.flag").plain)
