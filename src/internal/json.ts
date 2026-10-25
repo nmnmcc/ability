@@ -207,12 +207,25 @@ const decoder = (budget: Budget): ((part: Part) => Node) => {
 			throw problemAt(at, "A condition node must be an object")
 		}
 		spend(budget, 1, at)
-		count.nodes += 1
-		if (count.nodes > budget.limits.conditionNodes) {
-			throw problemAt(
-				at,
-				`A condition has more than ${String(budget.limits.conditionNodes)} nodes and values. The most is ${String(budget.limits.conditionNodes)}.`,
-			)
+		const counted = (more: number): void => {
+			count.nodes += more
+			if (count.nodes > budget.limits.conditionNodes) {
+				throw problemAt(
+					at,
+					`A condition has more than ${String(budget.limits.conditionNodes)} nodes and values. The most is ${String(budget.limits.conditionNodes)}.`,
+				)
+			}
+		}
+		counted(1)
+		// The values of an `In` or an `Under` test count in the weight of the
+		// condition. The length of the list counts before the decoder reads
+		// any value, so a very long list stops before it takes memory.
+		const operands = (name: string): ReadonlyArray<Nodes.Operand> => {
+			const list = read(input, name, at)
+			if (Array.isArray(list)) {
+				counted(list.length)
+			}
+			return decodeOperands(input, name, at, budget)
 		}
 		// A node past a limit, such as a field path with too many parts, is a
 		// problem at its place. The constructor checks the ceilings, and the
@@ -276,7 +289,7 @@ const decoder = (budget: Budget): ((part: Part) => Node) => {
 						() =>
 							new Nodes.In({
 								field: readPath(input, "field", at, budget),
-								values: decodeOperands(input, "values", at, budget),
+								values: operands("values"),
 							}),
 					),
 				)
@@ -292,7 +305,7 @@ const decoder = (budget: Budget): ((part: Part) => Node) => {
 					make(
 						() =>
 							new Nodes.Under({
-								prefix: decodeOperands(input, "prefix", at, budget),
+								prefix: operands("prefix"),
 							}),
 					),
 				)

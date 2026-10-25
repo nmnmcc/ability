@@ -463,6 +463,18 @@ describe("Policy", () => {
 			assert.strictEqual(output.trim(), "failed")
 		}, 60_000)
 
+		it("stops a very long list of values before it reads them, in a small heap", () => {
+			const output = execFileSync(
+				process.execPath,
+				[
+					"--max-old-space-size=96",
+					new URL("./scripts/long-in.ts", import.meta.url).pathname,
+				],
+				{ encoding: "utf8" },
+			)
+			assert.strictEqual(output.trim(), "failed")
+		}, 60_000)
+
 		it("does not decode a shared input that would be too large", () => {
 			// A domain with small limits, so the test is short. A decoder stops
 			// at the first node past a limit, so the time grows with the limit,
