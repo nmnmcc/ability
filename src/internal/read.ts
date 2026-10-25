@@ -25,10 +25,14 @@ const prototypesOf = (value: object): ReadonlyArray<object> =>
  *   `constructor`, gives `null`;
  * - a name that the value has only from `Error.prototype`, as `message` of a
  *   `Schema.TaggedError` with an optional `message` and no message, gives
- *   `null`: the Schema says that the field is missing.
+ *   `null`: the Schema says that the field is missing;
+ * - a name that the value has only as a method of a prototype, as `pipe` of
+ *   a `Schema.Class` with an optional `pipe` and no value of it, gives
+ *   `null`: a method is code, not data, and the Schema says that the field
+ *   is missing.
  *
- * Any other field, such as a getter or a field from the prototype of a class,
- * is a defect. Its value is not data that the Schema
+ * Any other field, such as a getter or other data from the prototype of a
+ * class, is a defect. Its value is not data that the Schema
  * describes, and a read of it as `null` could let a value pass a deny rule.
  */
 export const readPart = (value: unknown, name: string): unknown => {
@@ -44,6 +48,14 @@ export const readPart = (value: unknown, name: string): unknown => {
 			Option.isNone(owner) ||
 			owner.value === Object.prototype ||
 			owner.value === Error.prototype
+		) {
+			return null
+		}
+		const inherited = Object.getOwnPropertyDescriptor(owner.value, name)
+		if (
+			inherited !== undefined &&
+			"value" in inherited &&
+			typeof inherited.value === "function"
 		) {
 			return null
 		}

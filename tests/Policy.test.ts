@@ -4627,6 +4627,40 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 1000)
 	})
 
+	it("reads a missing optional field that a class has as a method as null", () => {
+		class Part extends Schema.Class<Part>("PipedPart")({
+			pipe: Schema.optionalKey(Schema.String),
+		}) {}
+		const Box = Resource.make("Box", {
+			actions: ["read"],
+			fields: { part: Part },
+		})
+		const Boxes = Domain.make({ principal: Caller, resources: [Box] })
+		const policy = Policy.define(Boxes)(function* (_) {
+			yield* _.deny("read", Box, { when: ($) => $.exists("part.pipe") })
+			yield* _.allow("read", Box)
+		})
+		const kind = { principal: alice, action: "read", kind: "Box" } as const
+		const residual = Policy.residual(policy, kind)
+		// With no `pipe`, the value has `pipe` only as a method of Effect.
+		Arr.forEach([Part.make({}), Part.make({ pipe: "p" })], (part) => {
+			const value = Box.make({ part })
+			const decision = Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: value,
+			})._tag
+			assert.strictEqual(
+				decision,
+				Object.hasOwn(part, "pipe") ? "Deny" : "Allow",
+			)
+			assert.strictEqual(
+				Condition.evaluateSync(residual, { value }),
+				decision === "Allow",
+			)
+		})
+	})
+
 	it("reads a missing optional message of a Schema error as null", () => {
 		class Problem extends Schema.TaggedError<Problem>(
 			"@nmnmcc/ability/tests/Policy.test/OptionalProblem",
