@@ -272,13 +272,30 @@ const structOf = (ast: SchemaAST.AST): SchemaAST.Objects | undefined =>
 const hasCheck = (
 	checks: ReadonlyArray<SchemaAST.Check<never>>,
 	id: string,
-): boolean =>
-	Arr.some(
-		checks,
-		(check) =>
-			check.annotations?.representation?.id === id ||
-			(check._tag === "FilterGroup" && hasCheck(check.checks, id)),
-	)
+): boolean => hasCheckIn({ checks, id })
+
+/**
+ * The walk of {@link hasCheck}. A group of checks may hold a group, very many
+ * levels down, as `.and(...)` many times makes, so it is a walk of the
+ * trampoline for an input of an unknown depth.
+ */
+const hasCheckIn = Trampoline.adaptive<
+	{
+		readonly checks: ReadonlyArray<SchemaAST.Check<never>>
+		readonly id: string
+	},
+	boolean
+>(
+	(R, child) =>
+		({ checks, id }, depth) =>
+			R.some(checks, (check) =>
+				check.annotations?.representation?.id === id
+					? R.succeed(true)
+					: check._tag === "FilterGroup"
+						? child({ checks: check.checks, id }, depth + 1)
+						: R.succeed(false),
+			),
+)
 
 /** A struct with named fields, or with the keys of a record. */
 const isStruct = (

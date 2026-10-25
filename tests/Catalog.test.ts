@@ -241,6 +241,18 @@ describe("Catalog", () => {
 		assert.isTrue(fieldOf(Schema.Struct({ name: deep }), "name").kinds.string)
 	})
 
+	it("reads a number with very many checks", () => {
+		const checked = Arr.reduce(
+			Arr.range(1, 10_000),
+			Schema.isGreaterThan(0) as SchemaAST.Check<number>,
+			// Each check holds the group of the checks before it.
+			(inner, index) => Schema.isLessThan(index + 10).and(inner),
+		)
+		// The search for the check of whole numbers opens every group.
+		const schema = Schema.Struct({ n: Schema.Finite.check(checked) })
+		assert.strictEqual(fieldOf(schema, "n").kinds.number, "finite")
+	})
+
 	it("makes the catalog of a struct with very many fields", () => {
 		const Wide = Resource.make("VeryWide", {
 			actions: ["read"],
