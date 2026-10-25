@@ -16,7 +16,7 @@ import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
 import * as Patterns from "./patterns.ts"
 import * as Place from "./place.ts"
-import { withSuggestion } from "./suggest.ts"
+import * as Suggest from "./suggest.ts"
 import * as Trampoline from "./trampoline.ts"
 
 /** One problem of a rule or a policy, with its path. */
@@ -98,7 +98,17 @@ const suggestIn = (
 	if (memo.suggestions.size >= maxSuggestions) {
 		return message
 	}
-	const made = withSuggestion(message, name, names())
+	// A suggestion compares the name with every name of the scope, so its
+	// work counts. A suggestion past the limit of the work is left out: the
+	// issue is still there, with no suggestion.
+	const candidates = names()
+	const cost = Suggest.work(name, candidates)
+	if (memo.work.steps + cost > memo.limits.searchSteps) {
+		memo.suggestions.set(key, message)
+		return message
+	}
+	memo.work.steps += cost
+	const made = Suggest.withSuggestion(message, name, candidates)
 	memo.suggestions.set(key, made)
 	return made
 }

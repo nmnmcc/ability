@@ -2148,6 +2148,47 @@ describe("Policy", () => {
 		)
 	})
 
+	it("counts the work of the suggestions for wrong names", () => {
+		const names = Arr.makeBy(
+			1000,
+			(index) => `${"x".repeat(58)}${String(index).padStart(6, "0")}`,
+		)
+		const Long = Resource.make("Long", {
+			actions: ["read"],
+			fields: Object.fromEntries(
+				Arr.map(names, (name) => [name, Schema.String]),
+			) as Record<string, typeof Schema.String>,
+		})
+		const Longs = Domain.make({
+			principal: Caller,
+			resources: [Long],
+			limits: { searchSteps: 100 },
+		})
+		const start = Date.now()
+		const exit = Schema.decodeUnknownExit(Policy.schema(Longs))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Long"],
+					when: {
+						_tag: "And",
+						conditions: Arr.makeBy(32, (index) => ({
+							_tag: "Exists",
+							field: `${"x".repeat(57)}z${String(index).padStart(6, "0")}`,
+						})),
+					},
+				},
+			],
+		})
+		assert.isTrue(Exit.isFailure(exit))
+		// Each suggestion compared the name with 1000 long names, which took
+		// about 17 seconds. Past the limit, an issue has no suggestion.
+		assert.isBelow(Date.now() - start, 1000)
+	})
+
 	it("binds a policy with very many wrong names in a short time", () => {
 		const Wide = Resource.make("Wide", {
 			actions: ["read"],

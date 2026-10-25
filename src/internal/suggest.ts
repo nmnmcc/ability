@@ -21,25 +21,24 @@ const distance = (left: string, right: string): number => {
 			ReadonlyArray<number>,
 		],
 		([before, row], char, index) => {
-			const next = Arr.reduce(
-				to,
-				[index + 1] as ReadonlyArray<number>,
-				(cells, other, place) => {
-					const change = Math.min(
-						cells[place]! + 1,
-						row[place + 1]! + 1,
-						row[place]! + (char === other ? 0 : 1),
-					)
-					const swap =
-						index > 0 &&
-						place > 0 &&
-						char === to[place - 1] &&
-						from[index - 1] === other
-							? before[place - 1]! + 1
-							: Number.POSITIVE_INFINITY
-					return [...cells, Math.min(change, swap)]
-				},
-			)
+			// The cells of the row go into one list: a new list for each cell
+			// would copy the row at each step. The list belongs to this row.
+			const next: Array<number> = [index + 1]
+			Arr.forEach(to, (other, place) => {
+				const change = Math.min(
+					next[place]! + 1,
+					row[place + 1]! + 1,
+					row[place]! + (char === other ? 0 : 1),
+				)
+				const swap =
+					index > 0 &&
+					place > 0 &&
+					char === to[place - 1] &&
+					from[index - 1] === other
+						? before[place - 1]! + 1
+						: Number.POSITIVE_INFINITY
+				next.push(Math.min(change, swap))
+			})
 			return [row, next] as const
 		},
 	)
@@ -53,22 +52,43 @@ const maxNameLength = 64
  * Gives the name in `names` that is nearest to `name`, when it is near
  * enough: at most one change for a short name, and two for a longer one.
  */
+/** The most changes for a name to be near: see {@link suggest}. */
+const mostChanges = (name: string): number =>
+	Math.min(2, Math.max(1, Math.floor(name.length / 2)))
+
+/**
+ * The names that need a distance. Two names whose lengths differ by more
+ * than the most changes are not near. A very long name gets no suggestion,
+ * since the work of one distance grows with the length of both names.
+ */
+const closeTo = (
+	name: string,
+	names: ReadonlyArray<string>,
+): ReadonlyArray<string> =>
+	name.length > maxNameLength
+		? []
+		: Arr.filter(
+				names,
+				(other) => Math.abs(other.length - name.length) <= mostChanges(name),
+			)
+
+/**
+ * The work of {@link suggest}: one step for each name, and one for each cell
+ * of each distance.
+ */
+export const work = (name: string, names: ReadonlyArray<string>): number =>
+	Arr.reduce(
+		closeTo(name, names),
+		names.length,
+		(total, other) => total + (name.length + 1) * (other.length + 1),
+	)
+
 export const suggest = (
 	name: string,
 	names: ReadonlyArray<string>,
 ): string | undefined => {
-	// The work of one distance grows with the length of both names, so a very
-	// long name gets no suggestion.
-	if (name.length > maxNameLength) {
-		return undefined
-	}
-	const most = Math.min(2, Math.max(1, Math.floor(name.length / 2)))
-	// Two names whose lengths differ by more than `most` are not near, so
-	// only the others need a distance.
-	const close = Arr.filter(
-		names,
-		(other) => Math.abs(other.length - name.length) <= most,
-	)
+	const most = mostChanges(name)
+	const close = closeTo(name, names)
 	const scored = Arr.map(
 		close,
 		(other) => [other, distance(name, other)] as const,
