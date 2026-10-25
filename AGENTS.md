@@ -83,9 +83,12 @@ material. Do not change it unless the user asks.
     and for data that comes from outside.
   - A node of a condition is a class in `src/internal/nodes.ts`. Only its
     constructor makes one, also for JSON. The constructor checks the data and
-    the limits, and it keeps the size, the depth and the predicate mark of the
+    ceilings of the limits, and it keeps the size, the weight (the nodes and the
+    values of `In` and `Under` tests), the depth and the predicate mark of the
     node in private fields. So a walk over a condition needs no memo, and a
-    plain object or a spread of a node is not a node.
+    plain object or a spread of a node is not a node. A node does not know its
+    domain: the binding, the decoders and the analysis check the limits of the
+    domain.
   - Do not make prototypes by hand. Do not write `Equal.symbol`, `Hash.symbol`
     or `NodeInspectSymbol` methods, and do not use `Object.create`. Effect data
     types give equality, hashing and `pipe`. When a value needs an equality that
@@ -97,18 +100,34 @@ material. Do not change it unless the user asks.
   - Use the tools that Effect gives to its users, such as `Function.dual`,
     `Effect.fn`, `Context.Service`, `Layer`, `Cache` and `Schema`.
 - Do not keep state for the whole program. A module may not have a `Map`, a
-  `Set`, a `WeakMap`, a cache or a `let` at its top level. A walk over a
-  condition is a plain walk: the limits of the nodes keep its work small. When
-  another walk needs a memo, the walk makes it, and the memo goes away when the
-  walk ends. State that must live longer belongs to a value, such as a layer.
+  `Set`, a `WeakMap`, a cache or a `let` at its top level. When a walk needs a
+  memo, the walk makes it, and the memo goes away when the walk ends. State that
+  must live longer belongs to a value, such as a layer. A memo that lives for
+  one walk is a `Map`, not a `WeakMap`: its keys stay alive until the walk ends,
+  and a `WeakMap` is slower.
+- A walk over an input with levels must not fill the stack, since there is no
+  limit of levels. Write it one time with the steps of a runner of
+  `src/internal/trampoline.ts`: `Trampoline.run` with the depth of a node, or
+  `Trampoline.adaptive` for an input of an unknown depth, as JSON. Make each
+  call for a child through `R.suspend`. Keep a path as a `Place` of
+  `src/internal/place.ts`, which shares the path of its parent, and make the
+  full path only for an issue.
 - Change as little state as you can. Use `const` and values that do not change.
   Make a new value in place of a change to an old one. A memo `Map` inside one
   call is the usual exception.
-- Use the `HashMap` and `HashSet` of Effect, not a native `Map` or `Set`. Use
-  `MutableHashMap` for a memo with keys that are strings, numbers or functions.
-  A native `Map` or `Set` is right only when it must find an object by the
-  object itself: `Equal` compares Effect data, Schema nodes and plain objects by
-  structure. Say why in a comment.
+- Pick the set or map that is right for its keys, and say why in a comment:
+  - Keys that come from a policy, as patterns, values or the text of a node, go
+    into a native `Map` or `Set`. The hash of a string in Effect has no random
+    seed, so a policy could hold very many keys with one hash.
+  - A native `Map` or `Set` finds an object by the object itself. `Equal`
+    compares Effect data, Schema nodes and plain objects by structure.
+  - Keys that the code makes one time and finds with the same strings are faster
+    in a native `Map`, about five times.
+  - Names from a Schema that a lookup gets from `split`, as new strings, are
+    faster in a `HashMap` of Effect, about 20%.
+  - A value that is shared and changes by steps, as the set of the places on a
+    path, is a `HashSet` of Effect, which shares its parts.
+  - `Arr.dedupe` is slower than a native `Set`, about ten times.
 - Do not write `for` or `while` loops. Use the tools of Effect: `Array` from
   `effect` (`map`, `flatMap`, `filter`, `reduce`, `reduceRight`, `some`,
   `every`, `findFirst`, `groupWith`, `unfold`) for values, and `Effect.forEach`,

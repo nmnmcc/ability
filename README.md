@@ -235,6 +235,11 @@ The builder in `when` has these functions:
 | `principal(field)`       | Not a test. It gives a field of the principal.    |
 | `predicate(name, test)`  | The test function says yes. It may be an Effect.  |
 
+The types check each field path that you write, part by part, up to about 1000
+parts, as `link.next.next.value` of a list of links. A path that is not a field
+is a type error, and the error names the paths that may come next. The same
+check is in the fields of a rule and in the field of a request.
+
 A missing field of a resource has the value `null`. A field of the principal
 that is `null` or missing is different: a test with it is always false, also
 with `ne`. So a guest with no `userId` never matches a document with no owner.

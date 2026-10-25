@@ -18,6 +18,11 @@ change.
   `policyNodes`.
 - `JSON.stringify` of the JSON form of a very deep policy, with many thousands
   of levels, may fail. The engine writes JSON text with a walk of its own.
+- The types check each field path that you write, part by part, up to about 1000
+  parts: in a condition, in the fields of a rule, and in the field of a request.
+  `FieldPath`, `FieldSelector` and `FieldName` still list the paths down to 5
+  parts. A struct at part 5 is no longer one field of a request, since a path
+  may go below it.
 
 # From 1.x to 2.0
 
