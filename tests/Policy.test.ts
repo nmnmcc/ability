@@ -4231,6 +4231,38 @@ describe("Policy", () => {
 		assert.strictEqual(Policy.coverage(policy, request)._tag, "Some")
 	})
 
+	it("lists the fields of a domain with its own limit of parts", () => {
+		const Note = Resource.make("ShortNote", {
+			actions: ["read"],
+			fields: { settings: Schema.Struct({ secret: Schema.String }) },
+		})
+		const Short = Domain.make({
+			principal: Caller,
+			resources: [Note],
+			limits: { fieldPathParts: 1 },
+		})
+		const policy = Policy.define(Short)(function* (_) {
+			yield* _.allow("read", Note)
+		})
+		const request = {
+			principal: alice,
+			action: "read",
+			resource: Note.make({ settings: { secret: "s" } }),
+		} as const
+		// With one part, `settings` is the last part, so it is one field.
+		assert.deepStrictEqual(
+			Effect.runSync(Policy.permittedFields(policy, request)),
+			["settings"],
+		)
+		// The types follow the default limit of 1000 parts, where `settings`
+		// holds fields, so this domain needs a cast.
+		assert.strictEqual(
+			Policy.decideSync(policy, { ...request, field: "settings" as never })
+				._tag,
+			"Allow",
+		)
+	})
+
 	it("decides on a field path of 1000 parts", () => {
 		interface Link {
 			readonly value: string

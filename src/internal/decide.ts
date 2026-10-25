@@ -388,7 +388,9 @@ export const permittedFields = (
 	const rules = policy.pipe(nodeOf, PolicyNodes.rulesOf)
 	// The fields with names only: a list can not name every key of a record.
 	const listed = Arr.filter(
-		descriptor.catalog.fields,
+		// The list for the limit of the parts of a path of the domain, as the
+		// decision of each field reads it.
+		Catalog.fieldsOf(descriptor.catalog, policy.domain.limits.fieldPathParts),
 		(field) =>
 			field.listed &&
 			Arr.every(field.path, (segment) => typeof segment === "string"),
