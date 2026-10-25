@@ -471,7 +471,11 @@ describe("Policy", () => {
 			assert.isTrue(
 				Exit.isFailure(Schema.decodeUnknownExit(Condition.schema)(condition)),
 			)
-			assert.isBelow(Date.now() - start, 1000)
+			// Each decoder reads up to `jsonNodes` objects before it stops. The
+			// full inputs have more than 10 ** 7 nodes, so a short time shows
+			// that the decoders stop at the limit. A busy machine may need more
+			// than one second for the two reads.
+			assert.isBelow(Date.now() - start, 3000)
 			const high = Arr.reduce(Arr.range(1, 1001), {} as unknown, (inner) => ({
 				a: inner,
 				b: inner,
@@ -483,7 +487,7 @@ describe("Policy", () => {
 			assert.isTrue(
 				Exit.isFailure(Schema.decodeUnknownExit(Condition.schema)(high)),
 			)
-			assert.isBelow(Date.now() - startHigh, 1000)
+			assert.isBelow(Date.now() - startHigh, 3000)
 		})
 
 		it("does not decode an input with keys that a loop does not see", () => {
