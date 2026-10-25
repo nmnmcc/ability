@@ -918,6 +918,63 @@ describe("Policy", () => {
 				}
 			},
 		)
+
+		it.prop(
+			"gives a coverage that is right for any value of the Schema",
+			{
+				specs: Schema.Array(Spec),
+				request: Request,
+				scope: ScopeName,
+				bots: Schema.Array(Bot),
+			},
+			({ specs, request, scope, bots }) => {
+				const policy = build(specs, request)
+				const scoped = scopedRequest(request, scope)
+				const covered = Policy.coverage(policy, scoped)
+				const inside = [...bots, ...everyBot].filter((value) =>
+					inScope(scope, scoped.principal, value),
+				)
+				switch (covered._tag) {
+					case "All":
+						return inside.every((value) => allows(policy, scoped, value))
+					case "None":
+						return inside.every((value) => !allows(policy, scoped, value))
+					default:
+						return true
+				}
+			},
+		)
+
+		it.prop(
+			"permits only the fields that decide allows",
+			{ specs: Schema.Array(Spec), bot: BotInput, request: Request },
+			({ specs, bot, request }) => {
+				const policy = build(specs, request)
+				const value = Bot.make({
+					...bot,
+					id: "b9",
+					settings: { model: "small", secret: "s" },
+				})
+				const principal = principals[request.principal]
+				const permitted = Effect.runSync(
+					Policy.permittedFields(policy, {
+						principal,
+						action: request.action,
+						resource: value,
+					}),
+				)
+				return permitted.every(
+					(field) =>
+						Policy.decideSync(policy, {
+							principal,
+							action: request.action,
+							resource: value,
+							// A field from the list is a field of a Bot.
+							field: field as never,
+						})._tag === "Allow",
+				)
+			},
+		)
 	})
 
 	it("checks the trigger rules too", () => {
