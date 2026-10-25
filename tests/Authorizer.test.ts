@@ -10,6 +10,7 @@ import {
 	Layer,
 	Ref,
 	Schema,
+	SchemaTransformation,
 } from "effect"
 import {
 	Authorizer,
@@ -629,6 +630,72 @@ describe("Authorizer", () => {
 						Effect.map(failureTag),
 					)
 				assert.strictEqual(yield* tagWith(false), yield* tagWith(undefined))
+			}),
+	)
+
+	it.effect(
+		"does not give one cached policy to two principals that one text decodes to",
+		() =>
+			Effect.gen(function* () {
+				// The Schema makes `expired` when it decodes, from the time now.
+				const clock = { now: 0 }
+				const Stored = Schema.Struct({
+					id: Schema.String,
+					until: Schema.Finite,
+				})
+				const Session = Schema.Struct({
+					id: Schema.String,
+					until: Schema.Finite,
+					expired: Schema.Boolean,
+				})
+				const Timed = Stored.pipe(
+					Schema.decodeTo(
+						Session,
+						SchemaTransformation.transform({
+							decode: (stored) => ({
+								...stored,
+								expired: clock.now >= stored.until,
+							}),
+							encode: ({ id, until }) => ({ id, until }),
+						}),
+					),
+				)
+				const Timeds = Domain.make({ principal: Timed, resources: [Bot] })
+				class CurrentTimed extends Context.Service<
+					CurrentTimed,
+					typeof Session.Type
+				>()("@nmnmcc/ability/tests/Authorizer.test/CurrentTimed") {}
+				class TimedAuth extends Authorizer.Service<TimedAuth>()(
+					"test/TimedAuth",
+					{
+						domain: Timeds,
+						principal: CurrentTimed,
+					},
+				) {}
+				const layer = Authorizer.layer(TimedAuth, {
+					policy: (session) =>
+						Effect.succeed(
+							Policy.define(Timeds)(function* (_) {
+								if (!session.expired) {
+									yield* _.allow("read", Bot)
+								}
+							}),
+						),
+				})
+				const exit = yield* Effect.gen(function* () {
+					yield* Effect.provideService(
+						TimedAuth.check({ action: "read", resource: aliceBot }),
+						CurrentTimed,
+						{ id: "s", until: 10, expired: false },
+					)
+					clock.now = 20
+					yield* Effect.provideService(
+						TimedAuth.check({ action: "read", resource: aliceBot }),
+						CurrentTimed,
+						{ id: "s", until: 10, expired: true },
+					)
+				}).pipe(Effect.provide(layer), Effect.exit)
+				assert.strictEqual(failureTag(exit), "Forbidden")
 			}),
 	)
 

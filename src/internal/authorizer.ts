@@ -93,19 +93,29 @@ type AnyTarget = {
 
 /**
  * A cache key for a principal. Two keys are equal when they have the same
- * text, so two principals with the same key share one policy. The key also
- * keeps the principal, so the cache can load its policy. A plain `Data` value
- * can not do both, so the key gives its own equality with `Equal.Equal`.
+ * text, so two principals with the same key share one policy. A key from the
+ * JSON form also needs equal decoded principals: a Schema may make data when
+ * it decodes, as `expired` from a time, so one text may give two principals.
+ * The key also keeps the principal, so the cache can load its policy. A plain
+ * `Data` value can not do all this, so the key gives its own equality with
+ * `Equal.Equal`.
  */
 class PrincipalKey implements Equal.Equal {
 	readonly principal: object
 	readonly text: string
-	constructor(principal: object, text: string) {
+	/** The key is the JSON form, so the decoded principals must be equal too. */
+	readonly exact: boolean
+	constructor(principal: object, text: string, exact: boolean) {
 		this.principal = principal
 		this.text = text
+		this.exact = exact
 	}
 	[Equal.symbol](that: unknown): boolean {
-		return that instanceof PrincipalKey && that.text === this.text
+		return (
+			that instanceof PrincipalKey &&
+			that.text === this.text &&
+			(!this.exact || Equal.equals(that.principal, this.principal))
+		)
 	}
 	[Hash.symbol](): number {
 		return Hash.string(this.text)
@@ -160,7 +170,7 @@ const jsonKey = (
 					onFailure: () => undefined,
 					onSuccess: (decoded) =>
 						Equal.equals(decoded, principal)
-							? new PrincipalKey(decoded as object, text)
+							? new PrincipalKey(decoded as object, text, true)
 							: undefined,
 				})
 			},
@@ -226,7 +236,7 @@ export const makeLayer = (
 		const text = custom(principal)
 		return text === undefined
 			? undefined
-			: new PrincipalKey(canonical?.principal ?? principal, text)
+			: new PrincipalKey(canonical?.principal ?? principal, text, false)
 	}
 	return Layer.effect(
 		service,
