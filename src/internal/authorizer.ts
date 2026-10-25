@@ -133,14 +133,17 @@ class PrincipalKey implements Equal.Equal {
 
 /**
  * The text of the order of the parts of a value: the names of the fields of
- * each object, and the items of each list, set and map, in the order that a
- * loop sees them. `Equal` does not see this order, but a loader may read it,
- * as `Object.values` does. So two keys need the same order too. A scalar has
- * no parts, and `Equal` compares it.
+ * each object, and the items of each list, set and map, with each scalar, in
+ * the order that a loop sees them. `Equal` does not see the order of the
+ * fields of an object or of the items of a map, but a loader may read it, as
+ * `Object.values` does. So two keys need the same order too. A scalar is in
+ * the text with its type, so the items of a set or a map show their order.
  */
 const orderOf = (value: unknown): string => {
 	if (typeof value !== "object" || value === null) {
-		return ""
+		return typeof value === "string"
+			? JSON.stringify(value)
+			: `${typeof value}:${String(value)}`
 	}
 	if (Array.isArray(value)) {
 		return `[${value.map(orderOf).join(",")}]`

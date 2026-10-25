@@ -762,6 +762,79 @@ describe("Authorizer", () => {
 			}),
 	)
 
+	it.effect(
+		"does not give one cached policy to two principals with a map in another order",
+		() =>
+			Effect.gen(function* () {
+				// The Schema makes the roles when it decodes, as a map in an order
+				// that comes from the time now. `Equal` does not see the order of
+				// a map.
+				const clock = { now: 0 }
+				const Stored = Schema.Struct({ id: Schema.String })
+				const Session = Schema.Struct({
+					id: Schema.String,
+					roles: Schema.ReadonlyMap(Schema.String, Schema.String),
+				})
+				const roles = (adminFirst: boolean) =>
+					new Map(
+						adminFirst
+							? [
+									["first", "admin"],
+									["second", "guest"],
+								]
+							: [
+									["second", "guest"],
+									["first", "admin"],
+								],
+					)
+				const Mapped = Stored.pipe(
+					Schema.decodeTo(
+						Session,
+						SchemaTransformation.transform({
+							decode: (stored): typeof Session.Type => ({
+								...stored,
+								roles: roles(clock.now === 0),
+							}),
+							encode: ({ id }) => ({ id }),
+						}),
+					),
+				)
+				const Mappeds = Domain.make({ principal: Mapped, resources: [Bot] })
+				class CurrentMapped extends Context.Service<
+					CurrentMapped,
+					typeof Session.Type
+				>()("@nmnmcc/ability/tests/Authorizer.test/CurrentMapped") {}
+				class MappedAuth extends Authorizer.Service<MappedAuth>()(
+					"test/MappedAuth",
+					{ domain: Mappeds, principal: CurrentMapped },
+				) {}
+				const layer = Authorizer.layer(MappedAuth, {
+					policy: (session) =>
+						Effect.succeed(
+							Policy.define(Mappeds)(function* (_) {
+								if (Array.from(session.roles.values())[0] === "admin") {
+									yield* _.allow("read", Bot)
+								}
+							}),
+						),
+				})
+				const exit = yield* Effect.gen(function* () {
+					yield* Effect.provideService(
+						MappedAuth.check({ action: "read", resource: aliceBot }),
+						CurrentMapped,
+						{ id: "s", roles: roles(true) },
+					)
+					clock.now = 1
+					yield* Effect.provideService(
+						MappedAuth.check({ action: "read", resource: aliceBot }),
+						CurrentMapped,
+						{ id: "s", roles: roles(false) },
+					)
+				}).pipe(Effect.provide(layer), Effect.exit)
+				assert.strictEqual(failureTag(exit), "Forbidden")
+			}),
+	)
+
 	it.effect("keeps no policy of a principal with no JSON form", () =>
 		Effect.gen(function* () {
 			const role = Symbol.for("@nmnmcc/ability/tests/role")
