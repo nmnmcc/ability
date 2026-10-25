@@ -105,9 +105,7 @@ const fromRules = (
 		)
 	}
 	// Every rule is bound to the domain here, also a rule from `Policy.rule`.
-	const issues = Arr.flatMap(node.rules, (value, index) =>
-		Bind.ruleIssues(domain, value, ["rules", index]),
-	)
+	const issues = Bind.treeIssues(domain, node)
 	if (issues.length > 0) {
 		throw PolicyError.make({
 			issues: Arr.map(issues, (issue) => ({

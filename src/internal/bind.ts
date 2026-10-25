@@ -7,6 +7,7 @@
  */
 import * as Arr from "effect/Array"
 import * as HashMap from "effect/HashMap"
+import * as MutableHashMap from "effect/MutableHashMap"
 import * as Option from "effect/Option"
 import * as Result from "effect/Result"
 import type * as Domain from "../Domain.ts"
@@ -31,9 +32,55 @@ export interface RuleData {
 	readonly fields?: ReadonlyArray<string>
 }
 
+/**
+ * The memo of one binding, for all its rules. A policy may name one wrong
+ * field or one pattern in very many places, so the work on each is done one
+ * time. It goes away when the binding ends.
+ */
+interface Memo {
+	/** The suggestion for each name, by the place where it was looked for. */
+	readonly suggestions: MutableHashMap.MutableHashMap<string, string>
+	/** If a pattern matches a field of a kind, by the kind and the pattern. */
+	readonly fits: MutableHashMap.MutableHashMap<string, boolean>
+}
+
+const makeMemo = (): Memo => ({
+	suggestions: MutableHashMap.empty(),
+	fits: MutableHashMap.empty(),
+})
+
+/**
+ * The most names that one binding makes a suggestion for. A suggestion
+ * compares the name with every name of a catalog, so a policy with very many
+ * wrong names would take a long time.
+ */
+const maxSuggestions = 32
+
+/** Adds a suggestion to a message, with the memo of the binding. */
+const suggestIn = (
+	memo: Memo,
+	message: string,
+	name: string,
+	scope: string,
+	names: () => ReadonlyArray<string>,
+): string => {
+	const key = `${scope}\u0000${name}`
+	const known = MutableHashMap.get(memo.suggestions, key)
+	if (Option.isSome(known)) {
+		return known.value
+	}
+	if (MutableHashMap.size(memo.suggestions) >= maxSuggestions) {
+		return message
+	}
+	const made = withSuggestion(message, name, names())
+	MutableHashMap.set(memo.suggestions, key, made)
+	return made
+}
+
 /** The kinds that a rule may run on, from the view of its checks. */
 interface Context {
 	readonly domain: Domain.Any
+	readonly memo: Memo
 	/** The rule is for every resource (`"*"`). */
 	readonly all: boolean
 	/** The resources that the rule names and that the domain has. */
@@ -116,7 +163,9 @@ const fieldIssue = (
 		: [
 				{
 					path: at,
-					issue: withSuggestion(message, field, namesOf(without[0]!.catalog)),
+					issue: suggestIn(context.memo, message, field, without[0]!.kind, () =>
+						namesOf(without[0]!.catalog),
+					),
 				},
 			]
 }
@@ -127,6 +176,7 @@ const fieldIssue = (
  * in a name does.
  */
 const patternIssues = (
+	memo: Memo,
 	known: ReadonlyArray<Resource.Descriptor>,
 	pattern: string,
 	at: ReadonlyArray<PropertyKey>,
@@ -136,9 +186,14 @@ const patternIssues = (
 		onSuccess: (parsed) =>
 			// A rule with no known resource has an issue for that already.
 			known.length === 0 ||
-			Arr.some(known, (descriptor) =>
-				Patterns.fitsCatalog(parsed, descriptor.catalog),
-			)
+			Arr.some(known, (descriptor) => {
+				const key = `${descriptor.kind}\u0000${pattern}`
+				return Option.getOrElse(MutableHashMap.get(memo.fits, key), () => {
+					const fits = Patterns.fitsCatalog(parsed, descriptor.catalog)
+					MutableHashMap.set(memo.fits, key, fits)
+					return fits
+				})
+			})
 				? []
 				: [
 						{
@@ -169,10 +224,12 @@ const principalField = (
 		? found
 		: {
 				path: at,
-				issue: withSuggestion(
+				issue: suggestIn(
+					context.memo,
 					`The principal has no field "${ref}"`,
 					ref,
-					namesOf(context.domain.principalCatalog),
+					"~principal",
+					() => namesOf(context.domain.principalCatalog),
 				),
 			}
 }
@@ -406,6 +463,7 @@ export const ruleIssues = (
 	domain: Domain.Any,
 	rule: RuleData,
 	at: ReadonlyArray<PropertyKey>,
+	memo: Memo = makeMemo(),
 ): ReadonlyArray<Issue> => {
 	const all = rule.resources.includes("*")
 	// Each kind is checked one time, also when the list names it again.
@@ -422,6 +480,7 @@ export const ruleIssues = (
 	)
 	const context: Context = {
 		domain,
+		memo,
 		all,
 		named,
 		applicable,
@@ -437,10 +496,12 @@ export const ruleIssues = (
 			Arr.filter(names, (kind) => !HashMap.has(domain.resources, kind)),
 			(kind): Issue => ({
 				path: [...at, "resources"],
-				issue: withSuggestion(
+				issue: suggestIn(
+					memo,
 					`There is no resource with the kind "${kind}"`,
 					kind,
-					kinds,
+					"~kinds",
+					() => kinds,
 				),
 			}),
 		),
@@ -451,16 +512,18 @@ export const ruleIssues = (
 			),
 			(action): Issue => ({
 				path: [...at, "actions"],
-				issue: withSuggestion(
+				issue: suggestIn(
+					memo,
 					`The action "${action}" is not an action of these resources`,
 					action,
-					actions,
+					`~actions\u0000${names.join(",")}`,
+					() => actions,
 				),
 			}),
 		),
 		...Arr.flatMap(rule.fields ?? [], (field, index) =>
 			field.includes("*")
-				? patternIssues(known, field, [...at, "fields", index])
+				? patternIssues(memo, known, field, [...at, "fields", index])
 				: fieldIssue(context, field, [...at, "fields", index]),
 		),
 		...(rule.when === undefined

@@ -1819,6 +1819,40 @@ describe("Policy", () => {
 		)
 	})
 
+	it("binds a policy with very many wrong names in a short time", () => {
+		const Wide = Resource.make("Wide", {
+			actions: ["read"],
+			fields: Object.fromEntries(
+				Array.from({ length: 1000 }, (_, index) => [
+					`field${String(index)}`,
+					Schema.String,
+				]),
+			),
+		})
+		const Wides = Domain.make({ principal: Caller, resources: [Wide] })
+		const start = Date.now()
+		const exit = Schema.decodeUnknownExit(Policy.schema(Wides))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Wide"],
+					when: {
+						_tag: "And",
+						conditions: Array.from({ length: 10_000 }, (_, index) => ({
+							_tag: "Exists",
+							field: `notfound${String(index % 100)}`,
+						})),
+					},
+				},
+			],
+		})
+		assert.isTrue(Exit.isFailure(exit))
+		assert.isBelow(Date.now() - start, 2000)
+	})
+
 	it("lets a name that a union branch does not have hold any value", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],
