@@ -449,13 +449,34 @@ export type ConditionFor<D, K> = Condition.Condition<
 >
 
 /**
- * The options of a rule.
+ * Checks each field of a rule: a field pattern with a star, or a name of the
+ * kinds `K`, of any length up to about 1000 parts. A name that is not a field
+ * gives the names that may come next, so the type error names them. See
+ * `Condition.NamePath`.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 2.1.0
+ */
+export type FieldsFor<D, K, Fields extends ReadonlyArray<string>> = {
+	readonly [I in keyof Fields]: Fields[I] extends `${string}*${string}`
+		? Fields[I]
+		: Condition.NamePath<DataFor<D, K>, Fields[I] & string>
+}
+
+/**
+ * The options of a rule. `Fields` is the list of the fields of the rule.
  *
  * @stability stable
  * @category models
  * @since 0.3.0
  */
-export interface RuleOptions<D, K, C extends Condition.Any> {
+export interface RuleOptions<
+	D,
+	K,
+	C extends Condition.Any,
+	Fields extends ReadonlyArray<string> = ReadonlyArray<FieldFor<D, K>>,
+> {
 	/** The condition. It gets a builder with the types of the resource. */
 	readonly when?: (
 		builder: Condition.Builder<
@@ -464,7 +485,7 @@ export interface RuleOptions<D, K, C extends Condition.Any> {
 			Domain.Principal<D>
 		>,
 	) => C
-	readonly fields?: ReadonlyArray<FieldFor<D, K>>
+	readonly fields?: Fields & FieldsFor<D, K, Fields>
 	readonly reason?: string
 	readonly id?: string
 	readonly meta?: Domain.Meta<D>
@@ -485,20 +506,22 @@ export interface Builder<D> {
 		const A extends ActionForTargets<D, Res>,
 		const C extends ConditionFor<D, KindOf<TargetOf<Res>>> =
 			Condition.Condition,
+		const Fields extends ReadonlyArray<string> = readonly [],
 	>(
 		action: SingleOrArray<A>,
 		resource: Res,
-		options?: RuleOptions<D, KindOf<TargetOf<Res>>, C>,
+		options?: RuleOptions<D, KindOf<TargetOf<Res>>, C, Fields>,
 	) => Rule<D, Condition.ReadsOf<C>, Condition.OpaqueOf<C>>
 	readonly deny: <
 		const Res extends SingleOrArray<RuleTarget<D>>,
 		const A extends ActionForTargets<D, Res>,
 		const C extends ConditionFor<D, KindOf<TargetOf<Res>>> =
 			Condition.Condition,
+		const Fields extends ReadonlyArray<string> = readonly [],
 	>(
 		action: SingleOrArray<A>,
 		resource: Res,
-		options?: RuleOptions<D, KindOf<TargetOf<Res>>, C>,
+		options?: RuleOptions<D, KindOf<TargetOf<Res>>, C, Fields>,
 	) => Rule<D, Condition.ReadsOf<C>, Condition.OpaqueOf<C>>
 }
 
