@@ -4561,6 +4561,45 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 1000)
 	})
 
+	it("reads a missing optional message of a Schema error as null", () => {
+		class Problem extends Schema.TaggedError<Problem>(
+			"@nmnmcc/ability/tests/Policy.test/OptionalProblem",
+		)("Problem", { message: Schema.optionalKey(Schema.String) }) {}
+		const Report = Resource.make("Report", {
+			actions: ["read"],
+			fields: { problem: Problem },
+		})
+		const Reports = Domain.make({ principal: Caller, resources: [Report] })
+		const policy = Policy.define(Reports)(function* (_) {
+			yield* _.deny("read", Report, {
+				when: ($) => $.exists("problem.message"),
+			})
+			yield* _.allow("read", Report)
+		})
+		const kind = { principal: alice, action: "read", kind: "Report" } as const
+		const residual = Policy.residual(policy, kind)
+		// With no message, the value has `message` only from `Error.prototype`.
+		Arr.forEach(
+			[Problem.make({}), Problem.make({ message: "m" })],
+			(problem) => {
+				const value = Report.make({ problem })
+				const decision = Policy.decideSync(policy, {
+					principal: alice,
+					action: "read",
+					resource: value,
+				})._tag
+				assert.strictEqual(
+					decision,
+					Object.hasOwn(problem, "message") ? "Deny" : "Allow",
+				)
+				assert.strictEqual(
+					Condition.evaluateSync(residual, { value }),
+					decision === "Allow",
+				)
+			},
+		)
+	})
+
 	it("tests a field pattern that a rule names many times one time on a long field", () => {
 		interface Node {
 			readonly a: Node | null

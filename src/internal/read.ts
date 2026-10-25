@@ -22,7 +22,10 @@ const prototypesOf = (value: object): ReadonlyArray<object> =>
  * - an own data field gives its value, with `null` for `undefined`;
  * - a part of `null`, of a scalar, or a missing field gives `null`;
  * - a name that the value has only from `Object.prototype`, such as
- *   `constructor`, gives `null`.
+ *   `constructor`, gives `null`;
+ * - a name that the value has only from `Error.prototype`, as `message` of a
+ *   `Schema.TaggedError` with an optional `message` and no message, gives
+ *   `null`: the Schema says that the field is missing.
  *
  * Any other field, such as a getter or a field from the prototype of a class,
  * is a defect. Its value is not data that the Schema
@@ -37,7 +40,11 @@ export const readPart = (value: unknown, name: string): unknown => {
 		const owner = Arr.findFirst(prototypesOf(value), (prototype) =>
 			Object.hasOwn(prototype, name),
 		)
-		if (Option.isNone(owner) || owner.value === Object.prototype) {
+		if (
+			Option.isNone(owner) ||
+			owner.value === Object.prototype ||
+			owner.value === Error.prototype
+		) {
 			return null
 		}
 		throw new Error(`The field "${name}" of the value is not plain data`)
