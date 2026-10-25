@@ -3013,6 +3013,52 @@ describe("Policy", () => {
 		assert.throws(() => decide(Owner.make({ id: "o" })), /not plain data/)
 	})
 
+	it("does not read a field that the simple form of a condition leaves out", () => {
+		class Owner extends Schema.Class<Owner>("SimpleOwner")({
+			id: Schema.String,
+		}) {
+			get flag(): string {
+				throw new globalThis.Error("no")
+			}
+		}
+		const Box = Resource.make("SimpleBox", {
+			actions: ["read"],
+			fields: {
+				box: Schema.Union([Owner, Schema.Struct({ flag: Schema.String })]),
+			},
+		})
+		const Boxes = Domain.make({ principal: Caller, resources: [Box] })
+		const policy = Policy.define(Boxes)(function* (_) {
+			yield* _.allow("read", Box)
+			yield* _.deny("read", Box, {
+				when: ($) => $.and($.eq("box.flag", "blocked"), Condition.never),
+			})
+			yield* _.deny("read", Box, {
+				when: ($) =>
+					$.and(
+						$.eq("box.flag", "blocked"),
+						$.eq("box.flag", $.principal("userId")),
+					),
+			})
+		})
+		// The guest has no user id, so the second deny rule never applies.
+		const request = {
+			principal: guest,
+			action: "read",
+			resource: Box.make({ box: Owner.make({ id: "o" }) }),
+		} as const
+		// The residual leaves out both deny rules, and so does the decision.
+		assert.deepStrictEqual(
+			Policy.residual(policy, {
+				principal: guest,
+				action: "read",
+				kind: "SimpleBox",
+			}),
+			Condition.always,
+		)
+		assert.strictEqual(Policy.decideSync(policy, request)._tag, "Allow")
+	})
+
 	it("does not take a scope that reads a getter", () => {
 		class Info extends Schema.Class<Info>("ScopeInfo")({
 			id: Schema.String,

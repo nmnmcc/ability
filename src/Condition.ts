@@ -851,7 +851,8 @@ type ReadsInput<I> =
 /**
  * Tests a condition on a value. A predicate may fail with its error. When the
  * condition has a predicate, the input must have the value and the principal
- * that the predicate reads.
+ * that the predicate reads. The test runs on the simple form of the condition
+ * with the principal in it, so it reads only the fields that a residual reads.
  *
  * @stability stable
  * @category evaluation

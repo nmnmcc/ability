@@ -259,8 +259,8 @@ const testUnder = (
 	})
 }
 
-/** Tests a condition with no predicate on a value. */
-export const evaluateSync = (node: Node, input: Input): boolean => {
+/** Tests a simple condition with no predicate on a value. */
+const testSync = (node: Node, input: Input): boolean => {
 	switch (node._tag) {
 		case "True":
 			return true
@@ -283,11 +283,11 @@ export const evaluateSync = (node: Node, input: Input): boolean => {
 		case "Under":
 			return testUnder(node.prefix, input)
 		case "And":
-			return Arr.every(node.conditions, (child) => evaluateSync(child, input))
+			return Arr.every(node.conditions, (child) => testSync(child, input))
 		case "Or":
-			return Arr.some(node.conditions, (child) => evaluateSync(child, input))
+			return Arr.some(node.conditions, (child) => testSync(child, input))
 		case "Not":
-			return !evaluateSync(node.condition, input)
+			return !testSync(node.condition, input)
 		case "Predicate":
 			// The types stop this. A predicate needs `evaluate`.
 			throw new Error(
@@ -297,37 +297,54 @@ export const evaluateSync = (node: Node, input: Input): boolean => {
 }
 
 /**
- * Tests a condition on a value. The children of `And` and `Or` run in order,
- * and they stop at the first child that gives the answer.
+ * Tests a simple condition on a value. The children of `And` and `Or` run in
+ * order, and they stop at the first child that gives the answer.
  */
-export const evaluate = (
+const test = (
 	node: Node,
 	input: Input,
 ): Effect.Effect<boolean, unknown, unknown> => {
 	if (!node.opaque) {
-		return Effect.sync(() => evaluateSync(node, input))
+		return Effect.sync(() => testSync(node, input))
 	}
 	switch (node._tag) {
 		case "Predicate":
 			return Nodes.runOf(node)(input.value, input.principal)
 		case "Not":
-			return Effect.map(evaluate(node.condition, input), (value) => !value)
+			return Effect.map(test(node.condition, input), (value) => !value)
 		case "And":
 			return Effect.map(
 				Effect.findFirst(node.conditions, (child) =>
-					Effect.map(evaluate(child, input), (value) => !value),
+					Effect.map(test(child, input), (value) => !value),
 				),
 				Option.isNone,
 			)
 		case "Or":
 			return Effect.map(
-				Effect.findFirst(node.conditions, (child) => evaluate(child, input)),
+				Effect.findFirst(node.conditions, (child) => test(child, input)),
 				Option.isSome,
 			)
 		default:
-			return Effect.sync(() => evaluateSync(node, input))
+			return Effect.sync(() => testSync(node, input))
 	}
 }
+
+/**
+ * Tests a condition with no predicate on a value. The test runs on the
+ * simple form of the condition with the principal in it, as a residual does.
+ * So a test reads only the fields that the residual reads: a read of a field
+ * that is not plain data is a defect, and a field that the answer does not
+ * need, as in `x AND False`, is not read.
+ */
+export const evaluateSync = (node: Node, input: Input): boolean =>
+	testSync(partial(node, input), input)
+
+/** Tests a condition on a value, as {@link evaluateSync} does. */
+export const evaluate = (
+	node: Node,
+	input: Input,
+): Effect.Effect<boolean, unknown, unknown> =>
+	Effect.suspend(() => test(partial(node, input), input))
 
 // The principal and the path
 

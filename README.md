@@ -211,7 +211,10 @@ resource of the rule. Did you mean "title"?
 
 A condition reads only the data fields of a value: an own field that a loop over
 the keys sees. A rule that names a getter of a class is a `PolicyError`. Use a
-predicate for a value that comes from code.
+predicate for a value that comes from code. A read of a field that is not data,
+as a getter in one branch of a union, is a defect. A test reads only the fields
+that the simple form of its condition needs, as the residual does: in
+`x AND False`, it does not read `x`.
 
 ## Conditions
 
