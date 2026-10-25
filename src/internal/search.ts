@@ -196,12 +196,13 @@ interface Search {
 	 */
 	readonly members: Map<Nodes.In, Set<string>>
 	/**
-	 * The texts of the structure of the conditions that the search found to be
-	 * unsatisfiable. A condition with the same structure has the same free
-	 * fields, so its answer is the same. The set only grows, so the steps of a
-	 * search may share it. It is a native `Set`, as in {@link dedupeCells}.
+	 * The keys of the conditions that the search found to be unsatisfiable:
+	 * see `Algebra.keyOf`. A condition with the same structure has the same
+	 * free fields, so its answer is the same. The set only grows, so the steps
+	 * of a search may share it. It is a native `Set`, as in
+	 * {@link dedupeCells}.
 	 */
-	readonly failed: Set<string>
+	readonly failed: Set<string | Node>
 	readonly budget: number
 }
 
@@ -364,10 +365,12 @@ const searchNode = (
 	if (node._tag === "False") {
 		return { assignment: Option.none(), state }
 	}
-	// The text reads all of the node. The step before counted the size of a
-	// larger node, so the budget counts this work too.
-	const text = Algebra.structureText(node)
-	if (search.failed.has(text)) {
+	// The key reads at most a small part of the node: a node with very many
+	// nodes, or with very many values in its `In` tests, is its own key. A
+	// step reads the nodes but not the values, which `membersOf` keeps, so the
+	// budget counts the size.
+	const key = Algebra.keyOf(node)
+	if (search.failed.has(key)) {
 		return { assignment: Option.none(), state }
 	}
 	if (state.steps + node.size > search.budget) {
@@ -400,7 +403,7 @@ const searchNode = (
 		},
 	)
 	if (Option.isNone(result.assignment)) {
-		search.failed.add(text)
+		search.failed.add(key)
 	}
 	return result
 }

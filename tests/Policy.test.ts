@@ -4454,6 +4454,56 @@ describe("Policy", () => {
 			)
 			assert.isBelow(Date.now() - begin, 1000)
 		})
+
+		it("searches an In test with very many values in a short time", () => {
+			const names = Arr.makeBy(500, (index) => String(index))
+			const result = load({
+				_tag: "And",
+				conditions: [
+					{
+						_tag: "In",
+						field: "id",
+						values: Arr.map(names, (value) => ({ _tag: "Literal", value })),
+					},
+					{
+						_tag: "In",
+						field: "level",
+						values: Arr.makeBy(300_000, () => ({
+							_tag: "Literal",
+							value: 0,
+						})),
+					},
+					...Arr.map(names, (value) => ({
+						_tag: "Or",
+						conditions: [
+							{
+								_tag: "Compare",
+								op: "ne",
+								field: "id",
+								value: { _tag: "Literal", value },
+							},
+							{
+								_tag: "Compare",
+								op: "eq",
+								field: "level",
+								value: { _tag: "Literal", value: 1 },
+							},
+						],
+					})),
+				],
+			})
+			assert.isTrue(Result.isSuccess(result))
+			if (Result.isFailure(result)) {
+				return
+			}
+			const begin = Date.now()
+			Policy.coverage(result.success, {
+				principal: alice,
+				action: "read",
+				kind: "Bot",
+			})
+			assert.isBelow(Date.now() - begin, 3000)
+		})
 	})
 
 	it("searches many values of one field without a deep stack", () => {
