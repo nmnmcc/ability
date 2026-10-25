@@ -493,41 +493,45 @@ const underIssues = (
 	const candidates = Arr.filter(context.paths, (descriptor) =>
 		mayStartWith(descriptor, strings),
 	)
-	return Arr.flatMap(prefix, (operand, index): ReadonlyArray<Issue> => {
-		const place = [...at, "prefix", index]
-		if (operand._tag === "Literal") {
+	return capped(
+		context.memo,
+		prefix,
+		(operand, index): ReadonlyArray<Issue> => {
+			const place = [...at, "prefix", index]
+			if (operand._tag === "Literal") {
+				return Arr.some(candidates, (descriptor) => {
+					const kinds = pathPartKinds(descriptor, index)
+					return typeof kinds === "object" && !fitsLiteral(kinds, operand.value)
+				})
+					? [
+							{
+								path: place,
+								issue: `The path part ${String(index)} can not hold the value ${JSON.stringify(operand.value)}`,
+							},
+						]
+					: []
+			}
+			const principal = principalField(context, operand.path, place)
+			if (isIssue(principal)) {
+				return [principal]
+			}
 			return Arr.some(candidates, (descriptor) => {
 				const kinds = pathPartKinds(descriptor, index)
-				return typeof kinds === "object" && !fitsLiteral(kinds, operand.value)
+				return kinds === undefined
+					? true
+					: typeof kinds === "string"
+						? !Catalog.accepts(principal.kinds, kinds)
+						: !meet(kinds, principal.kinds)
 			})
 				? [
 						{
 							path: place,
-							issue: `The path part ${String(index)} can not hold the value ${JSON.stringify(operand.value)}`,
+							issue: `The principal field "${operand.path}" can not hold a part of the path of the resource`,
 						},
 					]
 				: []
-		}
-		const principal = principalField(context, operand.path, place)
-		if (isIssue(principal)) {
-			return [principal]
-		}
-		return Arr.some(candidates, (descriptor) => {
-			const kinds = pathPartKinds(descriptor, index)
-			return kinds === undefined
-				? true
-				: typeof kinds === "string"
-					? !Catalog.accepts(principal.kinds, kinds)
-					: !meet(kinds, principal.kinds)
-		})
-			? [
-					{
-						path: place,
-						issue: `The principal field "${operand.path}" can not hold a part of the path of the resource`,
-					},
-				]
-			: []
-	})
+		},
+	)
 }
 
 const notWhole = (at: ReadonlyArray<PropertyKey>): Issue => ({
@@ -546,6 +550,28 @@ const maxIssues = 100
  * for an issue: see `Place`.
  */
 type At = Place.Place | undefined
+
+/**
+ * Gives the issues of the checks of the items of a list, as `Arr.flatMap`
+ * does. Past the most issues of the binding, the checks of the other items
+ * give none, so a very long list of wrong items, as the values of an `In`
+ * test, does not make a very long list of issues. The list belongs to this
+ * call.
+ */
+const capped = <A>(
+	memo: Memo,
+	items: ReadonlyArray<A>,
+	check: (item: A, index: number) => ReadonlyArray<Issue>,
+): ReadonlyArray<Issue> => {
+	const left = maxIssues - memo.issues.count + 1
+	const found: Array<Issue> = []
+	Arr.forEach(items, (item, index) => {
+		if (found.length < left) {
+			found.push(...check(item, index))
+		}
+	})
+	return found
+}
 
 /**
  * Puts the path of a node before the paths of its issues. A walk keeps no
@@ -634,22 +660,14 @@ const conditionIssues = (
 					if (!spendChecks(context.memo, node.values.length, fields.length)) {
 						return []
 					}
-					// Past the most issues of the binding, the checks of the other
-					// values give none, so a very long list of wrong values does not
-					// make a very long list of issues. The list belongs to this check.
-					const left = maxIssues - context.memo.issues.count + 1
-					const found: Array<Issue> = []
-					Arr.forEach(node.values, (operand, index) => {
-						if (found.length < left) {
-							found.push(
-								...operandIssues(context, node.field, fields, false, operand, [
-									"values",
-									index,
-								]),
-							)
-						}
-					})
-					return here(found)
+					return here(
+						capped(context.memo, node.values, (operand, index) =>
+							operandIssues(context, node.field, fields, false, operand, [
+								"values",
+								index,
+							]),
+						),
+					)
 				}
 				case "Exists":
 					return room(0) ? here(readIssues(context, node.field, ["field"])) : []

@@ -480,15 +480,19 @@ describe("Policy", () => {
 		}, 60_000)
 
 		it("makes no more than the most issues for a long list of wrong values, in a small heap", () => {
-			const output = execFileSync(
-				process.execPath,
-				[
-					"--max-old-space-size=128",
-					new URL("./scripts/wrong-in.ts", import.meta.url).pathname,
-				],
-				{ encoding: "utf8" },
-			)
-			assert.strictEqual(output.trim(), "failed")
+			// The values of an `In` test, and the parts of the prefix of an
+			// `Under` test.
+			Arr.forEach(["wrong-in.ts", "wrong-under.ts"], (script) => {
+				const output = execFileSync(
+					process.execPath,
+					[
+						"--max-old-space-size=128",
+						new URL(`./scripts/${script}`, import.meta.url).pathname,
+					],
+					{ encoding: "utf8" },
+				)
+				assert.strictEqual(output.trim(), "failed")
+			})
 		}, 60_000)
 
 		it("makes the catalog of a union that holds one union in many places, in a small heap", () => {
