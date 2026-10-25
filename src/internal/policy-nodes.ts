@@ -15,6 +15,7 @@ import * as Schema from "effect/Schema"
 import * as Rule from "./rule.ts"
 import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
+import * as Trampoline from "./trampoline.ts"
 
 /** The combining algorithms of a list of rules. The decoder reads this list too. */
 export const Algorithm = Schema.Literals([
@@ -202,15 +203,29 @@ export const isNode = (u: unknown): u is Node => u instanceof Base
  * into the condition of each rule takes the rules from this list first, so it
  * does not go down the levels of the tree and of a condition at once.
  */
-export const rulesOf = (node: Node): ReadonlyArray<Rule.Rule> => {
-	switch (node._tag) {
-		case "Rules":
-			return node.rules
-		case "All":
-		case "Any":
-		case "FirstOf":
-			return Arr.flatMap(node.policies, rulesOf)
-		case "Ceiling":
-			return [...rulesOf(node.cap), ...rulesOf(node.policy)]
-	}
-}
+export const rulesOf = (root: Node): ReadonlyArray<Rule.Rule> =>
+	// The walk takes the steps of a trampoline, so a deep tree does not fill
+	// the stack.
+	Trampoline.run(root.depth, (R) => {
+		const go = (node: Node): Trampoline.Step<ReadonlyArray<Rule.Rule>> => {
+			switch (node._tag) {
+				case "Rules":
+					return R.succeed(node.rules)
+				case "All":
+				case "Any":
+				case "FirstOf":
+					return R.map(
+						R.forEach(node.policies, (child) => R.suspend(() => go(child))),
+						Arr.flatten,
+					)
+				case "Ceiling":
+					return R.map(
+						R.forEach([node.cap, node.policy], (child) =>
+							R.suspend(() => go(child)),
+						),
+						Arr.flatten,
+					)
+			}
+		}
+		return go(root)
+	})

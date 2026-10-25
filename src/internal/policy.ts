@@ -19,6 +19,7 @@ import * as Nodes from "./nodes.ts"
 import * as PolicyJson from "./policy-json.ts"
 import * as PolicyNodes from "./policy-nodes.ts"
 import * as RuleData from "./rule.ts"
+import * as Trampoline from "./trampoline.ts"
 
 type Any = Policy.Any
 type Node = Policy.Node
@@ -191,28 +192,50 @@ const provideNode = (
 					}),
 		]),
 	)
-	const provide = (node: PolicyNodes.Node): PolicyNodes.Node => {
-		if (!node.opaque) {
-			return node
+	// The walk of the tree takes the steps of a trampoline, so a deep tree
+	// does not fill the stack.
+	return Trampoline.run(root.depth, (R) => {
+		const provide = (
+			node: PolicyNodes.Node,
+		): Trampoline.Step<PolicyNodes.Node> => {
+			if (!node.opaque) {
+				return R.succeed(node)
+			}
+			switch (node._tag) {
+				case "Rules":
+					return R.succeed(
+						new PolicyNodes.Rules({
+							algorithm: node.algorithm,
+							rules: Arr.map(
+								node.rules,
+								(value) => provided.get(value) ?? value,
+							),
+						}),
+					)
+				case "All":
+				case "Any":
+				case "FirstOf": {
+					const tag = node._tag
+					return R.map(
+						R.forEach(node.policies, (child) =>
+							R.suspend(() => provide(child)),
+						),
+						(policies) => new PolicyNodes[tag](policies),
+					)
+				}
+				case "Ceiling":
+					return R.flatMap(
+						R.suspend(() => provide(node.cap)),
+						(cap) =>
+							R.map(
+								R.suspend(() => provide(node.policy)),
+								(policy) => new PolicyNodes.Ceiling({ cap, policy }),
+							),
+					)
+			}
 		}
-		switch (node._tag) {
-			case "Rules":
-				return new PolicyNodes.Rules({
-					algorithm: node.algorithm,
-					rules: Arr.map(node.rules, (value) => provided.get(value) ?? value),
-				})
-			case "All":
-			case "Any":
-			case "FirstOf":
-				return new PolicyNodes[node._tag](Arr.map(node.policies, provide))
-			case "Ceiling":
-				return new PolicyNodes.Ceiling({
-					cap: provide(node.cap),
-					policy: provide(node.policy),
-				})
-		}
-	}
-	return provide(root)
+		return provide(root)
+	})
 }
 
 /** Gives the services in `context` to every predicate of a policy. */

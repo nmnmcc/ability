@@ -22,11 +22,13 @@ import { decideNode, fitsKind } from "./decide.ts"
 import * as DomainData from "./domain.ts"
 import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
+import * as Place from "./place.ts"
 import * as PolicyNodes from "./policy-nodes.ts"
 import { nodeOf } from "./policy.ts"
 import * as ResourceData from "./resource.ts"
 import * as RuleData from "./rule.ts"
 import * as Search from "./search.ts"
+import * as Trampoline from "./trampoline.ts"
 
 type Any = Policy.Any
 
@@ -149,90 +151,104 @@ const firstApplicableResidual = (
  * Gives the residual pair of a node. A shared child is worked again for each
  * place. The limits of the nodes and of a residual keep this work small.
  */
-const residualNode = (
-	node: PolicyNodes.Node,
+const residualNode = (root: PolicyNodes.Node, context: ResidualContext): Pair =>
+	// The walk of the tree takes the steps of a trampoline, so a deep tree
+	// does not fill the stack.
+	Trampoline.run(root.depth, (R) => {
+		const { and, not, or } = build
+		const children = (nodes: ReadonlyArray<PolicyNodes.Node>) =>
+			R.forEach(nodes, (child) => R.suspend(() => go(child)))
+		const go = (node: PolicyNodes.Node): Trampoline.Step<Pair> => {
+			switch (node._tag) {
+				case "Rules":
+					return R.succeed(rulesResidual(node, context))
+				case "All":
+					if (node.policies.length === 0) {
+						return R.succeed({ allow: never, deny: never })
+					}
+					return R.map(children(node.policies), (pairs) => {
+						const deny = or(pairs.map((pair) => pair.deny))
+						const allow = and([...pairs.map((pair) => pair.allow), not(deny)])
+						return { allow, deny }
+					})
+				case "Any":
+					return R.map(children(node.policies), (pairs) => {
+						const allow = or(pairs.map((pair) => pair.allow))
+						const deny = and([not(allow), or(pairs.map((pair) => pair.deny))])
+						return { allow, deny }
+					})
+				case "FirstOf":
+					// The first child that gives an answer wins.
+					return R.map(children(node.policies), (pairs) =>
+						Arr.reduceRight(
+							pairs,
+							{ allow: never, deny: never },
+							(rest: Pair, pair): Pair => ({
+								allow: or([pair.allow, and([not(pair.deny), rest.allow])]),
+								deny: or([pair.deny, and([not(pair.allow), rest.deny])]),
+							}),
+						),
+					)
+				case "Ceiling":
+					return R.flatMap(
+						R.suspend(() => go(node.cap)),
+						(cap) =>
+							R.map(
+								R.suspend(() => go(node.policy)),
+								(inner) => ({
+									allow: and([not(cap.deny), inner.allow]),
+									deny: or([cap.deny, inner.deny]),
+								}),
+							),
+					)
+			}
+		}
+		return go(root)
+	})
+
+/** The residual of a list of rules, by its combining algorithm. */
+const rulesResidual = (
+	node: PolicyNodes.Rules,
 	context: ResidualContext,
 ): Pair => {
 	const { and, not, or } = build
-	switch (node._tag) {
-		case "Rules": {
-			switch (node.algorithm) {
-				case "denyOverrides": {
-					const deny = or(
-						node.rules
-							.filter((value) => value._tag === "Deny")
-							.map((value) => ruleCondition(value, context)),
-					)
-					const allow = and([
-						not(deny),
-						or(
-							node.rules
-								.filter((value) => value._tag === "Allow")
-								.map((value) => ruleCondition(value, context)),
-						),
-					])
-					return { allow, deny }
-				}
-				case "permitOverrides": {
-					const allow = or(
-						node.rules
-							.filter((value) => value._tag === "Allow")
-							.map((value) => ruleCondition(value, context)),
-					)
-					const deny = and([
-						not(allow),
-						or(
-							node.rules
-								.filter((value) => value._tag === "Deny")
-								.map((value) => ruleCondition(value, context)),
-						),
-					])
-					return { allow, deny }
-				}
-				case "firstApplicable":
-					return firstApplicableResidual(node.rules, context)
-				case "lastApplicable":
-					return firstApplicableResidual(node.rules.slice().reverse(), context)
-			}
-		}
-		// falls through: every algorithm returns above
-		case "All": {
-			if (node.policies.length === 0) {
-				return { allow: never, deny: never }
-			}
-			const pairs = node.policies.map((child) => residualNode(child, context))
-			const deny = or(pairs.map((pair) => pair.deny))
-			const allow = and([...pairs.map((pair) => pair.allow), not(deny)])
-			return { allow, deny }
-		}
-		case "Any": {
-			const pairs = node.policies.map((child) => residualNode(child, context))
-			const allow = or(pairs.map((pair) => pair.allow))
-			const deny = and([not(allow), or(pairs.map((pair) => pair.deny))])
-			return { allow, deny }
-		}
-		case "FirstOf": {
-			// The first child that gives an answer wins.
-			return Arr.reduceRight(
-				node.policies,
-				{ allow: never, deny: never },
-				(rest: Pair, child): Pair => {
-					const pair = residualNode(child, context)
-					return {
-						allow: or([pair.allow, and([not(pair.deny), rest.allow])]),
-						deny: or([pair.deny, and([not(pair.allow), rest.deny])]),
-					}
-				},
+	switch (node.algorithm) {
+		case "denyOverrides": {
+			const deny = or(
+				node.rules
+					.filter((value) => value._tag === "Deny")
+					.map((value) => ruleCondition(value, context)),
 			)
+			const allow = and([
+				not(deny),
+				or(
+					node.rules
+						.filter((value) => value._tag === "Allow")
+						.map((value) => ruleCondition(value, context)),
+				),
+			])
+			return { allow, deny }
 		}
-		case "Ceiling": {
-			const cap = residualNode(node.cap, context)
-			const inner = residualNode(node.policy, context)
-			return {
-				allow: and([not(cap.deny), inner.allow]),
-				deny: or([cap.deny, inner.deny]),
-			}
+		case "permitOverrides": {
+			const allow = or(
+				node.rules
+					.filter((value) => value._tag === "Allow")
+					.map((value) => ruleCondition(value, context)),
+			)
+			const deny = and([
+				not(allow),
+				or(
+					node.rules
+						.filter((value) => value._tag === "Deny")
+						.map((value) => ruleCondition(value, context)),
+				),
+			])
+			return { allow, deny }
 		}
+		case "firstApplicable":
+			return firstApplicableResidual(node.rules, context)
+		case "lastApplicable":
+			return firstApplicableResidual(node.rules.slice().reverse(), context)
 	}
 }
 
@@ -252,28 +268,15 @@ interface PredicateContext {
 const usesPredicate = (
 	node: PolicyNodes.Node,
 	context: PredicateContext,
-): boolean => {
-	if (!node.opaque) {
-		return false
-	}
-	switch (node._tag) {
-		case "Rules":
-			return node.rules.some(
-				(value) =>
-					value.when !== undefined &&
-					Nodes.toNode(value.when).opaque &&
-					RuleData.matchesTarget(value, context),
-			)
-		case "All":
-		case "Any":
-		case "FirstOf":
-			return node.policies.some((child) => usesPredicate(child, context))
-		case "Ceiling":
-			return (
-				usesPredicate(node.cap, context) || usesPredicate(node.policy, context)
-			)
-	}
-}
+): boolean =>
+	node.opaque &&
+	Arr.some(
+		PolicyNodes.rulesOf(node),
+		(value) =>
+			value.when !== undefined &&
+			Nodes.toNode(value.when).opaque &&
+			RuleData.matchesTarget(value, context),
+	)
 
 /**
  * Makes the scope of a request, with the principal in it. A scope comes from
@@ -298,7 +301,7 @@ const scopeOf = (
 	const issues = Bind.ruleIssues(
 		domain,
 		{ actions: [request.action], resources: [request.kind], when: ast },
-		() => ["within"],
+		Place.at(undefined, "within"),
 	)
 	if (issues.length > 0) {
 		throw new globalThis.Error(
@@ -387,7 +390,7 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 				fits: RuleData.fitsOf(descriptor.catalog),
 				trace: undefined,
 			},
-			[],
+			undefined,
 		)
 	// A value of another kind is not a value that the residual is about, so
 	// the rules of this kind must not run on it.

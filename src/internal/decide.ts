@@ -19,7 +19,8 @@ import type * as Policy from "../Policy.ts"
 import type * as Resource from "../Resource.ts"
 import * as Catalog from "./catalog.ts"
 import * as DomainData from "./domain.ts"
-import type * as PolicyNodes from "./policy-nodes.ts"
+import * as Place from "./place.ts"
+import * as PolicyNodes from "./policy-nodes.ts"
 import { nodeOf } from "./policy.ts"
 import * as ResourceData from "./resource.ts"
 import * as RuleData from "./rule.ts"
@@ -43,10 +44,17 @@ interface DecideContext {
 	readonly trace: Ref.Ref<Chunk.Chunk<Step>> | undefined
 }
 
+/**
+ * The place of a node or a rule in a tree: the index of each child, then
+ * the index of the rule. It shares the path of its parent, and a decision
+ * makes the full path only for a step of `explain`: see `Place`.
+ */
+type At = Place.Place | undefined
+
 const ruleApplies = (
 	value: RuleData.Rule,
 	context: DecideContext,
-	path: ReadonlyArray<number>,
+	at: Place.Place,
 ): Effect.Effect<boolean, unknown, unknown> => {
 	if (!RuleData.matchesTarget(value, context)) {
 		return Effect.succeed(false)
@@ -62,7 +70,14 @@ const ruleApplies = (
 		? test
 		: Effect.tap(test, (applies) =>
 				// A chunk adds a step with no copy of the steps before.
-				Ref.update(trace, Chunk.append({ path, rule: typed(value), applies })),
+				Ref.update(
+					trace,
+					Chunk.append({
+						path: Place.pathOf(at) as ReadonlyArray<number>,
+						rule: typed(value),
+						applies,
+					}),
+				),
 			)
 }
 
@@ -80,11 +95,11 @@ const fromRule = (value: RuleData.Rule): Decision.Decision =>
 const firstApplying = (
 	candidates: ReadonlyArray<readonly [RuleData.Rule, number]>,
 	context: DecideContext,
-	path: ReadonlyArray<number>,
+	at: At,
 ): Effect.Effect<Option.Option<RuleData.Rule>, unknown, unknown> =>
 	Effect.map(
 		Effect.findFirst(candidates, ([value, index]) =>
-			ruleApplies(value, context, [...path, index]),
+			ruleApplies(value, context, Place.at(at, index)),
 		),
 		Option.map(([value]) => value),
 	)
@@ -99,13 +114,13 @@ const orElse = <A, E, R>(
 const decideRules = (
 	node: PolicyNodes.Rules,
 	context: DecideContext,
-	path: ReadonlyArray<number>,
+	at: At,
 ): Effect.Effect<Decision.Decision, unknown, unknown> => {
 	const indexed = Arr.map(node.rules, (value, index) => [value, index] as const)
 	const denies = Arr.filter(indexed, ([value]) => value._tag === "Deny")
 	const allows = Arr.filter(indexed, ([value]) => value._tag === "Allow")
 	const first = (candidates: ReadonlyArray<readonly [RuleData.Rule, number]>) =>
-		firstApplying(candidates, context, path)
+		firstApplying(candidates, context, at)
 	const found = (() => {
 		switch (node.algorithm) {
 			case "denyOverrides":
@@ -138,7 +153,7 @@ type WalkStep<S> =
 const walkChildren = <S>(
 	children: ReadonlyArray<PolicyNodes.Node>,
 	context: DecideContext,
-	path: ReadonlyArray<number>,
+	at: At,
 	start: S,
 	step: (state: S, decision: Decision.Decision) => WalkStep<S>,
 	end: (state: S) => Decision.Decision,
@@ -150,7 +165,11 @@ const walkChildren = <S>(
 		index === children.length
 			? Effect.succeed(end(state))
 			: Effect.flatMap(
-					decideNode(children[index]!, context, [...path, index]),
+					// Each call for a child is a step of the Effect, so a deep tree
+					// does not fill the stack.
+					Effect.suspend(() =>
+						decideNode(children[index]!, context, Place.at(at, index)),
+					),
 					(decision) => {
 						const next = step(state, decision)
 						return next._tag === "Stop"
@@ -176,17 +195,17 @@ const next = <S>(state: S): WalkStep<S> => ({ _tag: "Next", state })
 export const decideNode = (
 	node: PolicyNodes.Node,
 	context: DecideContext,
-	path: ReadonlyArray<number>,
+	at: At,
 ): Effect.Effect<Decision.Decision, unknown, unknown> => {
 	switch (node._tag) {
 		case "Rules":
-			return decideRules(node, context, path)
+			return decideRules(node, context, at)
 		case "All":
 			// One deny is enough to deny. Every child must allow.
 			return walkChildren(
 				node.policies,
 				context,
-				path,
+				at,
 				{
 					firstAllow: Option.none<Decision.Decision>(),
 					allAllow: node.policies.length > 0,
@@ -212,7 +231,7 @@ export const decideNode = (
 			return walkChildren(
 				node.policies,
 				context,
-				path,
+				at,
 				Option.none<Decision.Decision>(),
 				(firstDeny, decision) =>
 					decision._tag === "Allow"
@@ -231,7 +250,7 @@ export const decideNode = (
 			return walkChildren(
 				node.policies,
 				context,
-				path,
+				at,
 				undefined,
 				(_, decision) =>
 					decision._tag === "NotApplicable" ? next(undefined) : stop(decision),
@@ -240,9 +259,9 @@ export const decideNode = (
 		case "Ceiling":
 			// A deny of the cap wins. Else the policy decides.
 			return Effect.filterOrElse(
-				decideNode(node.cap, context, [...path, 0]),
+				Effect.suspend(() => decideNode(node.cap, context, Place.at(at, 0))),
 				(capped) => capped._tag === "Deny",
-				() => decideNode(node.policy, context, [...path, 1]),
+				() => decideNode(node.policy, context, Place.at(at, 1)),
 			)
 	}
 }
@@ -298,7 +317,7 @@ export const decideAny = (
 		const context = makeContext(policy.domain, request, undefined)
 		return context === undefined
 			? Effect.succeed(Decision.NotApplicable)
-			: decideNode(nodeOf(policy), context, [])
+			: decideNode(nodeOf(policy), context, undefined)
 	})
 
 /** Gives the decision of a policy with no predicates, at once. */
@@ -326,7 +345,7 @@ export const explain = (
 		if (context === undefined) {
 			return { decision: Decision.NotApplicable, steps: [] }
 		}
-		const decision = yield* decideNode(nodeOf(policy), context, [])
+		const decision = yield* decideNode(nodeOf(policy), context, undefined)
 		return { decision, steps: Chunk.toReadonlyArray(yield* Ref.get(trace)) }
 	})
 
@@ -334,35 +353,19 @@ export const explain = (
  * Tests if a deny rule of the request names a part inside `field`.
  */
 const deniesInside = (
-	node: PolicyNodes.Node,
+	rules: ReadonlyArray<RuleData.Rule>,
 	target: { readonly action: string; readonly kind: string },
 	field: string,
-): boolean => {
-	switch (node._tag) {
-		case "Rules":
-			return node.rules.some(
-				(value) =>
-					value._tag === "Deny" &&
-					value.fields !== undefined &&
-					value.fields.some((pattern) =>
-						RuleData.matchesInside(pattern, field),
-					) &&
-					(value.actions.includes("*") ||
-						value.actions.includes(target.action)) &&
-					(value.resources.includes("*") ||
-						value.resources.includes(target.kind)),
-			)
-		case "All":
-		case "Any":
-		case "FirstOf":
-			return node.policies.some((child) => deniesInside(child, target, field))
-		case "Ceiling":
-			return (
-				deniesInside(node.cap, target, field) ||
-				deniesInside(node.policy, target, field)
-			)
-	}
-}
+): boolean =>
+	Arr.some(
+		rules,
+		(value) =>
+			value._tag === "Deny" &&
+			value.fields !== undefined &&
+			value.fields.some((pattern) => RuleData.matchesInside(pattern, field)) &&
+			(value.actions.includes("*") || value.actions.includes(target.action)) &&
+			(value.resources.includes("*") || value.resources.includes(target.kind)),
+	)
 
 /** Gives the fields of a resource value that the policy lets a request use. */
 export const permittedFields = (
@@ -377,6 +380,8 @@ export const permittedFields = (
 	if (descriptor === undefined) {
 		return Effect.succeed([])
 	}
+	// The rules of the tree, in one flat list for all the fields.
+	const rules = policy.pipe(nodeOf, PolicyNodes.rulesOf)
 	// The fields with names only: a list can not name every key of a record.
 	const listed = Arr.filter(
 		descriptor.catalog.fields,
@@ -393,7 +398,7 @@ export const permittedFields = (
 					!(
 						field.open &&
 						deniesInside(
-							nodeOf(policy),
+							rules,
 							{ ...request, kind: descriptor.kind },
 							field.text,
 						)

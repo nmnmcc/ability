@@ -17,6 +17,7 @@ import * as Nodes from "./nodes.ts"
 import * as Patterns from "./patterns.ts"
 import * as Place from "./place.ts"
 import { withSuggestion } from "./suggest.ts"
+import * as Trampoline from "./trampoline.ts"
 
 /** One problem of a rule or a policy, with its path. */
 export interface Issue {
@@ -490,8 +491,11 @@ const notWhole = (at: ReadonlyArray<PropertyKey>): Issue => ({
  */
 const maxIssues = 100
 
-/** A path that the walk makes only when it needs it, for an issue. */
-type LazyPath = () => ReadonlyArray<PropertyKey>
+/**
+ * The place of a part of a policy, which a walk turns into a full path only
+ * for an issue: see `Place`.
+ */
+type At = Place.Place | undefined
 
 /**
  * Puts the path of a node before the paths of its issues. A walk keeps no
@@ -499,7 +503,7 @@ type LazyPath = () => ReadonlyArray<PropertyKey>
  */
 const under = (
 	memo: Memo,
-	at: LazyPath,
+	at: At,
 	issues: ReadonlyArray<Issue>,
 ): ReadonlyArray<Issue> => {
 	if (issues.length === 0) {
@@ -508,7 +512,7 @@ const under = (
 	const room = maxIssues - memo.issues.count
 	memo.issues.count += issues.length
 	const kept = Arr.map(Arr.take(issues, Math.max(room, 0)), (issue) => ({
-		path: [...at(), ...issue.path],
+		path: [...Place.pathOf(at), ...issue.path],
 		issue: issue.issue,
 	}))
 	const first = memo.issues.count > maxIssues && !memo.issues.noted
@@ -533,86 +537,95 @@ const under = (
  */
 const conditionIssues = (
 	context: Context,
-	node: Nodes.Node,
-	at: LazyPath,
+	root: Nodes.Node,
+	rootAt: At,
 	seen: Set<Nodes.Node>,
-): ReadonlyArray<Issue> => {
-	if (seen.has(node)) {
-		return []
-	}
-	seen.add(node)
-	const here = (issues: ReadonlyArray<Issue>) => under(context.memo, at, issues)
-	// A test looks its field up in each resource of the rule. A rule for very
-	// many kinds with very many tests is very much work, so it counts. Past
-	// the limit, `ruleIssues` gives one issue for it, and the policy does not
-	// load.
-	const room = (values: number) =>
-		spendChecks(context.memo, 1 + values, context.named.length)
-	switch (node._tag) {
-		case "Compare": {
-			if (!room(1)) {
-				return []
-			}
-			const exists = readIssues(context, node.field, ["field"])
-			return here(
-				exists.length > 0
-					? exists
-					: operandIssues(
-							context,
-							node.field,
-							distinctFields(context, node.field),
-							node.op !== "eq" && node.op !== "ne",
-							node.value,
-							["value"],
+): ReadonlyArray<Issue> =>
+	// The walk takes the steps of a trampoline, so a deep condition does not
+	// fill the stack.
+	Trampoline.run(root.depth, (R) => {
+		// A test looks its field up in each resource of the rule. A rule for
+		// very many kinds with very many tests is very much work, so it counts.
+		// Past the limit, `ruleIssues` gives one issue for it, and the policy
+		// does not load.
+		const room = (values: number) =>
+			spendChecks(context.memo, 1 + values, context.named.length)
+		const leaf = (node: Nodes.Node, at: At): ReadonlyArray<Issue> => {
+			const here = (issues: ReadonlyArray<Issue>) =>
+				under(context.memo, at, issues)
+			switch (node._tag) {
+				case "Compare": {
+					if (!room(1)) {
+						return []
+					}
+					const exists = readIssues(context, node.field, ["field"])
+					return here(
+						exists.length > 0
+							? exists
+							: operandIssues(
+									context,
+									node.field,
+									distinctFields(context, node.field),
+									node.op !== "eq" && node.op !== "ne",
+									node.value,
+									["value"],
+								),
+					)
+				}
+				case "In": {
+					if (!room(0)) {
+						return []
+					}
+					const exists = readIssues(context, node.field, ["field"])
+					if (exists.length > 0) {
+						return here(exists)
+					}
+					const fields = distinctFields(context, node.field)
+					if (!spendChecks(context.memo, node.values.length, fields.length)) {
+						return []
+					}
+					return here(
+						Arr.flatMap(node.values, (operand, index) =>
+							operandIssues(context, node.field, fields, false, operand, [
+								"values",
+								index,
+							]),
 						),
-			)
+					)
+				}
+				case "Exists":
+					return room(0) ? here(readIssues(context, node.field, ["field"])) : []
+				case "Under":
+					return here(underIssues(context, node.prefix, []))
+				default:
+					return []
+			}
 		}
-		case "In": {
-			if (!room(0)) {
-				return []
+		const go = (
+			node: Nodes.Node,
+			at: At,
+		): Trampoline.Step<ReadonlyArray<Issue>> => {
+			if (seen.has(node)) {
+				return R.succeed([])
 			}
-			const exists = readIssues(context, node.field, ["field"])
-			if (exists.length > 0) {
-				return here(exists)
+			seen.add(node)
+			switch (node._tag) {
+				case "And":
+				case "Or":
+					return R.map(
+						R.forEach(node.conditions, (child, index) =>
+							R.suspend(() => go(child, Place.at(at, "conditions", index))),
+						),
+						Arr.flatten,
+					)
+				case "Not":
+					return R.suspend(() => go(node.condition, Place.at(at, "condition")))
+				default:
+					return R.succeed(leaf(node, at))
 			}
-			const fields = distinctFields(context, node.field)
-			if (!spendChecks(context.memo, node.values.length, fields.length)) {
-				return []
-			}
-			return here(
-				Arr.flatMap(node.values, (operand, index) =>
-					operandIssues(context, node.field, fields, false, operand, [
-						"values",
-						index,
-					]),
-				),
-			)
 		}
-		case "Exists":
-			return room(0) ? here(readIssues(context, node.field, ["field"])) : []
-		case "Under":
-			return here(underIssues(context, node.prefix, []))
-		case "And":
-		case "Or":
-			return Arr.flatMap(node.conditions, (child, index) =>
-				conditionIssues(
-					context,
-					child,
-					() => [...at(), "conditions", index],
-					seen,
-				),
-			)
-		case "Not":
-			return conditionIssues(
-				context,
-				node.condition,
-				() => [...at(), "condition"],
-				seen,
-			)
-		default:
-			return []
-	}
-}
+		return go(root, rootAt)
+	})
 
 const hasAction = (
 	descriptor: Resource.Descriptor,
@@ -623,14 +636,14 @@ const hasAction = (
 
 /**
  * Checks one rule against a domain. It gives one issue for each problem, up
- * to the most issues of the binding. `at` gives the path of the rule, and it
- * is made only for an issue that the binding keeps: a rule with very many
- * problems deep in a tree does not make a full path for each one.
+ * to the most issues of the binding. `at` is the place of the rule, and its
+ * full path is made only for an issue that the binding keeps: a rule with
+ * very many problems deep in a tree does not make a full path for each one.
  */
 export const ruleIssues = (
 	domain: Domain.Any,
 	rule: RuleData,
-	at: LazyPath,
+	at: At,
 	memo: Memo = makeMemo(),
 ): ReadonlyArray<Issue> => {
 	const here = (issues: ReadonlyArray<Issue>) => under(memo, at, issues)
@@ -677,12 +690,7 @@ export const ruleIssues = (
 		rule.when === undefined
 			? []
 			: Nodes.isNode(rule.when)
-				? conditionIssues(
-						context,
-						rule.when,
-						() => [...at(), "when"],
-						new Set(),
-					)
+				? conditionIssues(context, rule.when, Place.at(at, "when"), new Set())
 				: here([notWhole(["when"])])
 	// The work is known only after every check of the rule. Past the limit, a
 	// check gives no issue, so this issue must come, or the policy would load
@@ -732,7 +740,7 @@ export const ruleIssues = (
 		...(work
 			? [
 					{
-						path: at(),
+						path: Place.pathOf(at),
 						issue: `The policy takes more than ${String(Limits.searchSteps)} steps to check: its field patterns, and the fields and values of its tests on each resource. The most is ${String(Limits.searchSteps)}.`,
 					},
 				]
@@ -760,46 +768,60 @@ export const treeIssues = (
 ): ReadonlyArray<Issue> => {
 	// The rules come out of the tree first, and each one is checked after.
 	// A check of a condition goes down its levels, so a check inside the walk
-	// of the tree would go down the levels of both.
-	// The place of each rule shares the path of its parent, and the full path
-	// is made only when its rule is checked. A deep tree with very many rules
-	// would need very much memory for a full copy of the path of each rule.
-	const rulesOf = (
-		node: TreeNode,
-		place: Place.Place | undefined,
-		level: number,
-	): ReadonlyArray<Issue | readonly [RuleData, Place.Place]> => {
+	// of the tree would go down the levels of both. The place of each rule
+	// shares the path of its parent. The tree may be the JSON form, with no
+	// depth that a node knows, so the walk is a walk of the trampoline for an
+	// input of an unknown depth.
+	type Found = Issue | readonly [RuleData, Place.Place]
+	const rulesOf = Trampoline.adaptive<
+		{ readonly node: TreeNode; readonly at: At },
+		ReadonlyArray<Found>
+	>((R, child) => ({ node, at }, level) => {
 		if (level > Limits.policyDepth) {
-			return [
+			return R.succeed([
 				{
-					path: Place.pathOf(place),
+					path: Place.pathOf(at),
 					issue: `A policy tree has more than ${String(Limits.policyDepth)} levels. The most is ${String(Limits.policyDepth)}.`,
 				},
-			]
+			])
 		}
 		switch (node._tag) {
 			case "Rules":
-				return Arr.map(
-					node.rules,
-					(rule, index) => [rule, Place.at(place, "rules", index)] as const,
+				return R.succeed(
+					Arr.map(
+						node.rules,
+						(rule, index) => [rule, Place.at(at, "rules", index)] as const,
+					),
 				)
 			case "All":
 			case "Any":
 			case "FirstOf":
-				return Arr.flatMap(node.policies, (child, index) =>
-					rulesOf(child, Place.at(place, "policies", index), level + 1),
+				return R.map(
+					R.forEach(node.policies, (inner, index) =>
+						child(
+							{ node: inner, at: Place.at(at, "policies", index) },
+							level + 1,
+						),
+					),
+					Arr.flatten,
 				)
 			case "Ceiling":
-				return [
-					...rulesOf(node.cap, Place.at(place, "cap"), level + 1),
-					...rulesOf(node.policy, Place.at(place, "policy"), level + 1),
-				]
+				return R.map(
+					R.forEach(
+						[
+							{ node: node.cap, at: Place.at(at, "cap") },
+							{ node: node.policy, at: Place.at(at, "policy") },
+						],
+						(part) => child(part, level + 1),
+					),
+					Arr.flatten,
+				)
 		}
-	}
+	})
 	const memo = makeMemo()
-	return Arr.flatMap(rulesOf(root, undefined, 1), (found) =>
+	return Arr.flatMap(rulesOf({ node: root, at: undefined }), (found) =>
 		Array.isArray(found)
-			? ruleIssues(domain, found[0], () => Place.pathOf(found[1]), memo)
+			? ruleIssues(domain, found[0], found[1], memo)
 			: [found as Issue],
 	)
 }
