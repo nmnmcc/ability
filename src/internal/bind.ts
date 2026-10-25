@@ -42,11 +42,14 @@ interface Memo {
 	readonly suggestions: MutableHashMap.MutableHashMap<string, string>
 	/** If a pattern matches a field of a kind, by the kind and the pattern. */
 	readonly fits: MutableHashMap.MutableHashMap<string, boolean>
+	/** The count of the issues of conditions so far. It belongs to one binding. */
+	readonly issues: { count: number; noted: boolean }
 }
 
 const makeMemo = (): Memo => ({
 	suggestions: MutableHashMap.empty(),
 	fits: MutableHashMap.empty(),
+	issues: { count: 0, noted: false },
 })
 
 /**
@@ -386,6 +389,46 @@ const notWhole = (at: ReadonlyArray<PropertyKey>): Issue => ({
 })
 
 /**
+ * The most issues that the walk of the conditions of one binding gives. A
+ * policy may have very many wrong tests, and each issue keeps its path.
+ */
+const maxIssues = 100
+
+/** A path that the walk makes only when it needs it, for an issue. */
+type LazyPath = () => ReadonlyArray<PropertyKey>
+
+/**
+ * Puts the path of a node before the paths of its issues. A walk keeps no
+ * path for a node with no issue, so a deep and wide condition costs little.
+ */
+const under = (
+	memo: Memo,
+	at: LazyPath,
+	issues: ReadonlyArray<Issue>,
+): ReadonlyArray<Issue> => {
+	if (issues.length === 0) {
+		return issues
+	}
+	const room = maxIssues - memo.issues.count
+	memo.issues.count += issues.length
+	const kept = Arr.map(Arr.take(issues, Math.max(room, 0)), (issue) => ({
+		path: [...at(), ...issue.path],
+		issue: issue.issue,
+	}))
+	const first = memo.issues.count > maxIssues && !memo.issues.noted
+	memo.issues.noted ||= first
+	return first
+		? [
+				...kept,
+				{
+					path: [],
+					issue: `The policy has more problems. The first ${String(maxIssues)} are here.`,
+				},
+			]
+		: kept
+}
+
+/**
  * The issues of a condition. The constructors of the nodes checked the shape
  * of each node, so this checks the names and the types against the domain. A
  * node that the condition uses in many places is checked one time. The nodes
@@ -395,52 +438,61 @@ const notWhole = (at: ReadonlyArray<PropertyKey>): Issue => ({
 const conditionIssues = (
 	context: Context,
 	node: Nodes.Node,
-	at: ReadonlyArray<PropertyKey>,
+	at: LazyPath,
 	seen: Set<Nodes.Node>,
 ): ReadonlyArray<Issue> => {
 	if (seen.has(node)) {
 		return []
 	}
 	seen.add(node)
+	const here = (issues: ReadonlyArray<Issue>) => under(context.memo, at, issues)
 	switch (node._tag) {
 		case "Compare": {
-			const exists = fieldIssue(context, node.field, [...at, "field"])
-			return exists.length > 0
-				? exists
-				: operandIssues(
-						context,
-						node.field,
-						node.op !== "eq" && node.op !== "ne",
-						node.value,
-						[...at, "value"],
-					)
+			const exists = fieldIssue(context, node.field, ["field"])
+			return here(
+				exists.length > 0
+					? exists
+					: operandIssues(
+							context,
+							node.field,
+							node.op !== "eq" && node.op !== "ne",
+							node.value,
+							["value"],
+						),
+			)
 		}
 		case "In": {
-			const exists = fieldIssue(context, node.field, [...at, "field"])
-			return exists.length > 0
-				? exists
-				: Arr.flatMap(node.values, (operand, index) =>
-						operandIssues(context, node.field, false, operand, [
-							...at,
-							"values",
-							index,
-						]),
-					)
+			const exists = fieldIssue(context, node.field, ["field"])
+			return here(
+				exists.length > 0
+					? exists
+					: Arr.flatMap(node.values, (operand, index) =>
+							operandIssues(context, node.field, false, operand, [
+								"values",
+								index,
+							]),
+						),
+			)
 		}
 		case "Exists":
-			return fieldIssue(context, node.field, [...at, "field"])
+			return here(fieldIssue(context, node.field, ["field"]))
 		case "Under":
-			return underIssues(context, node.prefix, at)
+			return here(underIssues(context, node.prefix, []))
 		case "And":
 		case "Or":
 			return Arr.flatMap(node.conditions, (child, index) =>
-				conditionIssues(context, child, [...at, "conditions", index], seen),
+				conditionIssues(
+					context,
+					child,
+					() => [...at(), "conditions", index],
+					seen,
+				),
 			)
 		case "Not":
 			return conditionIssues(
 				context,
 				node.condition,
-				[...at, "condition"],
+				() => [...at(), "condition"],
 				seen,
 			)
 		default:
@@ -529,7 +581,7 @@ export const ruleIssues = (
 		...(rule.when === undefined
 			? []
 			: Nodes.isNode(rule.when)
-				? conditionIssues(context, rule.when, [...at, "when"], new Set())
+				? conditionIssues(context, rule.when, () => [...at, "when"], new Set())
 				: [notWhole([...at, "when"])]),
 	]
 }

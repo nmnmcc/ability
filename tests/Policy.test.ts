@@ -5,6 +5,7 @@ import {
 	Effect,
 	Equal,
 	Exit,
+	Result,
 	Schema,
 	SchemaTransformation,
 } from "effect"
@@ -1987,6 +1988,33 @@ describe("Policy", () => {
 			String(Exit.isFailure(exit) ? exit.cause : ""),
 			"A fixed value is missing",
 		)
+	})
+
+	it("keeps at most 100 problems of a deep and wide condition", () => {
+		const Note = Resource.make("Note", {
+			actions: ["read"],
+			fields: { id: Schema.String },
+		})
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const wide = {
+			_tag: "And",
+			conditions: Array.from({ length: 99_000 }, () => ({
+				_tag: "Exists",
+				field: "bad",
+			})),
+		}
+		const when = Arr.reduce(Arr.range(1, 480), wide as unknown, (inner) => ({
+			_tag: "And",
+			conditions: [inner],
+		}))
+		const result = Schema.decodeUnknownResult(Policy.schema(Notes))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [{ _tag: "Allow", actions: ["read"], resources: ["Note"], when }],
+		})
+		assert.isTrue(Result.isFailure(result))
+		const text = String(Result.isFailure(result) ? result.failure : "")
+		assert.include(text, "The first 100 are here")
 	})
 
 	it("binds a very long wrong name in a short time", () => {
