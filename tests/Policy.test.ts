@@ -2421,6 +2421,32 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 2000)
 	})
 
+	it("checks each pair of a kind and a field pattern on its own", () => {
+		const Marked = Resource.make("A\u0000x", {
+			actions: ["read"],
+			fields: { ok: Schema.String },
+		})
+		const Plain = Resource.make("A", {
+			actions: ["read"],
+			fields: { ok: Schema.String },
+		})
+		const Both = Domain.make({ principal: Caller, resources: [Marked, Plain] })
+		const decode = Schema.decodeUnknownExit(Policy.schema(Both))
+		const rule = (kind: string, pattern: string) => ({
+			_tag: "Allow",
+			actions: ["read"],
+			resources: [kind],
+			fields: [pattern],
+		})
+		const wrong = rule("A", "x\u0000*")
+		const rules = (list: ReadonlyArray<unknown>) =>
+			decode({ _tag: "Rules", algorithm: "denyOverrides", rules: list })
+		// The pattern of the second rule matches no field of "A". A key of the
+		// kind and the pattern joined with a mark was the key of the first rule.
+		assert.isTrue(Exit.isFailure(rules([wrong])))
+		assert.isTrue(Exit.isFailure(rules([rule("A\u0000x", "*"), wrong])))
+	})
+
 	it("puts the limit of the work of the checks on a tree of policies", () => {
 		const Small = Domain.make({
 			principal: Caller,

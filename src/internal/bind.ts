@@ -79,10 +79,12 @@ const suggestIn = (
 	memo: Memo,
 	message: string,
 	name: string,
-	scope: string,
+	scope: ReadonlyArray<string>,
 	names: () => ReadonlyArray<string>,
 ): string => {
-	const key = `${scope}\u0000${name}`
+	// The text of a list of strings is a key with no two lists in one key,
+	// also when a name holds the marks that a join puts between them.
+	const key = JSON.stringify([scope, name])
 	const known = memo.suggestions.get(key)
 	if (known !== undefined) {
 		return known
@@ -200,8 +202,12 @@ const fieldIssue = (
 		: [
 				{
 					path: at,
-					issue: suggestIn(context.memo, message, field, without[0]!.kind, () =>
-						namesOf(without[0]!.catalog, context.memo.limits),
+					issue: suggestIn(
+						context.memo,
+						message,
+						field,
+						["kind", without[0]!.kind],
+						() => namesOf(without[0]!.catalog, context.memo.limits),
 					),
 				},
 			]
@@ -265,7 +271,9 @@ const patternIssues = (
 			const fits =
 				known.length === 0 ||
 				Arr.reduce(known, false, (before, descriptor) => {
-					const key = `${descriptor.kind}\u0000${pattern}`
+					// A kind or a pattern may hold any mark, so the key is the
+					// text of the pair as a list, which no other pair has.
+					const key = JSON.stringify([descriptor.kind, pattern])
 					return (
 						Option.getOrElse(Option.fromUndefinedOr(memo.fits.get(key)), () => {
 							// Each check of a pattern reads the steps of a catalog. The
@@ -340,7 +348,7 @@ const principalField = (
 					context.memo,
 					`The principal has no field "${ref}"`,
 					ref,
-					"~principal",
+					["principal"],
 					() => namesOf(context.domain.principalCatalog, context.memo.limits),
 				),
 			}
@@ -776,7 +784,7 @@ export const ruleIssues = (
 							memo,
 							`There is no resource with the kind "${kind}"`,
 							kind,
-							"~kinds",
+							["kinds"],
 							() => kinds,
 						),
 					},
@@ -795,7 +803,7 @@ export const ruleIssues = (
 							memo,
 							`The action "${action}" is not an action of these resources`,
 							action,
-							`~actions\u0000${names.join(",")}`,
+							["actions", ...names],
 							() => actions,
 						),
 					},
