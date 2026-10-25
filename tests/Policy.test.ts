@@ -12,6 +12,7 @@ import {
 	SchemaTransformation,
 } from "effect"
 import { Condition, Decision, Domain, Policy, Resource } from "../src/index.ts"
+import { readPart } from "../src/internal/read.ts"
 import * as RuleData from "../src/internal/rule.ts"
 import {
 	alice,
@@ -4683,6 +4684,45 @@ describe("Policy", () => {
 				decision === "Allow",
 			)
 		})
+	})
+
+	it("reads the stack of a Schema error, as the residual does", () => {
+		class Info extends Schema.TaggedError<Info>(
+			"@nmnmcc/ability/tests/Policy.test/StackInfo",
+		)("Info", { stack: Schema.String }) {}
+		const Report = Resource.make("Report", {
+			actions: ["read"],
+			fields: { info: Info },
+		})
+		const Reports = Domain.make({ principal: Caller, resources: [Report] })
+		const policy = Policy.define(Reports)(function* (_) {
+			yield* _.deny("read", Report, {
+				when: ($) => $.eq("info.stack", "secret"),
+			})
+			yield* _.allow("read", Report, { when: ($) => $.exists("info.stack") })
+		})
+		const kind = { principal: alice, action: "read", kind: "Report" } as const
+		const residual = Policy.residual(policy, kind)
+		// Node.js keeps the stack of an error as an accessor of the engine.
+		Arr.forEach(["secret", "open"], (stack) => {
+			const value = Report.make({ info: Info.make({ stack }) })
+			const decision = Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: value,
+			})._tag
+			assert.strictEqual(decision, stack === "secret" ? "Deny" : "Allow")
+			assert.strictEqual(
+				Condition.evaluateSync(residual, { value }),
+				decision === "Allow",
+			)
+		})
+		// Another getter is still not data.
+		const made = Object.defineProperty({}, "stack", {
+			get: () => "secret",
+			enumerable: true,
+		})
+		assert.throws(() => readPart(made, "stack"), /not plain data/)
 	})
 
 	it("reads a missing optional message of a Schema error as null", () => {

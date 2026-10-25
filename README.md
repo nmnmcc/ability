@@ -217,9 +217,10 @@ A condition reads only the data fields of a value: an own field with a value and
 no getter. A loop over the keys may not see it, as the `message` of a
 `Schema.TaggedError`. A field that the value has only from `Object.prototype` or
 `Error.prototype`, or only as a method of its class, reads `null`, as a missing
-field does. A rule that names a getter of a class is a `PolicyError`. Use a
-predicate for a value that comes from code. A condition may not read a field, of
-a resource or of the principal, below a value that may not be plain data: a
+field does. The `stack` of an error is read through the getter of the engine, as
+Node.js keeps it. A rule that names a getter of a class is a `PolicyError`. Use
+a predicate for a value that comes from code. A condition may not read a field,
+of a resource or of the principal, below a value that may not be plain data: a
 union with a struct or a class that does not have the field, a list, a date, or
 a value of `Schema.Unknown`. A decision may get a value made by hand, and such a
 value may have the field with any value, as a list. Such a rule is a

@@ -31,8 +31,9 @@ const prototypesOf = (value: object): ReadonlyArray<object> =>
  *   `null`: a method is code, not data, and the Schema says that the field
  *   is missing.
  *
- * Any other field, such as a getter or other data from the prototype of a
- * class, is a defect. Its value is not data that the Schema
+ * The `stack` of an error is read through the getter of the engine: see
+ * {@link engineStack}. Any other field, such as a getter or other data from
+ * the prototype of a class, is a defect. Its value is not data that the Schema
  * describes, and a read of it as `null` could let a value pass a deny rule.
  */
 export const readPart = (value: unknown, name: string): unknown => {
@@ -62,9 +63,36 @@ export const readPart = (value: unknown, name: string): unknown => {
 		throw new Error(`The field "${name}" of the value is not plain data`)
 	}
 	if (!("value" in property)) {
+		const stack = engineStack(value, name, property)
+		if (stack !== undefined) {
+			return stack
+		}
 		throw new Error(`The field "${name}" of the value is not plain data`)
 	}
 	return property.value === undefined ? null : property.value
+}
+
+/**
+ * Gives the `stack` of an error. Node.js keeps it as an own accessor, with a
+ * getter of the engine that every error shares, so a `Schema.TaggedError`
+ * with a `stack` field keeps its data there. The read takes it only when the
+ * getter is the one of a new `Error`, so a getter of a class still is a
+ * defect. It gives `undefined` for any other field.
+ */
+const engineStack = (
+	value: object,
+	name: string,
+	property: PropertyDescriptor,
+): unknown => {
+	if (name !== "stack" || property.get === undefined) {
+		return undefined
+	}
+	const engine = Object.getOwnPropertyDescriptor(new Error(), "stack")
+	if (engine?.get !== property.get) {
+		return undefined
+	}
+	const stack: unknown = property.get.call(value)
+	return stack ?? null
 }
 
 /** Reads a field of a value by the names of its parts. */
