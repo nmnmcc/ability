@@ -290,21 +290,25 @@ export class Not extends Base {
 	}
 }
 
-/** A test that runs an `Effect`. */
+/** The test of a predicate, with no types. */
+export type Run = (
+	value: unknown,
+	principal: unknown,
+) => Effect.Effect<boolean, unknown, unknown>
+
+/**
+ * A test that runs an `Effect`. Its test takes inputs of the type `never`, so
+ * no code can call it with a value of the wrong type: `Condition.evaluate`
+ * checks the input. Use {@link runOf} inside the library.
+ */
 export class Predicate extends Base {
 	readonly _tag = "Predicate"
 	declare readonly name: string
 	declare readonly run: (
-		value: unknown,
-		principal: unknown,
+		value: never,
+		principal: never,
 	) => Effect.Effect<boolean, unknown, unknown>
-	constructor(props: {
-		readonly name: string
-		readonly run: (
-			value: unknown,
-			principal: unknown,
-		) => Effect.Effect<boolean, unknown, unknown>
-	}) {
+	constructor(props: { readonly name: string; readonly run: Run }) {
 		if (typeof props.name !== "string" || typeof props.run !== "function") {
 			throw new Error("A predicate needs a name and a test")
 		}
@@ -314,6 +318,9 @@ export class Predicate extends Base {
 		)
 	}
 }
+
+/** Gives the test of a predicate, with no types. */
+export const runOf = (node: Predicate): Run => node.run as Run
 
 /** A node of a condition. */
 export type Node =

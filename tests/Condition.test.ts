@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Equal, Exit, pipe, Schema } from "effect"
+import { Effect, Equal, Exit, Schema } from "effect"
 import { Condition, Resource } from "../src/index.ts"
 import { alice, aliceBot, Bot, Caller, sharedBot } from "./fixtures.ts"
 
@@ -161,22 +161,6 @@ describe("Condition", () => {
 		}),
 	)
 
-	it.effect("works in a pipe", () =>
-		Effect.gen(function* () {
-			const condition = $.and(
-				$.under("org", $.principal("organizationId")),
-				$.eq("ownerUserId", $.principal("userId")),
-			)
-			const input = { value: aliceBot, principal: alice, path }
-			assert.isTrue(pipe(condition, Condition.evaluateSync(input)))
-			assert.isTrue(yield* pipe(condition, Condition.evaluate(input)))
-			assert.deepStrictEqual(
-				pipe(condition, Condition.partial({ principal: alice, path })),
-				Condition.partial(condition, { principal: alice, path }),
-			)
-		}),
-	)
-
 	it("keeps a condition as JSON", () => {
 		const condition = $.and(
 			$.under("org", $.principal("organizationId")),
@@ -197,10 +181,8 @@ describe("Condition", () => {
 		const failing = $.predicate("offline", () => Effect.fail("offline"))
 		const run = (
 			condition: Condition.Condition<
-				string,
-				never,
-				Condition.Opaque,
-				Condition.Reads<Bot, Caller>
+				Condition.Reads<Bot, Caller>,
+				Condition.Opaque<string>
 			>,
 		) =>
 			Effect.exit(
@@ -372,7 +354,7 @@ describe("Condition", () => {
 			object,
 			never
 		>()
-		type Plain = Condition.Condition<never, never, never, any>
+		type Plain = Condition.Condition<any>
 		const tagOf = (condition: Plain) =>
 			Condition.satisfiable(condition, { schema: Shape })._tag
 

@@ -38,7 +38,7 @@ import type * as Redacted from "effect/Redacted"
 import type * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import { dual } from "effect/Function"
-import { hasProperty, isObject } from "effect/Predicate"
+import { hasProperty } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import * as SchemaIssue from "effect/SchemaIssue"
 import * as SchemaTransformation from "effect/SchemaTransformation"
@@ -57,7 +57,7 @@ import * as Resource from "./Resource.ts"
  * @category models
  * @since 0.3.0
  */
-export type Scalar = string | number | boolean | null
+export type Scalar = Nodes.Scalar
 
 /**
  * A fixed value in a condition.
@@ -66,10 +66,7 @@ export type Scalar = string | number | boolean | null
  * @category models
  * @since 0.3.0
  */
-export interface Literal {
-	readonly _tag: "Literal"
-	readonly value: Scalar
-}
+export type Literal = Nodes.Literal
 
 /**
  * A field of the principal. {@link partial} puts the value of the field in its
@@ -84,18 +81,13 @@ export interface Literal {
  * @category models
  * @since 0.3.0
  */
-export interface PrincipalRef {
-	readonly _tag: "Principal"
-	readonly path: string
-}
+export type PrincipalRef = Nodes.PrincipalRef
 
 /**
  * A field of the principal with a known value type `A`, from a principal of
- * the type `P`. The type fields are only in the types. A reference with no
- * type does not have them, so it can not stand for a field of any type. A
- * test with the reference reads a principal of the type `P`, so it can not go
- * into a rule of a domain with another principal. With no `P`, it is `never`,
- * and a test with the reference fits no rule.
+ * the type `P`. The type fields are only in the types. A test with the
+ * reference reads a principal of the type `P`, so it can not go into a rule
+ * of a domain with another principal.
  *
  * @stability stable
  * @category models
@@ -118,7 +110,7 @@ export type Operand = Literal | PrincipalRef
  * @category models
  * @since 0.3.0
  */
-export type CompareOperator = "eq" | "ne" | "lt" | "lte" | "gt" | "gte"
+export type CompareOperator = Nodes.CompareOperator
 
 /**
  * Always true.
@@ -127,9 +119,7 @@ export type CompareOperator = "eq" | "ne" | "lt" | "lte" | "gt" | "gte"
  * @category models
  * @since 0.3.0
  */
-export interface True {
-	readonly _tag: "True"
-}
+export type True = Nodes.True
 
 /**
  * Always false.
@@ -138,9 +128,7 @@ export interface True {
  * @category models
  * @since 0.3.0
  */
-export interface False {
-	readonly _tag: "False"
-}
+export type False = Nodes.False
 
 /**
  * Compares a field with a value. A missing field has the value `null`. `lt`,
@@ -151,12 +139,7 @@ export interface False {
  * @category models
  * @since 0.3.0
  */
-export interface Compare {
-	readonly _tag: "Compare"
-	readonly op: CompareOperator
-	readonly field: string
-	readonly value: Operand
-}
+export type Compare = Nodes.Compare
 
 /**
  * True when a field is equal to one of the values.
@@ -165,11 +148,7 @@ export interface Compare {
  * @category models
  * @since 0.3.0
  */
-export interface In {
-	readonly _tag: "In"
-	readonly field: string
-	readonly values: ReadonlyArray<Operand>
-}
+export type In = Nodes.In
 
 /**
  * True when a field is not `null` and not missing.
@@ -178,10 +157,7 @@ export interface In {
  * @category models
  * @since 0.3.0
  */
-export interface Exists {
-	readonly _tag: "Exists"
-	readonly field: string
-}
+export type Exists = Nodes.Exists
 
 /**
  * True when the path of the resource starts with the prefix. A resource with
@@ -191,40 +167,28 @@ export interface Exists {
  * @category models
  * @since 0.3.0
  */
-export interface Under {
-	readonly _tag: "Under"
-	readonly prefix: ReadonlyArray<Operand>
-}
+export type Under = Nodes.Under
 
 /**
  * @stability stable
  * @category models
  * @since 0.3.0
  */
-export interface And {
-	readonly _tag: "And"
-	readonly conditions: ReadonlyArray<Ast>
-}
+export type And = Nodes.And
 
 /**
  * @stability stable
  * @category models
  * @since 0.3.0
  */
-export interface Or {
-	readonly _tag: "Or"
-	readonly conditions: ReadonlyArray<Ast>
-}
+export type Or = Nodes.Or
 
 /**
  * @stability stable
  * @category models
  * @since 0.3.0
  */
-export interface Not {
-	readonly _tag: "Not"
-	readonly condition: Ast
-}
+export type Not = Nodes.Not
 
 /**
  * A test that runs an `Effect`. It can not become JSON or a query.
@@ -233,43 +197,58 @@ export interface Not {
  * @category models
  * @since 0.3.0
  */
-export interface Predicate {
-	readonly _tag: "Predicate"
-	readonly name: string
-	// A method, so the typed `run` of `PredicateCondition`, with inputs of the
-	// type `never`, is a `run` of this node too.
-	run(value: any, principal: any): Effect.Effect<boolean, unknown, unknown>
-}
+export type Predicate = Nodes.Predicate
 
 /**
- * The nodes of a condition, without types.
+ * The nodes of a condition, without types. Each node is a class, and only the
+ * builder, the functions of this module and the Schema make one. So a plain
+ * object, or a spread of a node, is not a node.
  *
  * @stability stable
  * @category models
  * @since 0.3.0
  */
-export type Ast =
-	True | False | Compare | In | Exists | Under | And | Or | Not | Predicate
+export type Ast = Nodes.Node
 
 /**
- * The type marker for a condition with a {@link Predicate}.
+ * The mark of a condition with a predicate. `E` and `R` are the error type
+ * and the service type of its predicates.
  *
  * @stability stable
  * @category models
- * @since 0.3.0
+ * @since 2.0.0
  */
-export type Opaque = "Opaque"
+export interface Opaque<out E = never, out R = never> {
+	readonly "~Opaque": { readonly E: E; readonly R: R }
+}
 
 /**
+ * The error type of the predicates of a mark `X`.
+ *
  * @stability stable
- * @category models
- * @since 0.3.0
+ * @category utility types
+ * @since 2.0.0
  */
-export interface Variance<E, R, O> {
-	readonly E: () => E
-	readonly R: () => R
-	readonly O: () => O
-}
+export type ErrorOf<X> = X extends Opaque<infer E, infer _R> ? E : never
+
+/**
+ * The service type of the predicates of a mark `X`.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 2.0.0
+ */
+export type ServicesOf<X> = X extends Opaque<infer _E, infer R> ? R : never
+
+/**
+ * The mark `X` with no services.
+ *
+ * @stability stable
+ * @category utility types
+ * @since 2.0.0
+ */
+export type Provided<X> =
+	X extends Opaque<infer E, infer _R> ? Opaque<E> : never
 
 /**
  * What the predicates of a condition read: a resource value of the type `V`
@@ -285,115 +264,23 @@ export interface Reads<V, P> {
 }
 
 /**
- * The type fields of a condition. They are only in the types.
+ * A condition. `I` is what its tests read: see {@link Reads}. `X` is
+ * {@link Opaque} when the condition has a predicate, and `never` when it is
+ * plain data. A plain condition can become JSON or a query.
  *
- * @stability stable
- * @category models
- * @since 1.0.0
- */
-export interface Marks<E, R, O, I> {
-	readonly "~Condition": Variance<E, R, O>
-	/** `I` is what the predicates read. See {@link Reads}. */
-	readonly "~Reads": (reads: I) => void
-}
-
-/**
- * An `And` node with the types of its children.
- *
- * @stability stable
- * @category models
- * @since 1.0.0
- */
-export interface AndCondition<E, R, O, I> extends Marks<E, R, O, I> {
-	readonly _tag: "And"
-	readonly conditions: ReadonlyArray<Condition<E, R, O, I>>
-}
-
-/**
- * An `Or` node with the types of its children.
- *
- * @stability stable
- * @category models
- * @since 1.0.0
- */
-export interface OrCondition<E, R, O, I> extends Marks<E, R, O, I> {
-	readonly _tag: "Or"
-	readonly conditions: ReadonlyArray<Condition<E, R, O, I>>
-}
-
-/**
- * A `Not` node with the types of its child.
- *
- * @stability stable
- * @category models
- * @since 1.0.0
- */
-export interface NotCondition<E, R, O, I> extends Marks<E, R, O, I> {
-	readonly _tag: "Not"
-	readonly condition: Condition<E, R, O, I>
-}
-
-/**
- * A predicate node with its types. `"~Predicate"` is only in the types. It has
- * the type `O`, so a plain condition, with `O` as `never`, can not be a
- * predicate. The builder makes predicates with `O` as {@link Opaque}.
- *
- * @stability stable
- * @category models
- * @since 1.0.0
- */
-export interface PredicateCondition<E, R, O, I> extends Marks<E, R, O, I> {
-	readonly _tag: "Predicate"
-	readonly name: string
-	/**
-	 * The test. Its inputs have the type `never`, so it can not be called with
-	 * a value that it does not read. Use {@link evaluate}, which checks the
-	 * input against `I`.
-	 */
-	readonly run: PredicateRun<E, R, I>
-	readonly "~Predicate": O
-}
-
-/**
- * The test of a predicate node. The type field `"~Reads"` is only in the
- * types. It ties the test to what it reads, so the test of one predicate can
- * not go into a node that says it reads other values.
- *
- * @stability stable
- * @category models
- * @since 1.0.0
- */
-export type PredicateRun<E, R, I> = ((
-	value: never,
-	principal: never,
-) => Effect.Effect<boolean, E, R>) & {
-	// Required, so a plain function, with no such field, is not the test of a
-	// predicate. Only the builder makes one.
-	readonly "~Reads": (reads: I) => void
-}
-
-/**
- * A condition. `E` and `R` are the error type and the service type of its
- * predicates. `O` is {@link Opaque} when the condition has a predicate, and
- * `never` when it is plain data. `I` is what its predicates read. See
- * {@link Reads}.
- *
- * The type fields are only in the types. A plain node made by hand does not
- * have them, so it is not a condition. Use the builder. Each child of a node
- * is a condition with the same types, so a node can not hide the types of a
- * predicate inside it. A predicate is a condition only when `O` is
- * {@link Opaque}.
+ * The two type fields are only in the types. `I` goes into a function as an
+ * input, so a condition that reads a `Post` does not fit a rule for a
+ * `Comment`. `X` comes out of a function, so a plain condition fits where a
+ * condition with predicates may go.
  *
  * @stability stable
  * @category models
  * @since 0.3.0
  */
-export type Condition<E = never, R = never, O = never, I = unknown> =
-	| ((True | False | Compare | In | Exists | Under) & Marks<E, R, O, I>)
-	| AndCondition<E, R, O, I>
-	| OrCondition<E, R, O, I>
-	| NotCondition<E, R, O, I>
-	| PredicateCondition<E, R, O, I>
+export type Condition<I = unknown, X = never> = Ast & {
+	readonly "~Reads": (reads: I) => void
+	readonly "~Opaque": () => X
+}
 
 /**
  * Any condition.
@@ -402,37 +289,11 @@ export type Condition<E = never, R = never, O = never, I = unknown> =
  * @category models
  * @since 0.3.0
  */
-export type Any = Condition<any, any, any, any>
+export type Any = Condition<any, any>
 
 /**
- * The error type of a condition.
- *
- * @stability stable
- * @category utility types
- * @since 0.3.0
- */
-export type Error<C> = C extends {
-	readonly "~Condition"?: Variance<infer E, infer _R, infer _O>
-}
-	? E
-	: never
-
-/**
- * The service type of a condition.
- *
- * @stability stable
- * @category utility types
- * @since 0.3.0
- */
-export type Services<C> = C extends {
-	readonly "~Condition"?: Variance<infer _E, infer R, infer _O>
-}
-	? R
-	: never
-
-/**
- * What the predicates of a condition read. For a union of conditions, it is
- * what all of them read.
+ * What the tests of a condition read. For a union of conditions, it is what
+ * all of them read.
  *
  * @stability stable
  * @category utility types
@@ -445,41 +306,14 @@ export type ReadsOf<C> = [C] extends [
 	: unknown
 
 /**
- * `unknown` when a condition is a condition of its own type fields: each of
- * its children has them too. A node made with a spread may keep the type
- * fields of another node, and then it is `never`, so the call stops.
- *
- * @stability stable
- * @category utility types
- * @since 1.0.0
- */
-export type Checked<C> = [NotChecked<C>] extends [never] ? unknown : never
-
-/**
- * The members of a union of conditions that do not fit their own type fields.
- * Each member is checked alone, so a good member does not hide a bad one.
- */
-type NotChecked<C> =
-	C extends Condition<Error<C>, Services<C>, OpaqueOf<C>, ReadsOf<C>>
-		? never
-		: C
-
-/** Each condition, checked with {@link Checked}. */
-type Consistent<Cs extends ReadonlyArray<Any>> = {
-	readonly [K in keyof Cs]: Cs[K] & Checked<Cs[K]>
-}
-
-/**
- * {@link Opaque} when a condition has a predicate.
+ * The mark of a condition: {@link Opaque} when it has a predicate.
  *
  * @stability stable
  * @category utility types
  * @since 0.3.0
  */
-export type OpaqueOf<C> = C extends {
-	readonly "~Condition"?: Variance<infer _E, infer _R, infer O>
-}
-	? O
+export type OpaqueOf<C> = C extends { readonly "~Opaque": () => infer X }
+	? X
 	: never
 
 type Leaf = string | number | boolean | bigint | symbol | null | undefined
@@ -632,12 +466,7 @@ type OrderedPath<T> = {
  * @category models
  * @since 1.0.0
  */
-export type Test<Value, P = unknown> = Condition<
-	never,
-	never,
-	never,
-	Reads<Value, P>
->
+export type Test<Value, P = unknown> = Condition<Reads<Value, P>>
 
 /**
  * The principal type that a test reads: the principal of each field of the
@@ -729,24 +558,14 @@ export interface Builder<Data, Value, P> {
 		field: F,
 	) => Ref<PathValue<P, F>, P>
 	readonly and: <const Cs extends ReadonlyArray<Any>>(
-		...conditions: Consistent<Cs>
-	) => Condition<
-		Error<Cs[number]>,
-		Services<Cs[number]>,
-		OpaqueOf<Cs[number]>,
-		ReadsOf<Cs[number]>
-	>
+		...conditions: Cs
+	) => Condition<ReadsOf<Cs[number]>, OpaqueOf<Cs[number]>>
 	readonly or: <const Cs extends ReadonlyArray<Any>>(
-		...conditions: Consistent<Cs>
-	) => Condition<
-		Error<Cs[number]>,
-		Services<Cs[number]>,
-		OpaqueOf<Cs[number]>,
-		ReadsOf<Cs[number]>
-	>
+		...conditions: Cs
+	) => Condition<ReadsOf<Cs[number]>, OpaqueOf<Cs[number]>>
 	readonly not: <C extends Any>(
-		condition: C & Checked<C>,
-	) => Condition<Error<C>, Services<C>, OpaqueOf<C>, ReadsOf<C>>
+		condition: C,
+	) => Condition<ReadsOf<C>, OpaqueOf<C>>
 	/**
 	 * A test that runs any code. It may give a boolean or an `Effect`. A
 	 * condition with a predicate can not become JSON or a query.
@@ -757,7 +576,7 @@ export interface Builder<Data, Value, P> {
 			value: Value,
 			principal: P,
 		) => boolean | Effect.Effect<boolean, E, R>,
-	) => Condition<E, R, Opaque, Reads<Value, P>>
+	) => Condition<Reads<Value, P>, Opaque<E, R>>
 }
 
 const isOperand = (u: unknown): u is Operand =>
@@ -853,13 +672,10 @@ export const never: Condition = Nodes.never as never
  * @since 0.3.0
  */
 export const and: <const Cs extends ReadonlyArray<Any>>(
-	...conditions: Consistent<Cs>
-) => Condition<
-	Error<Cs[number]>,
-	Services<Cs[number]>,
-	OpaqueOf<Cs[number]>,
-	ReadsOf<Cs[number]>
-> = ((...conditions: ReadonlyArray<Ast>) => andOf(conditions)) as never
+	...conditions: Cs
+) => Condition<ReadsOf<Cs[number]>, OpaqueOf<Cs[number]>> = ((
+	...conditions: ReadonlyArray<Ast>
+) => andOf(conditions)) as never
 
 /**
  * The same as {@link and}, for a list of conditions of one type. Use it for a
@@ -870,8 +686,8 @@ export const and: <const Cs extends ReadonlyArray<Any>>(
  * @since 1.0.0
  */
 export const andAll: <C extends Any>(
-	conditions: ReadonlyArray<C & Checked<C>>,
-) => Condition<Error<C>, Services<C>, OpaqueOf<C>, ReadsOf<C>> = andOf as never
+	conditions: ReadonlyArray<C>,
+) => Condition<ReadsOf<C>, OpaqueOf<C>> = andOf as never
 
 /**
  * The same as {@link or}, for a list of conditions of one type. Use it for a
@@ -882,8 +698,8 @@ export const andAll: <C extends Any>(
  * @since 1.0.0
  */
 export const orAll: <C extends Any>(
-	conditions: ReadonlyArray<C & Checked<C>>,
-) => Condition<Error<C>, Services<C>, OpaqueOf<C>, ReadsOf<C>> = orOf as never
+	conditions: ReadonlyArray<C>,
+) => Condition<ReadsOf<C>, OpaqueOf<C>> = orOf as never
 
 /**
  * True when one of the conditions is true. With no conditions, it is false.
@@ -893,13 +709,10 @@ export const orAll: <C extends Any>(
  * @since 0.3.0
  */
 export const or: <const Cs extends ReadonlyArray<Any>>(
-	...conditions: Consistent<Cs>
-) => Condition<
-	Error<Cs[number]>,
-	Services<Cs[number]>,
-	OpaqueOf<Cs[number]>,
-	ReadsOf<Cs[number]>
-> = ((...conditions: ReadonlyArray<Ast>) => orOf(conditions)) as never
+	...conditions: Cs
+) => Condition<ReadsOf<Cs[number]>, OpaqueOf<Cs[number]>> = ((
+	...conditions: ReadonlyArray<Ast>
+) => orOf(conditions)) as never
 
 /**
  * @stability stable
@@ -907,9 +720,8 @@ export const or: <const Cs extends ReadonlyArray<Any>>(
  * @since 0.3.0
  */
 export const not: <C extends Any>(
-	condition: C & Checked<C>,
-) => Condition<Error<C>, Services<C>, OpaqueOf<C>, ReadsOf<C>> =
-	makeNot as never
+	condition: C,
+) => Condition<ReadsOf<C>, OpaqueOf<C>> = makeNot as never
 
 /**
  * The data that a condition needs for a test.
@@ -954,11 +766,14 @@ export const hasPredicate = (condition: Ast): boolean =>
 export const provideContext: {
 	<R>(
 		context: Context.Context<R>,
-	): <E, O, I>(condition: Condition<E, R, O, I>) => Condition<E, never, O, I>
-	<E, R, O, I>(
-		condition: Condition<E, R, O, I>,
-		context: Context.Context<R>,
-	): Condition<E, never, O, I>
+	): <I, X>(
+		condition: Condition<I, X> &
+			([ServicesOf<X>] extends [R] ? unknown : never),
+	) => Condition<I, Provided<X>>
+	<I, X>(
+		condition: Condition<I, X>,
+		context: Context.Context<ServicesOf<X>>,
+	): Condition<I, Provided<X>>
 } = dual(2, (condition: Ast, context: Context.Context<never>): Ast =>
 	Algebra.provide(nodeOf(condition), context),
 ) as never
@@ -975,12 +790,6 @@ type ReadsInput<I> =
 		: unknown
 
 /**
- * `unknown` when `In` gives what `I` reads, and `never` when it does not. For
- * a union, each member must give it, so the test is not split over the union.
- */
-type ReadsFrom<I, In> = [In] extends [ReadsInput<I>] ? unknown : never
-
-/**
  * Tests a condition on a value. A predicate may fail with its error. When the
  * condition has a predicate, the input must have the value and the principal
  * that the predicate reads.
@@ -989,21 +798,14 @@ type ReadsFrom<I, In> = [In] extends [ReadsInput<I>] ? unknown : never
  * @category evaluation
  * @since 0.3.0
  */
-export const evaluate: {
-	<In extends Input>(
-		input: In,
-	): <E, R, O, I>(
-		condition: Condition<E, R, O, I> & ReadsFrom<I, In>,
-	) => Effect.Effect<boolean, E, R>
-	<E, R, O, I, In extends Input>(
-		condition: Condition<E, R, O, I>,
-		input: In & ReadsInput<I>,
-	): Effect.Effect<boolean, E, R>
-} = dual(
-	2,
-	(condition: Ast, input: Input): Effect.Effect<boolean, unknown, unknown> =>
-		Effect.suspend(() => Algebra.evaluate(nodeOf(condition), input)),
-) as never
+export const evaluate: <I, X, In extends Input>(
+	condition: Condition<I, X>,
+	input: In & ReadsInput<I>,
+) => Effect.Effect<boolean, ErrorOf<X>, ServicesOf<X>> = ((
+	condition: Ast,
+	input: Input,
+): Effect.Effect<boolean, unknown, unknown> =>
+	Effect.suspend(() => Algebra.evaluate(nodeOf(condition), input))) as never
 
 /**
  * Tests a condition with no predicate on a value, at once.
@@ -1012,21 +814,11 @@ export const evaluate: {
  * @category evaluation
  * @since 0.3.0
  */
-export const evaluateSync: {
-	// The input must have the value that the condition reads, as in
-	// `evaluate`. A residual of one kind can not test a value of another kind.
-	<In extends Input>(
-		input: In,
-	): <I>(
-		condition: Condition<never, never, never, I> & ReadsFrom<I, In>,
-	) => boolean
-	<I, In extends Input>(
-		condition: Condition<never, never, never, I>,
-		input: In & ReadsInput<I>,
-	): boolean
-} = dual(2, (condition: Ast, input: Input): boolean =>
-	Algebra.evaluateSync(nodeOf(condition), input),
-)
+export const evaluateSync: <I, In extends Input>(
+	condition: Condition<I>,
+	input: In & ReadsInput<I>,
+) => boolean = (condition: Ast, input: Input): boolean =>
+	Algebra.evaluateSync(nodeOf(condition), input)
 
 /**
  * Makes a condition smaller without a change to its meaning. It removes `True`
@@ -1037,10 +829,8 @@ export const evaluateSync: {
  * @category evaluation
  * @since 0.3.0
  */
-export const simplify: <E, R, O, I>(
-	condition: Condition<E, R, O, I>,
-) => Condition<E, R, O, I> = ((condition: Ast) =>
-	Algebra.simplify(nodeOf(condition))) as never
+export const simplify: <I, X>(condition: Condition<I, X>) => Condition<I, X> =
+	((condition: Ast) => condition.pipe(nodeOf, Algebra.simplify)) as never
 
 interface PartialInput {
 	readonly principal?: object | undefined
@@ -1059,9 +849,6 @@ type PrincipalInput<I> =
 			: { readonly principal: P }
 		: unknown
 
-/** `unknown` when `In` gives what `I` reads, and `never` when it does not. */
-type PrincipalFrom<I, In> = [In] extends [PrincipalInput<I>] ? unknown : never
-
 /** What a condition reads after {@link partial}: the value, and no principal. */
 type Bound<I> = I extends Reads<infer V, infer _P> ? Reads<V, unknown> : I
 
@@ -1075,19 +862,11 @@ type Bound<I> = I extends Reads<infer V, infer _P> ? Reads<V, unknown> : I
  * @category evaluation
  * @since 0.3.0
  */
-export const partial: {
-	<In extends PartialInput>(
-		input: In,
-	): <E, R, O, I>(
-		condition: Condition<E, R, O, I> & PrincipalFrom<I, In>,
-	) => Condition<E, R, O, Bound<I>>
-	<E, R, O, I>(
-		condition: Condition<E, R, O, I>,
-		input: PartialInput & PrincipalInput<I>,
-	): Condition<E, R, O, Bound<I>>
-} = dual(2, (condition: Ast, input: PartialInput): Ast =>
-	Algebra.partial(nodeOf(condition), input),
-)
+export const partial: <I, X>(
+	condition: Condition<I, X>,
+	input: PartialInput & PrincipalInput<I>,
+) => Condition<Bound<I>, X> = ((condition: Ast, input: PartialInput): Ast =>
+	Algebra.partial(nodeOf(condition), input)) as never
 
 /**
  * The functions that change each node of a condition into another form, such
@@ -1217,7 +996,7 @@ export const fold: {
  * @since 0.3.0
  */
 export const fields = (condition: Ast): ReadonlyArray<string> =>
-	Algebra.fields(nodeOf(condition))
+	condition.pipe(nodeOf, Algebra.fields)
 
 // Satisfiability
 
@@ -1286,22 +1065,19 @@ export interface SatisfiableOptions {
  * @category evaluation
  * @since 1.0.0
  */
-export const satisfiable: {
-	(options?: SatisfiableOptions): (condition: Any) => Satisfiability
-	(condition: Any, options?: SatisfiableOptions): Satisfiability
-} = dual(
-	(args) => isObject(args[0]) && hasProperty(args[0], "_tag"),
-	(condition: Ast, options: SatisfiableOptions = {}): Satisfiability =>
-		Search.satisfiable(
-			nodeOf(condition),
-			Search.kindsIn(
-				options.schema === undefined
-					? undefined
-					: Catalog.catalogOf(options.schema.ast),
-			),
-			options.budget,
+export const satisfiable = (
+	condition: Any,
+	options: SatisfiableOptions = {},
+): Satisfiability =>
+	Search.satisfiable(
+		nodeOf(condition),
+		Search.kindsIn(
+			options.schema === undefined
+				? undefined
+				: Catalog.catalogOf(options.schema.ast),
 		),
-) as never
+		options.budget,
+	)
 
 /**
  * Gives a condition as a value that `JSON.stringify` keeps with no loss. JSON
@@ -1316,7 +1092,18 @@ export const satisfiable: {
  * @since 1.0.0
  */
 export const toJsonValue = (condition: Ast): unknown =>
-	Json.toJson(nodeOf(condition))
+	condition.pipe(nodeOf, Json.toJson)
+
+/**
+ * The JSON form of an operand.
+ *
+ * @stability stable
+ * @category models
+ * @since 2.0.0
+ */
+export type EncodedOperand =
+	| { readonly _tag: "Literal"; readonly value: Scalar }
+	| { readonly _tag: "Principal"; readonly path: string }
 
 /**
  * The JSON form of a condition with no predicate.
@@ -1326,37 +1113,26 @@ export const toJsonValue = (condition: Ast): unknown =>
  * @since 0.3.0
  */
 export type Encoded =
-	Exclude<Ast, Predicate | And | Or | Not> | EncodedAnd | EncodedOr | EncodedNot
-
-/**
- * @stability stable
- * @category models
- * @since 0.3.0
- */
-export interface EncodedAnd {
-	readonly _tag: "And"
-	readonly conditions: ReadonlyArray<Encoded>
-}
-
-/**
- * @stability stable
- * @category models
- * @since 0.3.0
- */
-export interface EncodedOr {
-	readonly _tag: "Or"
-	readonly conditions: ReadonlyArray<Encoded>
-}
-
-/**
- * @stability stable
- * @category models
- * @since 0.3.0
- */
-export interface EncodedNot {
-	readonly _tag: "Not"
-	readonly condition: Encoded
-}
+	| { readonly _tag: "True" }
+	| { readonly _tag: "False" }
+	| {
+			readonly _tag: "Compare"
+			readonly op: CompareOperator
+			readonly field: string
+			readonly value: EncodedOperand
+	  }
+	| {
+			readonly _tag: "In"
+			readonly field: string
+			readonly values: ReadonlyArray<EncodedOperand>
+	  }
+	| { readonly _tag: "Exists"; readonly field: string }
+	| { readonly _tag: "Under"; readonly prefix: ReadonlyArray<EncodedOperand> }
+	| {
+			readonly _tag: "And" | "Or"
+			readonly conditions: ReadonlyArray<Encoded>
+	  }
+	| { readonly _tag: "Not"; readonly condition: Encoded }
 
 /**
  * A condition with no predicate, that may read any values. It is the type of
@@ -1370,7 +1146,7 @@ export interface EncodedNot {
  */
 // `any` for what it reads: the field is contravariant, so no other type both
 // takes every condition and fits every rule.
-export type PlainCondition = Condition<never, never, never, any>
+export type PlainCondition = Condition<any>
 
 /**
  * The Schema of a condition with no predicate. It checks the shape only. Use

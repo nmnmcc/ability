@@ -16,6 +16,7 @@ import {
 	App,
 	Bot,
 	Caller,
+	emptyOf,
 	Trigger,
 } from "./fixtures.ts"
 
@@ -112,16 +113,12 @@ describe("Rule", () => {
 		})
 		expect(rule).type.toBe<
 			Policy.Rule<
-				"no quota",
-				never,
-				Condition.Opaque,
 				App,
-				Condition.Reads<Bot, Caller>
+				Condition.Reads<Bot, Caller>,
+				Condition.Opaque<"no quota">
 			>
 		>()
-		expect(_.allow("read", Bot)).type.toBe<
-			Policy.Rule<never, never, never, App>
-		>()
+		expect(_.allow("read", Bot)).type.toBe<Policy.Rule<App>>()
 	})
 
 	it("checks the extra data", () => {
@@ -166,8 +163,9 @@ describe("Policy", () => {
 	it("takes only rules of its own domain", () => {
 		const Other = Domain.make({ principal: Caller, resources: [Trigger] })
 		const rule = Policy.builder(App).allow("read", Bot)
-		expect(Policy.rules).type.toBeCallableWith(App, [rule])
-		expect(Policy.rules).type.not.toBeCallableWith(Other, [rule])
+		expect(Policy.define(App)).type.toBeCallableWith(function* () {
+			yield* rule
+		})
 		expect(Policy.define(Other)).type.not.toBeCallableWith(function* () {
 			yield* rule
 		})
@@ -182,18 +180,25 @@ describe("Policy", () => {
 		const policy = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot, { when: () => named })
 		})
-		const bare: Omit<typeof policy, "~Policy"> = policy
+		const bare: Omit<typeof policy, "~Opaque"> = policy
 		expect(Policy.all).type.not.toBeCallableWith([bare])
 		expect(Policy.all).type.toBeCallableWith([policy])
 		const rule = Policy.builder(App).allow("read", Bot, { when: () => named })
-		const bareRule: Omit<typeof rule, "~Rule"> = rule
-		expect(Policy.rules).type.not.toBeCallableWith(App, [bareRule])
-		expect(Policy.rules).type.toBeCallableWith(App, [rule])
+		const bareRule: Omit<typeof rule, "~Opaque"> = rule
+		// A rule gives itself with all its types, so `yield*` keeps them.
+		expect(
+			Policy.define(App)(function* () {
+				yield* bareRule
+			}),
+		).type.toBe<Policy.Policy<App, Condition.Opaque>>()
+		expect(Policy.define(App)).type.toBeCallableWith(function* () {
+			yield* rule
+		})
 	})
 
 	it("keeps the domain of a policy", () => {
 		const Other = Domain.make({ principal: Caller, resources: [Bot] })
-		const other = Policy.empty(Other)
+		const other = emptyOf(Other)
 		expect<Policy.Policy<App>>().type.not.toBeAssignableFrom(other)
 	})
 
@@ -272,7 +277,7 @@ describe("Policy", () => {
 		expect(Schema.encodeSync(Condition.schema)).type.toBeCallableWith(
 			$.eq("id", "i"),
 		)
-		const residual = Policy.residual(Policy.empty(App), {
+		const residual = Policy.residual(emptyOf(App), {
 			principal: alice,
 			action: "read",
 			kind: "Bot",
@@ -336,28 +341,26 @@ describe("Policy", () => {
 		})
 	})
 
-	it("keeps the kind of a residual with the request first", () => {
+	it("does not take a residual of an action that the kind has not", () => {
 		const policy = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot, {
 				when: ($) => $.predicate("named", (bot) => bot.name !== ""),
 			})
 		})
-		const residual = Policy.residual({
+		const residual = Policy.residual(policy, {
 			principal: alice,
 			action: "read",
 			kind: "Bot",
-		})(policy)
+		})
 		expect(Condition.evaluate).type.not.toBeCallableWith(residual, {
 			value: aliceTrigger,
 		})
-		const fly = Policy.residual({
+		expect(Policy.residual).type.not.toBeCallableWith(policy, {
 			principal: alice,
 			action: "fly",
 			kind: "Bot",
 		})
-		expect(fly).type.not.toBeCallableWith(policy)
 	})
-
 	it("takes a scope only with the policy first", () => {
 		const policy = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot)
@@ -369,9 +372,7 @@ describe("Policy", () => {
 				kind: "Bot",
 				within: ($) => $.eq("ownerUserId", $.principal("userId")),
 			}),
-		).type.toBe<
-			Policy.Coverage<never, never, never, Policy.ResidualReads<App, "Bot">>
-		>()
+		).type.toBe<Policy.Coverage<Policy.ResidualReads<App, "Bot">, never>>()
 		expect(Policy.residual).type.not.toBeCallableWith({
 			principal: alice,
 			action: "read",
@@ -548,7 +549,7 @@ describe("Policy", () => {
 		const input = { value: aliceBot, principal: alice } as
 			| { readonly value: Bot; readonly principal: Caller }
 			| { readonly value: typeof aliceTrigger; readonly principal: Caller }
-		expect(Condition.evaluate(input)).type.not.toBeCallableWith(named)
+		expect(Condition.evaluate).type.not.toBeCallableWith(named, input)
 		const request = { principal: alice, action: "read", kind: "Bot" } as
 			| {
 					readonly principal: Caller
@@ -560,9 +561,7 @@ describe("Policy", () => {
 					readonly action: "fly"
 					readonly kind: "Bot"
 			  }
-		expect(Policy.residual(request)).type.not.toBeCallableWith(
-			Policy.empty(App),
-		)
+		expect(Policy.residual).type.not.toBeCallableWith(emptyOf(App), request)
 	})
 
 	it("keeps the domain of the rules of a node", () => {
@@ -571,7 +570,10 @@ describe("Policy", () => {
 			yield* _.allow("read", Bot)
 		}).node
 		if (node._tag === "Rules") {
-			expect(Policy.rules).type.not.toBeCallableWith(Other, node.rules)
+			// The rules of a node have no types, so they go into no policy.
+			expect(Policy.define(Other)).type.not.toBeCallableWith(function* () {
+				yield* node.rules
+			})
 		}
 	})
 
@@ -624,22 +626,19 @@ describe("Policy", () => {
 		})
 	})
 
-	it("does not let a rule hide in the node of a plain policy", () => {
+	it("does not take a node made by hand as the node of a policy", () => {
 		const quota = Policy.builder(App).allow("read", Bot, {
 			when: ($) => $.predicate("quota", () => Effect.map(Quota, (n) => n > 0)),
 		})
-		const plain = Policy.empty(App).node
-		expect<Policy.TypedNode>().type.not.toBeAssignableFrom({
+		expect<Policy.Node>().type.not.toBeAssignableFrom({
 			_tag: "Rules" as const,
 			algorithm: "denyOverrides" as const,
 			rules: [quota],
-			"~Node": plain["~Node"],
 		})
 	})
-
 	it("does not let the node of a policy go into a policy of other types", () => {
 		expect<Policy.Policy<App>>().type.not.toBeAssignableFrom({
-			...Policy.empty(App),
+			...emptyOf(App),
 			node: effectful.node,
 		})
 	})
@@ -698,16 +697,14 @@ describe("Policy", () => {
 		})
 		expect(rule.when).type.toBe<
 			| Condition.Condition<
-					"empty",
-					never,
-					Condition.Opaque,
-					Condition.Reads<Bot & { readonly _tag: "Bot" }, Caller>
+					Condition.Reads<Bot & { readonly _tag: "Bot" }, Caller>,
+					Condition.Opaque<"empty">
 			  >
 			| undefined
 		>()
 		expect(policy).type.toBe<Policy.Policy<App>>()
 		expect(effectful).type.toBe<
-			Policy.Policy<App, "empty", Quota, Condition.Opaque>
+			Policy.Policy<App, Condition.Opaque<"empty", Quota>>
 		>()
 		expect(
 			Policy.decide(effectful, {
@@ -717,7 +714,7 @@ describe("Policy", () => {
 			}),
 		).type.toBe<Effect.Effect<Decision.Decision, "empty", Quota>>()
 		expect(Policy.all([policy, effectful])).type.toBe<
-			Policy.Policy<App, "empty", Quota, Condition.Opaque>
+			Policy.Policy<App, Condition.Opaque<"empty", Quota>>
 		>()
 	})
 
@@ -752,33 +749,6 @@ describe("Policy", () => {
 		expect(Policy.permittedFields).type.not.toBeCallableWith(policy, {
 			principal: alice,
 			action: "write",
-			resource: aliceBot,
-		})
-	})
-
-	it("needs the domain of a request with no policy", () => {
-		expect(
-			policy.pipe(
-				Policy.decideSync({
-					principal: alice,
-					action: "read",
-					resource: aliceBot,
-				}),
-			),
-		).type.toBe<Decision.Decision>()
-		expect(Policy.decideSync<App>).type.toBeCallableWith({
-			principal: alice,
-			action: "read",
-			resource: aliceBot,
-		})
-		expect(Policy.decideSync<App>).type.not.toBeCallableWith({
-			principal: alice,
-			action: "fly",
-			resource: aliceBot,
-		})
-		expect(Policy.decideSync).type.not.toBeCallableWith({
-			principal: alice,
-			action: "fly",
 			resource: aliceBot,
 		})
 	})
@@ -877,7 +847,7 @@ describe("Authorizer", () => {
 		})
 		expect(policy).type.toBe<
 			Effect.Effect<
-				Policy.Policy<App, "no session", never, Condition.Opaque>,
+				Policy.Policy<App, Condition.Opaque<"no session">>,
 				Authorizer.PolicyUnavailable | "no session",
 				Identity | Auth
 			>
@@ -960,10 +930,8 @@ describe("Authorizer", () => {
 		).type.toBe<
 			Effect.Effect<
 				Policy.Coverage<
-					"no session",
-					never,
-					Condition.Opaque,
-					Policy.ResidualReads<App, "Bot">
+					Policy.ResidualReads<App, "Bot">,
+					Condition.Opaque<"no session">
 				>,
 				Authorizer.PolicyUnavailable | "no session",
 				Identity | Auth
@@ -990,10 +958,10 @@ describe("Authorizer", () => {
 
 	it("checks the options of the layer", () => {
 		expect(Authorizer.layer).type.toBeCallableWith(Auth, {
-			policy: () => Effect.succeed(Policy.empty(App)),
+			policy: () => Effect.succeed(emptyOf(App)),
 		})
 		expect(Authorizer.layer).type.not.toBeCallableWith(Auth, {
-			policy: () => Effect.succeed(Policy.empty(App)),
+			policy: () => Effect.succeed(emptyOf(App)),
 			decider: () => Effect.fail("other error" as const),
 		})
 	})

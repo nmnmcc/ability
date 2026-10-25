@@ -309,7 +309,7 @@ export const evaluate = (
 	}
 	switch (node._tag) {
 		case "Predicate":
-			return node.run(input.value, input.principal)
+			return Nodes.runOf(node)(input.value, input.principal)
 		case "Not":
 			return Effect.map(evaluate(node.condition, input), (value) => !value)
 		case "And":
@@ -414,7 +414,7 @@ export const partial = (node: Node, input: PartialInput): Node => {
 			case "Not":
 				return current.condition.pipe(bind, not)
 			case "Predicate": {
-				const run = current.run
+				const run = Nodes.runOf(current)
 				return new Nodes.Predicate({
 					name: current.name,
 					run: (value) => run(value, input.principal),
@@ -434,7 +434,7 @@ export const provide = (node: Node, context: Context.Context<never>): Node => {
 	}
 	switch (node._tag) {
 		case "Predicate": {
-			const run = node.run
+			const run = Nodes.runOf(node)
 			return new Nodes.Predicate({
 				name: node.name,
 				run: (value, principal) =>

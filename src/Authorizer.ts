@@ -160,7 +160,7 @@ export interface Authorizer<D extends Domain.Any, E, R> {
 	 * the services of the layer. It may have predicates, so it is opaque.
 	 */
 	readonly policy: Effect.Effect<
-		Policy.Policy<D, E, never, Condition.Opaque>,
+		Policy.Policy<D, Condition.Opaque<E>>,
 		PolicyUnavailable | E,
 		R
 	>
@@ -192,10 +192,8 @@ export interface Authorizer<D extends Domain.Any, E, R> {
 		target: T,
 	) => Effect.Effect<
 		Condition.Condition<
-			E,
-			never,
-			Condition.Opaque,
-			Policy.ResidualReads<D, T["kind"]>
+			Policy.ResidualReads<D, T["kind"]>,
+			Condition.Opaque<E>
 		>,
 		PolicyUnavailable | E,
 		R
@@ -208,12 +206,7 @@ export interface Authorizer<D extends Domain.Any, E, R> {
 	readonly coverage: <const T extends Policy.KindTarget<D>>(
 		target: T,
 	) => Effect.Effect<
-		Policy.Coverage<
-			E,
-			never,
-			Condition.Opaque,
-			Policy.ResidualReads<D, T["kind"]>
-		>,
+		Policy.Coverage<Policy.ResidualReads<D, T["kind"]>, Condition.Opaque<E>>,
 		PolicyUnavailable | E,
 		R
 	>
@@ -268,10 +261,8 @@ export interface ServiceClass<
 		target: T,
 	) => Effect.Effect<
 		Condition.Condition<
-			E,
-			never,
-			Condition.Opaque,
-			Policy.ResidualReads<D, T["kind"]>
+			Policy.ResidualReads<D, T["kind"]>,
+			Condition.Opaque<E>
 		>,
 		PolicyUnavailable | E,
 		R | Self
@@ -279,12 +270,7 @@ export interface ServiceClass<
 	readonly coverage: <const T extends Policy.KindTarget<D>>(
 		target: T,
 	) => Effect.Effect<
-		Policy.Coverage<
-			E,
-			never,
-			Condition.Opaque,
-			Policy.ResidualReads<D, T["kind"]>
-		>,
+		Policy.Coverage<Policy.ResidualReads<D, T["kind"]>, Condition.Opaque<E>>,
 		PolicyUnavailable | E,
 		R | Self
 	>
@@ -374,7 +360,7 @@ export interface Options<D extends Domain.Any, E, R, EL, RL, RP> {
 	 */
 	readonly policy: (
 		principal: Domain.Principal<D>,
-	) => Effect.Effect<Policy.Policy<D, E, RP, any>, EL, RL>
+	) => Effect.Effect<Policy.Policy<D, Condition.Opaque<E, RP>>, EL, RL>
 	/**
 	 * Answers when no rule gives an answer. Without a decider, such a request
 	 * fails with {@link Forbidden}.
@@ -657,7 +643,7 @@ const makeLayer = (
 
 			const coverage = (
 				target: AnyTarget,
-			): Effect.Effect<Policy.Coverage<any, any, any, any>, unknown, unknown> =>
+			): Effect.Effect<Policy.Coverage<any, any>, unknown, unknown> =>
 				Effect.map(current, ({ principal, policy: value }) =>
 					Policy.coverage(value, { ...target, principal } as never),
 				)

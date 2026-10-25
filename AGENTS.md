@@ -55,11 +55,17 @@ material. Do not change it unless the user asks.
   `_tag`. Do not find a resource from a constructor name.
 - `Policy.define()` is pure and synchronous. A rule must work with generators,
   so users can write `yield* _.allow(...)`.
-- A condition is plain data. Only a predicate may run code. A predicate keeps
-  its error type and service type in the types of the policy and of every check.
-  A policy with a predicate must not become JSON: keep the `Opaque` marker in
-  the types. A condition also keeps what its predicates read (`Reads`), and each
-  child of a node has the types of its node.
+- A condition is plain data. Only a predicate may run code. A condition has two
+  type fields: `Condition<I, X>`. `I` is what it reads (`Reads`). `X` is
+  `Opaque<E, R>` when it has a predicate, with the error type and the service
+  type of the predicates, and `never` when it is plain. A policy keeps `X` too:
+  `Policy<D, X>`. Every check gets `E` and `R` from `X`. A policy with a
+  predicate must not become JSON, so the Schema takes only `X = never`.
+- The types of conditions, rules and policies are their own: a node is a class,
+  and a policy has a private field. A spread of one, or an object made by hand,
+  is not one. The children of a node have no types, so they go into nothing.
+- The public functions take the data first. Only `ceiling`, `provideContext` and
+  `Condition.fold` also take their options first, for `pipe`.
 - A decision is `Allow`, `Deny` or `NotApplicable`. `Policy.decide` gives a
   decision. `Authorizer.check` puts a "no" into the error channel.
 - Fail closed. An error while loading a policy is never a "yes".

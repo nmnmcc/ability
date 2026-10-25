@@ -23,9 +23,10 @@ import {
 	alice,
 	aliceBot,
 	App,
-	Bot,
 	bob,
+	Bot,
 	Caller,
+	emptyOf,
 	sharedBot,
 } from "./fixtures.ts"
 
@@ -397,7 +398,7 @@ describe("Authorizer", () => {
 					principal: Identity,
 				}) {}
 				const layer = Authorizer.layer(NoteAuth, {
-					policy: () => Effect.succeed(Policy.empty(Notes)),
+					policy: () => Effect.succeed(emptyOf(Notes)),
 					decider: () => Effect.succeed(Decision.Allow({})),
 				})
 				const exit = yield* NoteAuth.check({

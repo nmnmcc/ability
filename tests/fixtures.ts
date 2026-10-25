@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { Domain, Resource } from "../src/index.ts"
+import { Domain, Policy, Resource } from "../src/index.ts"
 
 export class Caller extends Schema.Class<Caller>("Caller")({
 	userId: Schema.String,
@@ -91,3 +91,23 @@ export const aliceTrigger = Trigger.make({
 	ownerUserId: "alice",
 	enabled: true,
 })
+
+/** Makes a policy from a list of rules, as `Policy.define` does. */
+export const rulesOf = <
+	D extends Domain.Any,
+	const Rules extends ReadonlyArray<Policy.Rule<D, never, any>>,
+>(
+	domain: D,
+	rules: Rules,
+	options?: Policy.Options,
+): Policy.Policy<D, Policy.OpaqueOf<Rules[number]>> =>
+	Policy.define(
+		domain,
+		options,
+	)(function* () {
+		yield* rules
+	}) as never
+
+/** A policy with no rules. */
+export const emptyOf = <D extends Domain.Any>(domain: D): Policy.Policy<D> =>
+	Policy.define(domain)(function* () {})

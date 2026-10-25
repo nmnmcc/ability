@@ -76,117 +76,62 @@ export type Algorithm =
 	"denyOverrides" | "permitOverrides" | "firstApplicable" | "lastApplicable"
 
 /**
- * @stability stable
- * @category models
- * @since 0.3.0
- */
-export interface RulesNode {
-	readonly _tag: "Rules"
-	readonly algorithm: Algorithm
-	readonly rules: ReadonlyArray<AnyRule>
-}
-
-/**
- * @stability stable
- * @category models
- * @since 0.3.0
- */
-export interface AllNode {
-	readonly _tag: "All"
-	readonly policies: ReadonlyArray<Node>
-}
-
-/**
- * @stability stable
- * @category models
- * @since 0.3.0
- */
-export interface AnyNode {
-	readonly _tag: "Any"
-	readonly policies: ReadonlyArray<Node>
-}
-
-/**
- * @stability stable
- * @category models
- * @since 0.3.0
- */
-export interface FirstOfNode {
-	readonly _tag: "FirstOf"
-	readonly policies: ReadonlyArray<Node>
-}
-
-/**
- * @stability stable
- * @category models
- * @since 0.3.0
- */
-export interface CeilingNode {
-	readonly _tag: "Ceiling"
-	readonly cap: Node
-	readonly policy: Node
-}
-
-/**
- * The nodes of a policy tree.
+ * A list of rules with a combining algorithm.
  *
  * @stability stable
  * @category models
  * @since 0.3.0
  */
-export type Node = RulesNode | AllNode | AnyNode | FirstOfNode | CeilingNode
+export type RulesNode = PolicyNodes.Rules
 
 /**
- * The tree of a policy with the types of its predicates and its domain `D`.
- * Each rule and each child has the types too, and `"~Node"` is only in the types. A node made by
- * hand does not have it. So the node of one policy, or a part of it, can not
- * go into a policy with other types.
- *
  * @stability stable
  * @category models
- * @since 1.0.0
+ * @since 0.3.0
  */
-export type TypedNode<E = never, R = never, O = never, D = any> = (
-	| {
-			readonly _tag: "Rules"
-			readonly algorithm: Algorithm
-			// The rules may read different values, so a node keeps no one type of
-			// what they read. With `never`, a condition taken from a node fits no
-			// rule that reads a value or a principal.
-			readonly rules: ReadonlyArray<Rule<E, R, O, D, never>>
-	  }
-	| {
-			readonly _tag: "All" | "Any" | "FirstOf"
-			readonly policies: ReadonlyArray<TypedNode<E, R, O, D>>
-	  }
-	| {
-			readonly _tag: "Ceiling"
-			readonly cap: TypedNode<E, R, O, D>
-			readonly policy: TypedNode<E, R, O, D>
-	  }
-) & {
-	readonly "~Node": Condition.Variance<E, R, O>
-}
+export type AllNode = PolicyNodes.All
 
 /**
- * A policy for the domain `D`. `E`, `R` and `O` come from the conditions of
- * its rules. See `Condition.Condition`.
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+export type AnyNode = PolicyNodes.Any
+
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+export type FirstOfNode = PolicyNodes.FirstOf
+
+/**
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+export type CeilingNode = PolicyNodes.Ceiling
+
+/**
+ * The nodes of a policy tree, without types. Each node is a class, and only
+ * the functions of this module and the Schema make one.
  *
  * @stability stable
  * @category models
  * @since 0.3.0
  */
-export interface Policy<D extends Domain.Any, E = never, R = never, O = never>
-	extends Pipeable.Pipeable {
-	readonly domain: D
-	readonly node: TypedNode<E, R, O, D>
-	readonly "~Policy": Condition.Variance<E, R, O>
-	/**
-	 * Only in the types. A policy reads the values and the principal of its
-	 * domain, so a policy of one domain is not a policy of a wider domain.
-	 */
-	readonly "~Domain": (domain: D) => D
-}
+export type Node = PolicyNodes.Node
+
+/**
+ * A policy for the domain `D`. `X` is `Condition.Opaque` when a rule of the
+ * policy has a predicate, and `never` when the policy is plain data. A plain
+ * policy can become JSON, and `decideSync` takes it.
+ *
+ * @stability stable
+ * @category models
+ * @since 0.3.0
+ */
+export type Policy<D extends Domain.Any, X = never> = PolicyData<D, X>
 
 /**
  * Any policy.
@@ -195,7 +140,7 @@ export interface Policy<D extends Domain.Any, E = never, R = never, O = never>
  * @category models
  * @since 0.3.0
  */
-export type Any = Policy<any, any, any, any>
+export type Any = Policy<any, any>
 
 /**
  * The domain of a policy.
@@ -204,45 +149,17 @@ export type Any = Policy<any, any, any, any>
  * @category utility types
  * @since 0.3.0
  */
-export type DomainOf<P> = P extends Policy<infer D, any, any, any> ? D : never
+export type DomainOf<P> = P extends Policy<infer D, any> ? D : never
 
 /**
- * The error type of a policy.
+ * The mark of a policy or a rule: `Condition.Opaque` when it has a predicate.
  *
  * @stability stable
  * @category utility types
  * @since 0.3.0
  */
-export type Error<P> = P extends {
-	readonly "~Policy"?: Condition.Variance<infer E, infer _R, infer _O>
-}
-	? E
-	: never
-
-/**
- * The service type of a policy.
- *
- * @stability stable
- * @category utility types
- * @since 0.3.0
- */
-export type Services<P> = P extends {
-	readonly "~Policy"?: Condition.Variance<infer _E, infer R, infer _O>
-}
-	? R
-	: never
-
-/**
- * `Condition.Opaque` when a policy has a predicate.
- *
- * @stability stable
- * @category utility types
- * @since 0.3.0
- */
-export type OpaqueOf<P> = P extends {
-	readonly "~Policy"?: Condition.Variance<infer _E, infer _R, infer O>
-}
-	? O
+export type OpaqueOf<P> = P extends { readonly "~Opaque": () => infer X }
+	? X
 	: never
 
 /**
@@ -294,9 +211,6 @@ export type Scope<D, K extends string> = (
 		Domain.Principal<D>
 	>,
 ) => Condition.Condition<
-	never,
-	never,
-	never,
 	Condition.Reads<Domain.ValueOf<D, K>, Domain.Principal<D>>
 >
 
@@ -396,25 +310,20 @@ export interface Explanation {
 // Rules
 
 /**
- * A rule. `E`, `R` and `O` come from its condition. See
- * `Condition.Condition`. `D` is the domain of the rule. A predicate reads the
- * values and the principal of its domain, so a rule may go only into a policy
- * of its own domain. A rule from {@link rule} has the domain `any`. `I` is
- * what the predicates of its condition read. See `Condition.Reads`.
+ * A rule for the domain `D`. `I` is what the tests of its condition read, and
+ * `X` is its mark: see `Condition.Condition`. A predicate reads the values and
+ * the principal of its domain, so a rule may go only into a policy of its own
+ * domain. A rule from {@link rule} has the domain `any`.
  *
  * @stability stable
  * @category models
  * @since 0.3.0
  */
-export interface Rule<E = never, R = never, O = never, D = any, I = unknown>
-	extends RuleShape<E, R, O, I>, Pipeable.Pipeable {
-	readonly "~Rule": Condition.Variance<E, R, O>
+export interface Rule<D = any, I = unknown, X = never>
+	extends RuleShape<I, X>, Pipeable.Pipeable {
+	readonly "~Opaque": () => X
 	readonly "~Domain": (domain: D) => D
-	[Symbol.iterator](): Generator<
-		Rule<E, R, O, D, I>,
-		Rule<E, R, O, D, I>,
-		unknown
-	>
+	[Symbol.iterator](): Generator<Rule<D, I, X>, Rule<D, I, X>, unknown>
 }
 
 /**
@@ -424,11 +333,11 @@ export interface Rule<E = never, R = never, O = never, D = any, I = unknown>
  * @category models
  * @since 1.0.0
  */
-export interface RuleShape<E = never, R = never, O = never, I = unknown> {
+export interface RuleShape<I = unknown, X = never> {
 	readonly _tag: "Allow" | "Deny"
 	readonly actions: ReadonlyArray<string>
 	readonly resources: ReadonlyArray<string>
-	readonly when?: Condition.Condition<E, R, O, I>
+	readonly when?: Condition.Condition<I, X>
 	readonly fields?: ReadonlyArray<string>
 	readonly reason?: string
 	readonly id?: string
@@ -450,46 +359,7 @@ export interface RuleShape<E = never, R = never, O = never, I = unknown> {
  */
 // Every rule fits `never` as what it reads, and a condition taken from such a
 // rule fits no rule that reads a value or a principal.
-export type AnyRule = Rule<any, any, any, any, never>
-
-/**
- * The error type of a rule.
- *
- * @stability stable
- * @category utility types
- * @since 0.3.0
- */
-export type RuleError<A> = A extends {
-	readonly "~Rule"?: Condition.Variance<infer E, infer _R, infer _O>
-}
-	? E
-	: never
-
-/**
- * The service type of a rule.
- *
- * @stability stable
- * @category utility types
- * @since 0.3.0
- */
-export type RuleServices<A> = A extends {
-	readonly "~Rule"?: Condition.Variance<infer _E, infer R, infer _O>
-}
-	? R
-	: never
-
-/**
- * `Condition.Opaque` when a rule has a predicate.
- *
- * @stability stable
- * @category utility types
- * @since 0.3.0
- */
-export type RuleOpaque<A> = A extends {
-	readonly "~Rule"?: Condition.Variance<infer _E, infer _R, infer O>
-}
-	? O
-	: never
+export type AnyRule = Rule<any, never, any>
 
 /**
  * A resource in a rule: a kind name, a resource of the domain, or `"*"`.
@@ -599,10 +469,8 @@ export type FieldFor<D, K> =
  * @since 1.0.0
  */
 export type ConditionFor<D, K> = Condition.Condition<
-	any,
-	any,
-	any,
-	Condition.Reads<ValueFor<D, K>, Domain.Principal<D>>
+	Condition.Reads<ValueFor<D, K>, Domain.Principal<D>>,
+	any
 >
 
 /**
@@ -620,7 +488,7 @@ export interface RuleOptions<D, K, C extends Condition.Any> {
 			ValueFor<D, K>,
 			Domain.Principal<D>
 		>,
-	) => C & Condition.Checked<C>
+	) => C
 	readonly fields?: ReadonlyArray<FieldFor<D, K>>
 	readonly reason?: string
 	readonly id?: string
@@ -646,13 +514,7 @@ export interface Builder<D> {
 		action: SingleOrArray<A>,
 		resource: Res,
 		options?: RuleOptions<D, KindOf<TargetOf<Res>>, C>,
-	) => Rule<
-		Condition.Error<C>,
-		Condition.Services<C>,
-		Condition.OpaqueOf<C>,
-		D,
-		Condition.ReadsOf<C>
-	>
+	) => Rule<D, Condition.ReadsOf<C>, Condition.OpaqueOf<C>>
 	readonly deny: <
 		const Res extends SingleOrArray<RuleTarget<D>>,
 		const A extends ActionForTargets<D, Res>,
@@ -662,13 +524,7 @@ export interface Builder<D> {
 		action: SingleOrArray<A>,
 		resource: Res,
 		options?: RuleOptions<D, KindOf<TargetOf<Res>>, C>,
-	) => Rule<
-		Condition.Error<C>,
-		Condition.Services<C>,
-		Condition.OpaqueOf<C>,
-		D,
-		Condition.ReadsOf<C>
-	>
+	) => Rule<D, Condition.ReadsOf<C>, Condition.OpaqueOf<C>>
 }
 
 /**
@@ -699,9 +555,10 @@ export const builder = <D extends Domain.Any>(domain: D): Builder<D> =>
  * @category constructors
  * @since 2.0.0
  */
-export const rule = <E = never, R = never, O = never, I = unknown>(
-	data: RuleShape<E, R, O, I>,
-): Rule<E, R, O, any, I> => RuleData.make(data as never) as never
+export const rule = <I = unknown, X = never>(
+	data: RuleShape<I, X>,
+	// The types come from the data only, not from where the rule goes.
+): Rule<any, NoInfer<I>, NoInfer<X>> => RuleData.make(data as never) as never
 
 /**
  * The options of a list of rules.
@@ -719,12 +576,29 @@ export interface Options {
  * The class of every policy value. Two policies of one domain with the same
  * tree are equal. As JSON, a policy is its tree.
  */
-class PolicyData extends Data.Class<{
-	readonly domain: Domain.Any
-	readonly node: PolicyNodes.Node
+class PolicyData<D extends Domain.Any = any, X = never> extends Data.Class<{
+	readonly domain: D
+	readonly node: Node
 }> {
+	// A private field makes the type of a policy its own: a spread of a
+	// policy, or an object made by hand, is not a policy. `Equal` does not
+	// read it.
+	readonly #policy = true
+	/** Only in the types. */
+	declare readonly "~Opaque": () => X
+	/**
+	 * Only in the types. A policy reads the values and the principal of its
+	 * domain, so a policy of one domain is not a policy of a wider domain.
+	 */
+	declare readonly "~Domain": (domain: D) => D
+
 	toJSON(): unknown {
 		return PolicyJson.toJson(this.node, this.domain.meta)
+	}
+
+	/** Tests if a value is a policy, by its private field. */
+	static is(u: unknown): u is Any {
+		return typeof u === "object" && u !== null && #policy in u
 	}
 }
 
@@ -756,29 +630,21 @@ export class PolicyError extends Schema.TaggedError<PolicyError>(
 	message: Schema.String,
 }) {}
 
-/**
- * Makes a policy from a list of rules.
- *
- * @stability stable
- * @category constructors
- * @since 0.3.0
- */
-export const rules: <
-	D extends Domain.Any,
-	Rules extends Rule<any, any, any, D, never>,
->(
-	domain: D,
-	rules: Iterable<Rules>,
+/** The mark of a union of rules: `Condition.Opaque` when one has a predicate. */
+type RulesOpaque<Rules> = Rules extends { readonly "~Opaque": () => infer X }
+	? X
+	: never
+
+/** Makes a policy from a list of rules, and binds them to the domain. */
+const fromRules = (
+	domain: Domain.Any,
+	values: Iterable<unknown>,
 	options?: Options,
-) => Policy<D, RuleError<Rules>, RuleServices<Rules>, RuleOpaque<Rules>> = (
-	domain,
-	values,
-	options,
-) => {
+): Any => {
 	// The constructor takes only rules, and it stops a list past the limits.
 	const node = new PolicyNodes.Rules({
 		algorithm: options?.algorithm ?? "denyOverrides",
-		rules: Array.from(values),
+		rules: Array.from(values) as ReadonlyArray<RuleData.Rule>,
 	})
 	// A rule from a builder of another domain is a mistake in the code, so it
 	// is a defect. Two domains may have the same types, so the types do not
@@ -831,9 +697,9 @@ export const rules: <
  */
 export const define =
 	<D extends Domain.Any>(domain: D, options?: Options) =>
-	<Rules extends Rule<any, any, any, D, never>, A>(
+	<Rules extends Rule<D, never, any>, A>(
 		body: (builder: Builder<D>) => Generator<Rules, A, unknown>,
-	): Policy<D, RuleError<Rules>, RuleServices<Rules>, RuleOpaque<Rules>> => {
+	): Policy<D, RulesOpaque<Rules>> => {
 		const iterator = body(builder(domain))
 		// Each rule goes back into the generator, as `yield*` gives it.
 		const collected = Arr.unfold(iterator.next(), (state) =>
@@ -841,23 +707,11 @@ export const define =
 				? Option.none()
 				: Option.some([state.value, iterator.next(state.value)] as const),
 		)
-		return rules(domain, collected, options)
+		return fromRules(domain, collected, options) as never
 	}
-
-/**
- * A policy with no rules. It is not applicable to any request.
- *
- * @stability stable
- * @category constructors
- * @since 0.3.0
- */
-export const empty = <D extends Domain.Any>(domain: D): Policy<D> =>
-	rules(domain, [])
 
 type Combined<D extends Domain.Any, Ps extends ReadonlyArray<Any>> = Policy<
 	D,
-	Error<Ps[number]>,
-	Services<Ps[number]>,
 	OpaqueOf<Ps[number]>
 >
 
@@ -894,9 +748,7 @@ const combine =
  * @category combinators
  * @since 0.3.0
  */
-export const all: <
-	const Ps extends readonly [Policy<any, any, any, any>, ...Array<Any>],
->(
+export const all: <const Ps extends readonly [Any, ...Array<Any>]>(
 	policies: Ps,
 ) => Combined<DomainOf<Ps[0]>, Ps> = combine("All")
 
@@ -907,9 +759,7 @@ export const all: <
  * @category combinators
  * @since 0.3.0
  */
-export const any: <
-	const Ps extends readonly [Policy<any, any, any, any>, ...Array<Any>],
->(
+export const any: <const Ps extends readonly [Any, ...Array<Any>]>(
 	policies: Ps,
 ) => Combined<DomainOf<Ps[0]>, Ps> = combine("Any")
 
@@ -920,9 +770,7 @@ export const any: <
  * @category combinators
  * @since 0.3.0
  */
-export const firstOf: <
-	const Ps extends readonly [Policy<any, any, any, any>, ...Array<Any>],
->(
+export const firstOf: <const Ps extends readonly [Any, ...Array<Any>]>(
 	policies: Ps,
 ) => Combined<DomainOf<Ps[0]>, Ps> = combine("FirstOf")
 
@@ -935,13 +783,13 @@ export const firstOf: <
  * @since 0.3.0
  */
 export const ceiling: {
-	<D extends Domain.Any, E2, R2, O2>(
-		cap: Policy<D, E2, R2, O2>,
-	): <E, R, O>(policy: Policy<D, E, R, O>) => Policy<D, E | E2, R | R2, O | O2>
-	<D extends Domain.Any, E, R, O, E2, R2, O2>(
-		policy: Policy<D, E, R, O>,
-		cap: Policy<D, E2, R2, O2>,
-	): Policy<D, E | E2, R | R2, O | O2>
+	<D extends Domain.Any, X2>(
+		cap: Policy<D, X2>,
+	): <X>(policy: Policy<D, X>) => Policy<D, X | X2>
+	<D extends Domain.Any, X, X2>(
+		policy: Policy<D, X>,
+		cap: Policy<D, X2>,
+	): Policy<D, X | X2>
 } = dual(2, (policy: Any, cap: Any): any =>
 	fromNode(
 		sameDomain([policy, cap]),
@@ -997,13 +845,14 @@ const provideNode = (
 export const provideContext: {
 	<R>(
 		context: Context.Context<R>,
-	): <D extends Domain.Any, E, O>(
-		policy: Policy<D, E, R, O>,
-	) => Policy<D, E, never, O>
-	<D extends Domain.Any, E, R, O>(
-		policy: Policy<D, E, R, O>,
-		context: Context.Context<R>,
-	): Policy<D, E, never, O>
+	): <D extends Domain.Any, X>(
+		policy: Policy<D, X> &
+			([Condition.ServicesOf<X>] extends [R] ? unknown : never),
+	) => Policy<D, Condition.Provided<X>>
+	<D extends Domain.Any, X>(
+		policy: Policy<D, X>,
+		context: Context.Context<Condition.ServicesOf<X>>,
+	): Policy<D, Condition.Provided<X>>
 } = dual(2, (policy: Any, context: Context.Context<never>): any =>
 	fromNode(policy.domain, provideNode(nodeOf(policy), context)),
 )
@@ -1292,17 +1141,14 @@ const decideAny = (
  * @category evaluation
  * @since 0.3.0
  */
-export const decide: {
-	<D extends Domain.Any = never>(
-		request: Request<D>,
-	): <E, R, O>(
-		policy: Policy<D, E, R, O>,
-	) => Effect.Effect<Decision.Decision, E, R>
-	<D extends Domain.Any, E, R, O>(
-		policy: Policy<D, E, R, O>,
-		request: Request<NoInfer<D>>,
-	): Effect.Effect<Decision.Decision, E, R>
-} = dual(2, decideAny) as never
+export const decide: <D extends Domain.Any, X>(
+	policy: Policy<D, X>,
+	request: Request<NoInfer<D>>,
+) => Effect.Effect<
+	Decision.Decision,
+	Condition.ErrorOf<X>,
+	Condition.ServicesOf<X>
+> = decideAny as never
 
 /**
  * Gives the decision of a policy with no predicates, at once.
@@ -1311,22 +1157,16 @@ export const decide: {
  * @category evaluation
  * @since 0.3.0
  */
-export const decideSync: {
-	<D extends Domain.Any = never>(
-		request: Request<D>,
-	): (policy: Policy<D>) => Decision.Decision
-	<D extends Domain.Any>(
-		policy: Policy<D>,
-		request: Request<NoInfer<D>>,
-	): Decision.Decision
-} = dual(2, (policy: Any, request: AnyRequest): Decision.Decision =>
+export const decideSync: <D extends Domain.Any>(
+	policy: Policy<D>,
+	request: Request<NoInfer<D>>,
+) => Decision.Decision = (policy: Any, request: AnyRequest) =>
 	Effect.runSync(
 		// The public type of `decideSync` takes only policies with no
 		// predicates, so this Effect has no error and needs no services.
 		// @effect-diagnostics-next-line unsafeEffectTypeAssertion:off
 		decideAny(policy, request) as Effect.Effect<Decision.Decision>,
-	),
-)
+	)
 
 /**
  * Gives the decision of a policy and the rules that were tested to make it.
@@ -1338,17 +1178,11 @@ export const decideSync: {
  * @category evaluation
  * @since 0.3.0
  */
-export const explain: {
-	<D extends Domain.Any = never>(
-		request: Request<D>,
-	): <E, R, O>(policy: Policy<D, E, R, O>) => Effect.Effect<Explanation, E, R>
-	<D extends Domain.Any, E, R, O>(
-		policy: Policy<D, E, R, O>,
-		request: Request<NoInfer<D>>,
-	): Effect.Effect<Explanation, E, R>
-} = dual(
-	2,
-	(
+export const explain: <D extends Domain.Any, X>(
+	policy: Policy<D, X>,
+	request: Request<NoInfer<D>>,
+) => Effect.Effect<Explanation, Condition.ErrorOf<X>, Condition.ServicesOf<X>> =
+	((
 		policy: Any,
 		request: AnyRequest,
 	): Effect.Effect<Explanation, unknown, unknown> =>
@@ -1362,8 +1196,7 @@ export const explain: {
 			}
 			const decision = yield* decideNode(nodeOf(policy), context, [])
 			return { decision, steps: Chunk.toReadonlyArray(yield* Ref.get(trace)) }
-		}),
-) as never
+		})) as never
 
 /**
  * Tests if a deny rule of the request names a part inside `field`.
@@ -1412,55 +1245,49 @@ const deniesInside = (
  * @category evaluation
  * @since 0.3.0
  */
-export const permittedFields: {
-	<D extends Domain.Any = never>(
-		request: FieldlessRequest<D>,
-	): <E, R, O>(
-		policy: Policy<D, E, R, O>,
-	) => Effect.Effect<ReadonlyArray<string>, E, R>
-	<D extends Domain.Any, E, R, O>(
-		policy: Policy<D, E, R, O>,
-		request: FieldlessRequest<NoInfer<D>>,
-	): Effect.Effect<ReadonlyArray<string>, E, R>
-} = dual(
-	2,
-	(
-		policy: Any,
-		request: Omit<AnyRequest, "field">,
-	): Effect.Effect<ReadonlyArray<string>, unknown, unknown> => {
-		const kind = Resource.kindOf(request.resource)
-		const descriptor: Resource.Descriptor | undefined =
-			kind === undefined ? undefined : Domain.descriptorOf(policy.domain, kind)
-		if (descriptor === undefined) {
-			return Effect.succeed([])
-		}
-		// The fields with names only: a list can not name every key of a record.
-		const listed = Arr.filter(
-			descriptor.catalog.fields,
-			(field) =>
-				field.listed &&
-				Arr.every(field.path, (segment) => typeof segment === "string"),
-		)
-		return Effect.map(
-			Effect.filter(listed, (field) =>
-				Effect.map(
-					decideAny(policy, { ...request, field: field.text }),
-					(result) =>
-						result._tag === "Allow" &&
-						!(
-							field.open &&
-							deniesInside(
-								nodeOf(policy),
-								{ ...request, kind: descriptor.kind },
-								field.text,
-							)
-						),
-				),
+export const permittedFields: <D extends Domain.Any, X>(
+	policy: Policy<D, X>,
+	request: FieldlessRequest<NoInfer<D>>,
+) => Effect.Effect<
+	ReadonlyArray<string>,
+	Condition.ErrorOf<X>,
+	Condition.ServicesOf<X>
+> = ((
+	policy: Any,
+	request: Omit<AnyRequest, "field">,
+): Effect.Effect<ReadonlyArray<string>, unknown, unknown> => {
+	const kind = Resource.kindOf(request.resource)
+	const descriptor: Resource.Descriptor | undefined =
+		kind === undefined ? undefined : Domain.descriptorOf(policy.domain, kind)
+	if (descriptor === undefined) {
+		return Effect.succeed([])
+	}
+	// The fields with names only: a list can not name every key of a record.
+	const listed = Arr.filter(
+		descriptor.catalog.fields,
+		(field) =>
+			field.listed &&
+			Arr.every(field.path, (segment) => typeof segment === "string"),
+	)
+	return Effect.map(
+		Effect.filter(listed, (field) =>
+			Effect.map(
+				decideAny(policy, { ...request, field: field.text }),
+				(result) =>
+					result._tag === "Allow" &&
+					!(
+						field.open &&
+						deniesInside(
+							nodeOf(policy),
+							{ ...request, kind: descriptor.kind },
+							field.text,
+						)
+					),
 			),
-			Arr.map((field) => field.text),
-		)
-	},
-) as never
+		),
+		Arr.map((field) => field.text),
+	)
+}) as never
 
 // Residual conditions
 
@@ -1473,39 +1300,12 @@ type Ast = Condition.Ast
  * @category models
  * @since 1.0.0
  */
-export interface Residuals<E = never, R = never, O = never, I = unknown> {
+export interface Residuals<I = unknown, X = never> {
 	/** The condition on resource values for which the policy allows. */
-	readonly allow: Condition.Condition<E, R, O, I>
+	readonly allow: Condition.Condition<I, X>
 	/** The condition on resource values for which the policy denies. */
-	readonly deny: Condition.Condition<E, R, O, I>
+	readonly deny: Condition.Condition<I, X>
 }
-
-/**
- * A request about a kind of resource, with no types.
- *
- * @stability stable
- * @category models
- * @since 1.0.0
- */
-export interface AnyKindRequest {
-	readonly principal: object
-	readonly action: string
-	readonly kind: string
-	readonly field?: string | undefined
-	/**
-	 * A scope needs the types of the domain for its builder. With the request
-	 * first, the domain is not known yet, so give the policy first.
-	 */
-	readonly within?: never
-}
-
-/**
- * `unknown` when the request `Req` is a request of the type `T`, and `never`
- * when it is not. With the request first and the policy later, the request is
- * checked when the policy, and so the domain, is known. For a union, each
- * member must be such a request.
- */
-type Fits<Req, T> = [Req] extends [T] ? unknown : never
 
 /**
  * What a residual condition reads: a value of the kind `K`. The principal is
@@ -1892,21 +1692,17 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
  * @category evaluation
  * @since 0.3.0
  */
-export const residual: {
-	<const Req extends AnyKindRequest>(
-		request: Req,
-	): <D extends Domain.Any, E, R, O>(
-		policy: Policy<D, E, R, O> & Fits<Req, KindRequest<D>>,
-	) => Condition.Condition<E, R, O, ResidualReads<D, Req["kind"]>>
-	<D extends Domain.Any, E, R, O, const Req extends KindRequest<NoInfer<D>>>(
-		policy: Policy<D, E, R, O>,
-		request: Req,
-	): Condition.Condition<E, R, O, ResidualReads<D, Req["kind"]>>
-} = dual(
-	2,
-	(policy: Any, request: KindRequest<Domain.Any>): Ast =>
-		residualsAny(policy, request).allow,
-) as never
+export const residual: <
+	D extends Domain.Any,
+	X,
+	const Req extends KindRequest<NoInfer<D>>,
+>(
+	policy: Policy<D, X>,
+	request: Req,
+) => Condition.Condition<ResidualReads<D, Req["kind"]>, X> = ((
+	policy: Any,
+	request: KindRequest<Domain.Any>,
+): Ast => residualsAny(policy, request).allow) as never
 
 /**
  * Gives both residual conditions of a request: the values that the policy
@@ -1917,17 +1713,14 @@ export const residual: {
  * @category evaluation
  * @since 1.0.0
  */
-export const residuals: {
-	<const Req extends AnyKindRequest>(
-		request: Req,
-	): <D extends Domain.Any, E, R, O>(
-		policy: Policy<D, E, R, O> & Fits<Req, KindRequest<D>>,
-	) => Residuals<E, R, O, ResidualReads<D, Req["kind"]>>
-	<D extends Domain.Any, E, R, O, const Req extends KindRequest<NoInfer<D>>>(
-		policy: Policy<D, E, R, O>,
-		request: Req,
-	): Residuals<E, R, O, ResidualReads<D, Req["kind"]>>
-} = dual(2, residualsAny) as never
+export const residuals: <
+	D extends Domain.Any,
+	X,
+	const Req extends KindRequest<NoInfer<D>>,
+>(
+	policy: Policy<D, X>,
+	request: Req,
+) => Residuals<ResidualReads<D, Req["kind"]>, X> = residualsAny as never
 
 /**
  * How much of a scope a policy allows. In each case, `condition` is the exact
@@ -1948,21 +1741,16 @@ export const residuals: {
  * @category models
  * @since 1.0.0
  */
-export type Coverage<
-	E = never,
-	R = never,
-	O = never,
-	I = unknown,
-> = Data.TaggedEnum<{
-	All: { readonly condition: Condition.Condition<E, R, O, I> }
-	None: { readonly condition: Condition.Condition<E, R, O, I> }
+export type Coverage<I = unknown, X = never> = Data.TaggedEnum<{
+	All: { readonly condition: Condition.Condition<I, X> }
+	None: { readonly condition: Condition.Condition<I, X> }
 	Some: {
-		readonly condition: Condition.Condition<E, R, O, I>
+		readonly condition: Condition.Condition<I, X>
 		readonly allowed: Condition.Example
 		readonly refused: Condition.Example
 	}
 	Unknown: {
-		readonly condition: Condition.Condition<E, R, O, I>
+		readonly condition: Condition.Condition<I, X>
 		readonly reason: "predicate" | "budget"
 	}
 }>
@@ -2073,17 +1861,14 @@ export const decideKind = (
  * @category evaluation
  * @since 1.0.0
  */
-export const coverage: {
-	<const Req extends AnyKindRequest>(
-		request: Req,
-	): <D extends Domain.Any, E, R, O>(
-		policy: Policy<D, E, R, O> & Fits<Req, KindRequest<D>>,
-	) => Coverage<E, R, O, ResidualReads<D, Req["kind"]>>
-	<D extends Domain.Any, E, R, O, const Req extends KindRequest<NoInfer<D>>>(
-		policy: Policy<D, E, R, O>,
-		request: Req,
-	): Coverage<E, R, O, ResidualReads<D, Req["kind"]>>
-} = dual(2, coverageAny) as never
+export const coverage: <
+	D extends Domain.Any,
+	X,
+	const Req extends KindRequest<NoInfer<D>>,
+>(
+	policy: Policy<D, X>,
+	request: Req,
+) => Coverage<ResidualReads<D, Req["kind"]>, X> = coverageAny as never
 
 // Schema
 
@@ -2135,7 +1920,7 @@ export type EncodedNode =
  * @category guards
  * @since 0.3.0
  */
-export const isPolicy = (u: unknown): u is Any => u instanceof PolicyData
+export const isPolicy = (u: unknown): u is Any => PolicyData.is(u)
 
 /**
  * The Schema of the policies of a domain with no predicates. Decoding checks

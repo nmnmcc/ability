@@ -7,9 +7,11 @@ import {
 	aliceBot,
 	aliceTrigger,
 	App,
-	Bot,
 	bob,
+	Bot,
 	Caller,
+	emptyOf,
+	rulesOf,
 	sharedBot,
 	Trigger,
 } from "./fixtures.ts"
@@ -79,7 +81,7 @@ describe("Policy", () => {
 			)
 			assert.strictEqual(
 				tagOf(
-					Policy.decideSync(Policy.empty(App), {
+					Policy.decideSync(emptyOf(App), {
 						principal: alice,
 						action: "read",
 						resource: aliceBot,
@@ -268,7 +270,7 @@ describe("Policy", () => {
 		it("lets the ceiling deny but never allow", () => {
 			assert.strictEqual(decide(session, "read", blockedBot), "Deny")
 			assert.strictEqual(
-				decide(Policy.empty(App).pipe(Policy.ceiling(token)), "read", aliceBot),
+				decide(emptyOf(App).pipe(Policy.ceiling(token)), "read", aliceBot),
 				"NotApplicable",
 			)
 		})
@@ -623,7 +625,7 @@ describe("Policy", () => {
 		const toRule = (
 			_: Policy.Builder<App>,
 			spec: typeof Spec.Type,
-		): Policy.Rule<never, never, never, App, Condition.Reads<Bot, Caller>> => {
+		): Policy.Rule<App, Condition.Reads<Bot, Caller>> => {
 			const make = spec.tag === "Allow" ? _.allow : _.deny
 			return make(spec.action, Bot, {
 				...(spec.fields ? { fields: ["name"] } : {}),
@@ -1071,7 +1073,7 @@ describe("Policy", () => {
 			action: "read",
 			resource: aliceBot,
 		} as const
-		const check = (policy: Policy.Policy<App, string, never, any>) =>
+		const check = (policy: Policy.Policy<App, Condition.Opaque<string>>) =>
 			Effect.gen(function* () {
 				const decision = yield* Effect.exit(Policy.decide(policy, valueRequest))
 				assert.isTrue(Exit.isFailure(decision))
@@ -1085,7 +1087,7 @@ describe("Policy", () => {
 
 		it.effect("in the deny rules of permitOverrides", () =>
 			check(
-				Policy.rules(App, [offline("deny")], {
+				rulesOf(App, [offline("deny")], {
 					algorithm: "permitOverrides",
 				}),
 			),
@@ -1095,10 +1097,10 @@ describe("Policy", () => {
 			Effect.gen(function* () {
 				const policy = Policy.any([
 					Policy.all([
-						Policy.rules(App, [_.deny("read", Bot)]),
-						Policy.rules(App, [offline("allow")]),
+						rulesOf(App, [_.deny("read", Bot)]),
+						rulesOf(App, [offline("allow")]),
 					]),
-					Policy.rules(App, [_.allow("read", Bot)]),
+					rulesOf(App, [_.allow("read", Bot)]),
 				])
 				const residual = Policy.residual(policy, request)
 				assert.deepStrictEqual(
@@ -1112,7 +1114,7 @@ describe("Policy", () => {
 			Effect.gen(function* () {
 				let calls = 0
 				const policy = Policy.all([
-					Policy.rules(App, [
+					rulesOf(App, [
 						_.deny("read", Bot, {
 							when: ($) =>
 								$.predicate("first", () => {
@@ -1134,7 +1136,7 @@ describe("Policy", () => {
 
 		it.effect("in a list of rules", () =>
 			check(
-				Policy.rules(App, [offline("allow"), _.allow("read", Bot)], {
+				rulesOf(App, [offline("allow"), _.allow("read", Bot)], {
 					algorithm: "firstApplicable",
 				}),
 			),
@@ -1143,11 +1145,8 @@ describe("Policy", () => {
 		it.effect("in a child of all after a child with no answer", () =>
 			check(
 				Policy.any([
-					Policy.all([
-						Policy.empty(App),
-						Policy.rules(App, [offline("allow")]),
-					]),
-					Policy.rules(App, [_.allow("read", Bot)]),
+					Policy.all([emptyOf(App), rulesOf(App, [offline("allow")])]),
+					rulesOf(App, [_.allow("read", Bot)]),
 				]),
 			),
 		)
@@ -1155,10 +1154,10 @@ describe("Policy", () => {
 		it.effect("in a child that does not allow", () =>
 			check(
 				Policy.any([
-					Policy.rules(App, [offline("deny")], {
+					rulesOf(App, [offline("deny")], {
 						algorithm: "permitOverrides",
 					}),
-					Policy.rules(App, [_.allow("read", Bot)]),
+					rulesOf(App, [_.allow("read", Bot)]),
 				]),
 			),
 		)
@@ -1237,7 +1236,7 @@ describe("Policy", () => {
 			},
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
-		const policy = Policy.rules(Notes, [
+		const policy = rulesOf(Notes, [
 			Policy.builder(Notes).allow("read", Note),
 			Policy.rule({
 				_tag: "Deny",
@@ -1534,7 +1533,7 @@ describe("Policy", () => {
 			},
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
-		const policy = Policy.rules(Notes, [
+		const policy = rulesOf(Notes, [
 			Policy.builder(Notes).allow("read", Note),
 			Policy.rule({
 				_tag: "Deny",
@@ -1561,7 +1560,7 @@ describe("Policy", () => {
 			fields: { label: Schema.Json },
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
-		const policy = Policy.rules(Notes, [
+		const policy = rulesOf(Notes, [
 			Policy.builder(Notes).allow("read", Note),
 			Policy.rule({
 				_tag: "Deny",
@@ -1686,7 +1685,7 @@ describe("Policy", () => {
 			fields: { data: Schema.Struct({}) },
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
-		const policy = Policy.rules(Notes, [
+		const policy = rulesOf(Notes, [
 			Policy.builder(Notes).allow("read", Note),
 			Policy.rule({
 				_tag: "Deny",
@@ -1794,7 +1793,7 @@ describe("Policy", () => {
 			},
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
-		const policy = Policy.rules(Notes, [
+		const policy = rulesOf(Notes, [
 			Policy.builder(Notes).allow("read", Note),
 			Policy.rule({
 				_tag: "Deny",
@@ -1863,7 +1862,7 @@ describe("Policy", () => {
 			unknown,
 			unknown
 		>()
-		const policy = Policy.rules(Notes, [
+		const policy = rulesOf(Notes, [
 			Policy.builder(Notes).allow("read", Note),
 			Policy.rule({
 				_tag: "Deny",
@@ -1978,10 +1977,11 @@ describe("Policy", () => {
 			() =>
 				Policy.define(App)(function* (_) {
 					yield* _.deny("read", Bot, {
-						when: ($) => ({
-							...$.eq("level", 3),
-							value: { _tag: "Literal", value: "3" } as const,
-						}),
+						when: ($) =>
+							({
+								...$.eq("level", 3),
+								value: { _tag: "Literal", value: "3" } as const,
+							}) as never,
 					})
 				}),
 			/not a whole condition tree/,
@@ -2096,7 +2096,7 @@ describe("Policy", () => {
 		const Note = Resource.make("Note", { actions: ["read"], fields })
 		fields["blocked"] = Schema.Literal(false)
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
-		const policy = Policy.rules(Notes, [
+		const policy = rulesOf(Notes, [
 			Policy.rule({
 				_tag: "Allow",
 				actions: ["read"],
@@ -2499,7 +2499,7 @@ describe("Policy", () => {
 		const start = Date.now()
 		assert.throws(
 			() =>
-				Policy.rules(App, [
+				rulesOf(App, [
 					Policy.rule({
 						_tag: "Allow",
 						actions: ["read"],
@@ -2724,7 +2724,7 @@ describe("Policy", () => {
 		)
 		assert.throws(
 			() =>
-				Policy.rules(App, [
+				rulesOf(App, [
 					Policy.rule({
 						_tag: "Deny",
 						actions: ["read"],
@@ -2879,7 +2879,7 @@ describe("Policy", () => {
 			() =>
 				Arr.reduce(
 					Arr.range(1, 24),
-					Policy.empty(App) as Policy.Policy<typeof App>,
+					emptyOf(App) as Policy.Policy<typeof App>,
 					(policy) => Policy.all([policy, policy]),
 				),
 			/A policy tree has \d+ nodes. The most is 100000/,
@@ -3217,13 +3217,13 @@ describe("Policy", () => {
 				) as Condition.Condition,
 			}),
 		)
-		const policy = Policy.rules(App, Rules, { algorithm: "firstApplicable" })
+		const policy = rulesOf(App, Rules, { algorithm: "firstApplicable" })
 		const request = { principal: alice, action: "read", kind: "Bot" } as const
 		assert.throws(
 			() => Policy.residual(policy, request),
 			/levels. The most is 1000/,
 		)
-		const short = Policy.rules(App, Arr.take(Rules, 400), {
+		const short = rulesOf(App, Arr.take(Rules, 400), {
 			algorithm: "firstApplicable",
 		})
 		assert.strictEqual(Policy.coverage(short, request)._tag, "Some")
@@ -3301,7 +3301,7 @@ describe("Policy", () => {
 		) => {
 			const Note = Resource.make("Note", { actions: ["read"], fields })
 			const Notes = Domain.make({ principal: Caller, resources: [Note] })
-			const policy = Policy.rules(Notes, [
+			const policy = rulesOf(Notes, [
 				Policy.builder(Notes).allow("read", Note),
 				Policy.rule({
 					_tag: "Deny",
@@ -3359,8 +3359,8 @@ describe("Policy", () => {
 
 	it("does not take a copy of a rule or a policy made with a spread", () => {
 		const rule = Policy.builder(App).allow("read", Bot)
-		assert.throws(() => Policy.rules(App, [{ ...rule } as Policy.AnyRule]))
-		const policy = Policy.empty(App)
+		assert.throws(() => rulesOf(App, [{ ...rule } as Policy.AnyRule]))
+		const policy = emptyOf(App)
 		assert.throws(() => Policy.any([{ ...policy } as Policy.Policy<App>]))
 	})
 
@@ -3388,7 +3388,7 @@ describe("Policy", () => {
 
 	it("says which name a name with a mistake may mean", () => {
 		const bind = (rule: Partial<Policy.RuleShape>) => () =>
-			Policy.rules(App, [
+			rulesOf(App, [
 				Policy.rule({
 					_tag: "Allow",
 					actions: ["read"],
@@ -3440,7 +3440,7 @@ describe("Policy", () => {
 			{ length: 3000 },
 			(_, index) => `info.k${String(index)}`,
 		)
-		const policy = Policy.rules(Notes, [
+		const policy = rulesOf(Notes, [
 			Policy.rule({
 				_tag: "Allow",
 				actions: ["read"],
@@ -3466,7 +3466,7 @@ describe("Policy", () => {
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
 		const coverage = (when: Condition.Ast) =>
 			Policy.coverage(
-				Policy.rules(Notes, [
+				rulesOf(Notes, [
 					Policy.rule({
 						_tag: "Allow",
 						actions: ["read"],
@@ -3528,7 +3528,7 @@ describe("Policy", () => {
 		const Wide = Resource.make("Wide", { actions: ["read"], fields })
 		const Wides = Domain.make({ principal: Caller, resources: [Wide] })
 		const $ = Condition.builder<Record<string, null>, unknown, unknown>()
-		const policy = Policy.rules(Wides, [
+		const policy = rulesOf(Wides, [
 			Policy.rule({
 				_tag: "Allow",
 				actions: ["read"],
@@ -3593,10 +3593,8 @@ describe("Policy", () => {
 		const shared = Arr.reduce(
 			Arr.range(0, 14),
 			$.predicate("never", () => false) as Condition.Condition<
-				never,
-				never,
-				Condition.Opaque,
-				Condition.Reads<Bot, Caller>
+				Condition.Reads<Bot, Caller>,
+				Condition.Opaque
 			>,
 			(inner) => $.and(inner, inner),
 		)
@@ -3660,11 +3658,7 @@ describe("Policy", () => {
 			Effect.runSync(
 				// The types stop a Trigger here. The test casts, to check the code.
 				Condition.evaluate(
-					residual as unknown as Condition.Condition<
-						never,
-						never,
-						Condition.Opaque
-					>,
+					residual as unknown as Condition.Condition<unknown, Condition.Opaque>,
 					{ value: aliceTrigger },
 				),
 			),
@@ -3813,7 +3807,7 @@ describe("Policy", () => {
 		assert.isTrue(hasField(Note, "settings.mode"))
 		assert.isFalse(hasField(Note, "settings.mode.x"))
 		assert.throws(() =>
-			Policy.rules(Notes, [
+			rulesOf(Notes, [
 				Policy.rule({
 					_tag: "Allow",
 					actions: ["read"],
@@ -3941,8 +3935,8 @@ describe("Policy", () => {
 		const First = Domain.make({ principal: Caller, resources: [Bot] })
 		const Second = Domain.make({ principal: Caller, resources: [Bot] })
 		const rule = Policy.builder(First).allow("read", Bot)
-		assert.throws(() => Policy.rules(Second, [rule]))
-		assert.doesNotThrow(() => Policy.rules(First, [rule]))
+		assert.throws(() => rulesOf(Second, [rule]))
+		assert.doesNotThrow(() => rulesOf(First, [rule]))
 	})
 
 	it("does not take a rule of another domain", () => {
@@ -3955,6 +3949,6 @@ describe("Policy", () => {
 			when: ($) => $.eq("ownerUserId", null),
 		})
 		// The types stop this. The test casts the rule, to check the code too.
-		assert.throws(() => Policy.rules(Other, [rule as Policy.AnyRule]))
+		assert.throws(() => rulesOf(Other, [rule as Policy.AnyRule]))
 	})
 })
