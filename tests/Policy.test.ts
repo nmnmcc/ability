@@ -440,7 +440,10 @@ describe("Policy", () => {
 			const start = Date.now()
 			const exit = Schema.decodeUnknownExit(PolicySchema)(shared)
 			assert.isTrue(Exit.isFailure(exit))
-			assert.include(String(Exit.isFailure(exit) ? exit.cause : ""), "objects")
+			assert.include(
+				String(Exit.isFailure(exit) ? exit.cause : ""),
+				"The most is 100000",
+			)
 			const condition = Arr.reduce(
 				Arr.range(1, 30),
 				{ _tag: "True" } as unknown,
@@ -1330,14 +1333,14 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 1000)
 	})
 
-	it("does the work on a shared child only one time", () => {
+	it("decides a shared tree in a short time", () => {
 		const base: Policy.Policy<App> = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot)
 		})
-		const any = Arr.reduce(Arr.range(0, 23), base, (inner) =>
+		const any = Arr.reduce(Arr.range(0, 14), base, (inner) =>
 			Policy.any([inner, inner]),
 		)
-		const all = Arr.reduce(Arr.range(0, 23), base, (inner) =>
+		const all = Arr.reduce(Arr.range(0, 14), base, (inner) =>
 			Policy.all([inner, inner]),
 		)
 		const request = { principal: alice, action: "read", kind: "Bot" } as const
@@ -1353,6 +1356,8 @@ describe("Policy", () => {
 			"Allow",
 		)
 		assert.isBelow(Date.now() - start, 1000)
+		// A shared child counts for each place, so one more level is too many.
+		assert.throws(() => Policy.all([all, all]), /The most is 100000/)
 	})
 
 	it("makes a residual of a shared condition in a short time", () => {
@@ -2324,7 +2329,7 @@ describe("Policy", () => {
 	it("explains a shared tree in a short time", () =>
 		Effect.gen(function* () {
 			const shared = Arr.reduce(
-				Arr.range(1, 30),
+				Arr.range(1, 12),
 				Policy.define(App)(function* (_) {
 					yield* _.allow("read", Bot)
 				}) as Policy.Policy<typeof App>,
@@ -2337,6 +2342,9 @@ describe("Policy", () => {
 				resource: aliceBot,
 			})
 			assert.strictEqual(explained.decision._tag, "Allow")
+			// A shared node is in the steps each time that the decision comes
+			// to it.
+			assert.strictEqual(explained.steps.length, 2 ** 12)
 			assert.isBelow(Date.now() - start, 1000)
 		}).pipe(Effect.runSync))
 
@@ -2872,17 +2880,18 @@ describe("Policy", () => {
 		assert.strictEqual(Policy.coverage(policy, request)._tag, "All")
 	})
 
-	it("does not write out a shared tree that would be too large as JSON", () => {
-		const shared = Arr.reduce(
-			Arr.range(1, 24),
-			Policy.empty(App) as Policy.Policy<typeof App>,
-			(policy) => Policy.all([policy, policy]),
-		)
+	it("does not make a shared tree that would be too large", () => {
+		const start = Date.now()
 		assert.throws(
-			() => Schema.encodeSync(PolicySchemaOfApp)(shared),
-			/more than 100000 nodes/,
+			() =>
+				Arr.reduce(
+					Arr.range(1, 24),
+					Policy.empty(App) as Policy.Policy<typeof App>,
+					(policy) => Policy.all([policy, policy]),
+				),
+			/A policy tree has \d+ nodes. The most is 100000/,
 		)
-		assert.throws(() => JSON.stringify(shared), /more than 100000 nodes/)
+		assert.isBelow(Date.now() - start, 100)
 	})
 
 	it("does not take a condition from JSON with too many nodes", () => {
@@ -3086,7 +3095,7 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 2000)
 	})
 
-	it("keeps decisions of shared nodes with a predicate for another action", () => {
+	it("decides shared nodes with a predicate for another action in a short time", () => {
 		const leaf = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot)
 			yield* _.allow("update", Bot, {
@@ -3094,7 +3103,7 @@ describe("Policy", () => {
 			})
 		})
 		const shared = Arr.reduce(
-			Arr.range(1, 20),
+			Arr.range(1, 14),
 			leaf as typeof leaf,
 			(policy) => Policy.all([policy, policy]) as typeof leaf,
 		)
@@ -3243,7 +3252,7 @@ describe("Policy", () => {
 			})._tag,
 			"Allow",
 		)
-		assert.throws(() => deep(2500), /at most 256 levels/)
+		assert.throws(() => deep(2500), /257 levels. The most is 256/)
 		const json = Arr.reduce(
 			Arr.range(1, 300),
 			Schema.encodeSync(Policy.schema(App))(one) as unknown,
@@ -3699,7 +3708,7 @@ describe("Policy", () => {
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
 		const policy = Arr.reduce(
-			Arr.range(0, 29),
+			Arr.range(0, 14),
 			Policy.define(Notes)(function* (_) {
 				yield* _.allow("read", Note)
 			}) as Policy.Policy<typeof Notes>,

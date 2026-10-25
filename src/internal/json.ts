@@ -9,6 +9,7 @@
 import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
 import * as Result from "effect/Result"
+import type * as SchemaIssue from "effect/SchemaIssue"
 import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
 import { readPart } from "./read.ts"
@@ -67,18 +68,20 @@ export const toJson = (node: Node): unknown => {
 export class Problem extends Data.TaggedError("Problem")<{
 	readonly path: ReadonlyArray<PropertyKey>
 	readonly message: string
+	/** The issue of a Schema that the decode used, as for `meta`. */
+	readonly issue?: SchemaIssue.Issue | undefined
 }> {}
 
 /** The count of the objects and items that one decode has read. It belongs to one decode. */
-interface Budget {
+export interface Budget {
 	used: number
 }
 
-const problem = (path: ReadonlyArray<PropertyKey>, message: string) =>
+export const problem = (path: ReadonlyArray<PropertyKey>, message: string) =>
 	new Problem({ path, message })
 
 /** Counts `count` more objects or items, and stops past the limit. */
-const spend = (
+export const spend = (
 	budget: Budget,
 	count: number,
 	path: ReadonlyArray<PropertyKey>,
@@ -93,7 +96,7 @@ const spend = (
 }
 
 /** Reads a field of the input. A field that is not plain data is a problem. */
-const read = (
+export const read = (
 	input: unknown,
 	name: string,
 	path: ReadonlyArray<PropertyKey>,
@@ -105,7 +108,7 @@ const read = (
 	}
 }
 
-const readString = (
+export const readString = (
 	input: unknown,
 	name: string,
 	path: ReadonlyArray<PropertyKey>,
@@ -118,7 +121,7 @@ const readString = (
 }
 
 /** Reads the items of an array. */
-const readList = (
+export const readList = (
 	input: unknown,
 	name: string,
 	path: ReadonlyArray<PropertyKey>,
@@ -131,7 +134,12 @@ const readList = (
 	}
 	const list: ReadonlyArray<unknown> = value
 	spend(budget, list.length, at)
-	return Arr.makeBy(list.length, (index) => read(list, String(index), at))
+	// `Array.makeBy` of Effect gives at least one item, so it can not make an
+	// empty list. An array-like object with a length makes one with no read
+	// of the items before the read rule.
+	return Array.from({ length: list.length }, (_, index) =>
+		read(list, String(index), at),
+	)
 }
 
 const isJsonScalar = (value: unknown): value is Nodes.Scalar =>
@@ -264,6 +272,16 @@ const makeNode = (
 			throw problem([...path, "_tag"], "The node has no known tag")
 	}
 }
+
+/**
+ * Decodes the JSON form of a condition at a path, with the budget of a larger
+ * decode. It throws a {@link Problem}.
+ */
+export const decodeAt = (
+	input: unknown,
+	path: ReadonlyArray<PropertyKey>,
+	budget: Budget,
+): Node => decodeNode(input, path, 1, budget)
 
 /** Decodes the JSON form of a condition. */
 export const decode = (input: unknown): Result.Result<Node, Problem> => {

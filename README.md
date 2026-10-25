@@ -264,11 +264,15 @@ Put policies together:
 | `Policy.firstOf([a, b])`      | The first policy that allows or denies.                          |
 | `Policy.ceiling(policy, cap)` | A deny from `cap` always wins. An allow from `cap` does nothing. |
 
-A policy tree may have at most 256 levels. A combinator throws an error for a
-deeper tree, and the policy Schema does not decode one. A deeper tree could fill
-the stack of a check. The JSON form of a policy may have at most 1000 levels of
-objects and arrays, so a deep input fails to decode before it fills the stack. A
-field path may have at most 5 parts.
+A policy tree may have at most 256 levels and 100000 nodes, with its rules and
+the nodes of their conditions, and a shared part counted for each place. A
+combinator throws an error for a larger tree, and the policy Schema does not
+decode one. The decoder reads at most 1000000 objects and array items, so no
+input can fill the stack or take a very long time. A field path may have at most
+5 parts.
+
+A shared part of a tree is decided again for each place, so its predicates run
+each time, and `Policy.explain` lists its rules each time.
 
 For example, a user token may never do more than its member, and the platform
 has deny rules for everyone:

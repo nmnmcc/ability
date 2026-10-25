@@ -1058,14 +1058,14 @@ describe("Authorizer", () => {
 		}),
 	)
 
-	it.effect("keeps the shared children of a loaded policy", () =>
+	it.effect("checks a loaded policy with shared children", () =>
 		Effect.gen(function* () {
 			class Wide extends Authorizer.Service<Wide, { requires: Identity }>()(
 				"test/Wide",
 				App,
 			) {}
 			const policy = Arr.reduce(
-				Arr.range(0, 23),
+				Arr.range(0, 14),
 				Policy.define(App)(function* (_) {
 					yield* _.allow("read", Bot)
 				}) as Policy.Policy<typeof App>,

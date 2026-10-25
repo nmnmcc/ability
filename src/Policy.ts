@@ -49,6 +49,7 @@ import { dual } from "effect/Function"
 import * as Option from "effect/Option"
 import type * as Pipeable from "effect/Pipeable"
 import * as Ref from "effect/Ref"
+import * as Result from "effect/Result"
 import * as Schema from "effect/Schema"
 import * as SchemaIssue from "effect/SchemaIssue"
 import * as SchemaTransformation from "effect/SchemaTransformation"
@@ -58,6 +59,8 @@ import * as Bind from "./internal/bind.ts"
 import * as Catalog from "./internal/catalog.ts"
 import * as Limits from "./internal/limits.ts"
 import * as Nodes from "./internal/nodes.ts"
+import * as PolicyJson from "./internal/policy-json.ts"
+import * as PolicyNodes from "./internal/policy-nodes.ts"
 import * as Search from "./internal/search.ts"
 import * as Decision from "./Decision.ts"
 import * as Domain from "./Domain.ts"
@@ -402,161 +405,23 @@ export interface Options {
 	readonly algorithm?: Algorithm
 }
 
-const nodes = Data.taggedEnum<Node>()
-
-/**
- * The most nodes that the JSON form of a policy may have. A tree may use one
- * child in many places, and the JSON form writes it out each time, so a small
- * tree may have a very large JSON form.
- */
-const maxEncodedNodes = 100_000
-
-/**
- * The number of nodes of the JSON form of a condition. A shared child counts
- * one time for each place, as the JSON form writes it out each time.
- */
-const conditionSize = (ast: Ast, memo: Map<Ast, number>): number =>
-	remember(memo, ast, () => {
-		switch (ast._tag) {
-			case "And":
-			case "Or":
-				return Arr.reduce(
-					ast.conditions,
-					1,
-					(size, child) => size + conditionSize(child, memo),
-				)
-			case "Not":
-				return 1 + conditionSize(ast.condition, memo)
-			default:
-				return 1
-		}
-	})
-
-/**
- * The number of nodes of the JSON form of a tree, with the conditions of its
- * rules.
- */
-const encodedSize = (
-	node: Node,
-	memo: Map<Node, number> = new Map(),
-	conditions: Map<Ast, number> = new Map(),
-): number =>
-	remember(memo, node, () => {
-		switch (node._tag) {
-			case "Rules":
-				return Arr.reduce(
-					node.rules,
-					1,
-					(size, value) =>
-						size +
-						1 +
-						(value.when === undefined
-							? 0
-							: conditionSize(value.when as Ast, conditions)),
-				)
-			case "All":
-			case "Any":
-			case "FirstOf":
-				return Arr.reduce(
-					node.policies,
-					1,
-					(size, child) => size + encodedSize(child, memo, conditions),
-				)
-			case "Ceiling":
-				return (
-					1 +
-					encodedSize(node.cap, memo, conditions) +
-					encodedSize(node.policy, memo, conditions)
-				)
-		}
-	})
-
-/** Gives the JSON form of a tree, when it is not too large. */
-const encodeTree = (node: Node): EncodedNode => {
-	if (encodedSize(node) > maxEncodedNodes) {
-		throw new globalThis.Error(tooLargeMessage)
-	}
-	return encodeNode(node)
-}
-
-const tooLargeMessage = `The JSON form of this policy would have more than ${String(maxEncodedNodes)} nodes`
-
-const encodeNode = (node: Node): EncodedNode => {
-	switch (node._tag) {
-		case "Rules":
-			return {
-				_tag: "Rules",
-				algorithm: node.algorithm,
-				// The domain of a rule is not in its JSON form.
-				rules: node.rules.map(
-					({ domain: _domain, ...value }) => ({ ...value }) as EncodedRule,
-				),
-			}
-		case "All":
-		case "Any":
-		case "FirstOf":
-			return { _tag: node._tag, policies: node.policies.map(encodeNode) }
-		case "Ceiling":
-			return {
-				_tag: "Ceiling",
-				cap: encodeNode(node.cap),
-				policy: encodeNode(node.policy),
-			}
-	}
-}
-
-/**
- * The tree of a policy as a value that `JSON.stringify` keeps with no loss.
- * See `Condition.toJsonValue`.
- */
-const jsonNode = (node: EncodedNode, meta: Schema.Top | undefined): unknown => {
-	const json = (child: EncodedNode) => jsonNode(child, meta)
-	switch (node._tag) {
-		case "Rules":
-			return {
-				...node,
-				rules: Arr.map(node.rules, (value) => ({
-					...value,
-					...(value.when === undefined
-						? {}
-						: { when: Condition.toJsonValue(value.when as Ast) }),
-					// The `meta` of a rule is a decoded value. Its JSON form comes
-					// from the `meta` Schema of the domain, as in `schema`.
-					...(value.meta === undefined || meta === undefined
-						? {}
-						: {
-								meta: Schema.encodeUnknownSync(
-									meta as Schema.Codec<unknown, unknown>,
-								)(value.meta),
-							}),
-				})),
-			}
-		case "All":
-		case "Any":
-		case "FirstOf":
-			return { ...node, policies: Arr.map(node.policies, json) }
-		case "Ceiling":
-			return { ...node, cap: json(node.cap), policy: json(node.policy) }
-	}
-}
-
 /**
  * The class of every policy value. Two policies of one domain with the same
  * tree are equal. As JSON, a policy is its tree.
  */
 class PolicyData extends Data.Class<{
 	readonly domain: Domain.Any
-	readonly node: Node
+	readonly node: PolicyNodes.Node
 }> {
 	toJSON(): unknown {
-		return jsonNode(encodeTree(this.node), this.domain.meta)
+		return PolicyJson.toJson(this.node, this.domain.meta)
 	}
 }
 
 /** The node of a policy, with no types, for the code below. */
-const nodeOf = (policy: Any): Node => policy.node as Node
+const nodeOf = (policy: Any): PolicyNodes.Node => policy.node as never
 
-const fromNode = (domain: Domain.Any, node: Node): any =>
+const fromNode = (domain: Domain.Any, node: PolicyNodes.Node): any =>
 	new PolicyData({ domain, node })
 
 /**
@@ -601,16 +466,11 @@ export const rules: <
 	Rule.Services<Rules>,
 	Rule.OpaqueOf<Rules>
 > = (domain, values, options) => {
-	const node = nodes.Rules({
+	// The constructor takes only rules, and it stops a list past the limits.
+	const node = new PolicyNodes.Rules({
 		algorithm: options?.algorithm ?? "denyOverrides",
 		rules: Array.from(values),
 	})
-	// A value that is not a rule, such as a copy of a rule made with a spread,
-	// may keep the type fields of another rule, and it does not work in a
-	// generator. It is a mistake in the code, so it is a defect.
-	if (!Arr.every(node.rules, Rule.isRule)) {
-		throw new globalThis.Error("A value in the list is not a rule")
-	}
 	// A rule from a builder of another domain is a mistake in the code, so it
 	// is a defect. Two domains may have the same types, so the types do not
 	// find it.
@@ -712,52 +572,14 @@ const sameDomain = (policies: ReadonlyArray<Any>): Domain.Any => {
 	return domain
 }
 
-/**
- * The most levels in a policy tree. A walk over a tree calls itself for each
- * level, so a much deeper tree could fill the stack and stop a check.
- */
-const maxDepth = 256
-
-/** The number of levels of a policy tree. */
-const heightOf = (node: Node, memo: Map<Node, number> = new Map()): number =>
-	remember(memo, node, () => {
-		const height = (child: Node) => heightOf(child, memo)
-		switch (node._tag) {
-			case "Rules":
-				return 1
-			case "All":
-			case "Any":
-			case "FirstOf":
-				return (
-					1 +
-					Arr.reduce(node.policies, 0, (top, child) =>
-						Math.max(top, height(child)),
-					)
-				)
-			case "Ceiling":
-				return 1 + Math.max(height(node.cap), height(node.policy))
-		}
-	})
-
-/**
- * Makes a policy from a new node. Its children come from policies, so each
- * has at most `maxDepth` levels, and the walk of `heightOf` is safe.
- */
-const fromCombined = (domain: Domain.Any, node: Node): any => {
-	if (heightOf(node) > maxDepth) {
-		throw new globalThis.Error(
-			`A policy tree may have at most ${maxDepth} levels`,
-		)
-	}
-	return fromNode(domain, node)
-}
-
+// The constructors of the nodes stop a tree past `policyDepth` or
+// `policyNodes`.
 const combine =
 	(tag: "All" | "Any" | "FirstOf") =>
 	(policies: ReadonlyArray<Any>): any =>
-		fromCombined(
+		fromNode(
 			sameDomain(policies),
-			nodes[tag]({ policies: policies.map(nodeOf) }),
+			new PolicyNodes[tag](Arr.map(policies, nodeOf)),
 		)
 
 /**
@@ -817,61 +639,26 @@ export const ceiling: {
 		cap: Policy<D, E2, R2, O2>,
 	): Policy<D, E | E2, R | R2, O | O2>
 } = dual(2, (policy: Any, cap: Any): any =>
-	fromCombined(
+	fromNode(
 		sameDomain([policy, cap]),
-		nodes.Ceiling({ cap: nodeOf(cap), policy: nodeOf(policy) }),
+		new PolicyNodes.Ceiling({ cap: nodeOf(cap), policy: nodeOf(policy) }),
 	),
 )
 
-/**
- * Gives the answer for a key from a memo, or works it out and keeps it. One
- * node may be a child of many nodes, so each walk over a tree keeps its work
- * on a node in a memo that the walk makes for itself. No memo lives longer
- * than one call.
- *
- * The memo is a native `Map`, because it must find a node by the node itself.
- * An Effect `HashMap` finds a key by `Equal`, and the nodes are Effect data,
- * so it would hash the whole structure of a node, and a shared child again for
- * each path to it.
- */
-const remember = <K, A>(memo: Map<K, A>, key: K, work: () => A): A => {
-	// A result may be `undefined`, as the result of a fold may be, so the test
-	// asks for the key.
-	if (memo.has(key)) {
-		return memo.get(key) as A
-	}
-	const result = work()
-	memo.set(key, result)
-	return result
-}
-
-/** The memos of one walk over a policy tree. */
-interface TreeMemo {
-	readonly done: Map<Node, Node>
-	readonly predicates: Map<Node, boolean>
-}
-
+/** Gives the services to the predicates of a tree. A node with none stays. */
 const provideNode = (
-	node: Node,
+	node: PolicyNodes.Node,
 	context: Context.Context<never>,
-	memo: TreeMemo = { done: new Map(), predicates: new Map() },
-): Node =>
-	// A node with no predicate needs no services, and it stays the same node.
-	// One node may be a child of many nodes, and it gives one new node.
-	!nodeHasPredicate(node, memo.predicates)
-		? node
-		: remember(memo.done, node, () => provideOnce(node, context, memo))
-
-const provideOnce = (
-	node: Node,
-	context: Context.Context<never>,
-	memo: TreeMemo,
-): Node => {
+): PolicyNodes.Node => {
+	if (!node.opaque) {
+		return node
+	}
+	const provide = (child: PolicyNodes.Node) => provideNode(child, context)
 	switch (node._tag) {
 		case "Rules":
-			return nodes.Rules({
+			return new PolicyNodes.Rules({
 				algorithm: node.algorithm,
-				rules: node.rules.map((value) =>
+				rules: Arr.map(node.rules, (value) =>
 					value.when === undefined || !Condition.hasPredicate(value.when)
 						? value
 						: Rule.make({
@@ -883,15 +670,11 @@ const provideOnce = (
 		case "All":
 		case "Any":
 		case "FirstOf":
-			return nodes[node._tag]({
-				policies: Arr.map(node.policies, (child) =>
-					provideNode(child, context, memo),
-				),
-			})
+			return new PolicyNodes[node._tag](Arr.map(node.policies, provide))
 		case "Ceiling":
-			return nodes.Ceiling({
-				cap: provideNode(node.cap, context, memo),
-				policy: provideNode(node.policy, context, memo),
+			return new PolicyNodes.Ceiling({
+				cap: provide(node.cap),
+				policy: provide(node.policy),
 			})
 	}
 }
@@ -929,13 +712,6 @@ interface DecideContext {
 	readonly descriptor: Resource.Descriptor
 	/** The rules that were tested, for {@link explain}. */
 	readonly trace: Ref.Ref<Chunk.Chunk<Step>> | undefined
-	readonly predicates: Map<Node, boolean>
-	/**
-	 * The decisions of nodes with no predicates. One node may be a child of
-	 * many nodes, and its decision is the same each time, so it is made only
-	 * one time. A tree with shared nodes may have very many paths.
-	 */
-	readonly decisions: Map<Node, Decision.Decision>
 }
 
 const ruleApplies = (
@@ -1016,26 +792,6 @@ const decideRules = (
 	)
 }
 
-const decideNode = (
-	node: Node,
-	context: DecideContext,
-	path: ReadonlyArray<number>,
-): Effect.Effect<Decision.Decision, unknown, unknown> => {
-	// A predicate that the request may use must run each time. A predicate of
-	// a rule for another action, kind or field never runs, so the decision may
-	// be kept. A trace keeps the steps of a node only the first time, so a
-	// shared tree does not give a step for each path to a node.
-	if (usesPredicate(node, context)) {
-		return decideOnce(node, context, path)
-	}
-	const cached = context.decisions.get(node)
-	return cached !== undefined
-		? Effect.succeed(cached)
-		: Effect.tap(decideOnce(node, context, path), (decision) =>
-				Effect.sync(() => context.decisions.set(node, decision)),
-			)
-}
-
 /** The next step of a walk over children: stop with a decision, or go on. */
 type WalkStep<S> =
 	| { readonly _tag: "Stop"; readonly decision: Decision.Decision }
@@ -1048,7 +804,7 @@ type WalkStep<S> =
  * predicates do not run.
  */
 const walkChildren = <S>(
-	children: ReadonlyArray<Node>,
+	children: ReadonlyArray<PolicyNodes.Node>,
 	context: DecideContext,
 	path: ReadonlyArray<number>,
 	start: S,
@@ -1080,8 +836,13 @@ const stop = (decision: Decision.Decision): WalkStep<never> => ({
 
 const next = <S>(state: S): WalkStep<S> => ({ _tag: "Next", state })
 
-const decideOnce = (
-	node: Node,
+/**
+ * Decides a node. A shared child is decided again for each place, so its
+ * predicates run each time, as the policy says. The limits of the nodes keep
+ * this work small.
+ */
+const decideNode = (
+	node: PolicyNodes.Node,
 	context: DecideContext,
 	path: ReadonlyArray<number>,
 ): Effect.Effect<Decision.Decision, unknown, unknown> => {
@@ -1199,8 +960,6 @@ const makeContext = (
 		},
 		descriptor,
 		trace,
-		predicates: new Map(),
-		decisions: new Map(),
 	}
 }
 
@@ -1208,8 +967,7 @@ const decideAny = (
 	policy: Any,
 	request: AnyRequest,
 ): Effect.Effect<Decision.Decision, unknown, unknown> =>
-	// Each run of the Effect needs its own store of decisions, because the
-	// resource value may change between two runs.
+	// The context reads the resource value, so it is made for each run.
 	Effect.suspend(() => {
 		const context = makeContext(policy.domain, request, undefined)
 		return context === undefined
@@ -1263,10 +1021,8 @@ export const decideSync: {
 /**
  * Gives the decision of a policy and the rules that were tested to make it.
  *
- * One node may be a child of many nodes. A node with no predicate that the
- * request may use gives the same decision each time, so its rules are tested,
- * and are in the steps, only the first time. So a small tree with many shared
- * nodes gives a short list of steps.
+ * One node may be a child of many nodes. Its rules are tested, and are in the
+ * steps, each time that the decision comes to it.
  *
  * @stability stable
  * @category evaluation
@@ -1303,17 +1059,10 @@ export const explain: {
  * Tests if a deny rule of the request names a part inside `field`.
  */
 const deniesInside = (
-	node: Node,
+	node: PolicyNodes.Node,
 	target: { readonly action: string; readonly kind: string },
 	field: string,
-	// A native set: it must find a node by the node itself. See `remember`.
-	seen: Set<Node> = new Set(),
 ): boolean => {
-	// One node may be a child of many nodes. It is tested one time.
-	if (seen.has(node)) {
-		return false
-	}
-	seen.add(node)
 	switch (node._tag) {
 		case "Rules":
 			return node.rules.some(
@@ -1329,13 +1078,11 @@ const deniesInside = (
 		case "All":
 		case "Any":
 		case "FirstOf":
-			return node.policies.some((child) =>
-				deniesInside(child, target, field, seen),
-			)
+			return node.policies.some((child) => deniesInside(child, target, field))
 		case "Ceiling":
 			return (
-				deniesInside(node.cap, target, field, seen) ||
-				deniesInside(node.policy, target, field, seen)
+				deniesInside(node.cap, target, field) ||
+				deniesInside(node.policy, target, field)
 			)
 	}
 }
@@ -1520,12 +1267,6 @@ interface ResidualContext {
 	}
 	/** The resource of the kind, for the fields that a rule may grant. */
 	readonly descriptor: Resource.Descriptor
-	/**
-	 * The work done on each node. One node may be a child of many nodes, so
-	 * the work on it is done only one time.
-	 */
-	readonly pairs: Map<Node, Pair>
-	readonly predicates: Map<Node, boolean>
 }
 
 const ruleCondition = (value: Rule.Any, context: ResidualContext): Ast =>
@@ -1568,10 +1309,14 @@ const firstApplicableResidual = (
 	)
 }
 
-const residualNode = (node: Node, context: ResidualContext): Pair =>
-	remember(context.pairs, node, () => residualOnce(node, context))
-
-const residualOnce = (node: Node, context: ResidualContext): Pair => {
+/**
+ * Gives the residual pair of a node. A shared child is worked again for each
+ * place. The limits of the nodes and of a residual keep this work small.
+ */
+const residualNode = (
+	node: PolicyNodes.Node,
+	context: ResidualContext,
+): Pair => {
 	const { and, not, or } = build
 	switch (node._tag) {
 		case "Rules": {
@@ -1658,43 +1403,22 @@ const residualOnce = (node: Node, context: ResidualContext): Pair => {
 /** The name of the predicate of a residual condition that runs `decide`. */
 const policyPredicate = "policy"
 
-/** Tests if a rule of a policy tree has a predicate. */
-const nodeHasPredicate = (
-	node: Node,
-	memo: Map<Node, boolean> = new Map(),
-): boolean =>
-	remember(memo, node, () => {
-		const test = (child: Node) => nodeHasPredicate(child, memo)
-		switch (node._tag) {
-			case "Rules":
-				return Arr.some(
-					node.rules,
-					(value) =>
-						value.when !== undefined && Condition.hasPredicate(value.when),
-				)
-			case "All":
-			case "Any":
-			case "FirstOf":
-				return Arr.some(node.policies, test)
-			case "Ceiling":
-				return test(node.cap) || test(node.policy)
-		}
-	})
-
-/** Tests if a rule that the request may use has a predicate. */
-/** What {@link usesPredicate} needs: the request and a memo. */
+/** What {@link usesPredicate} needs: the request. */
 interface PredicateContext {
 	readonly action: string
 	readonly kind: string
 	readonly field: string | undefined
 	readonly descriptor: Resource.Descriptor
-	readonly predicates: Map<Node, boolean>
 }
 
-const usesPredicate = (node: Node, context: PredicateContext): boolean =>
-	remember(context.predicates, node, () => usesPredicateOnce(node, context))
-
-const usesPredicateOnce = (node: Node, context: PredicateContext): boolean => {
+/** Tests if a rule that the request may use has a predicate. */
+const usesPredicate = (
+	node: PolicyNodes.Node,
+	context: PredicateContext,
+): boolean => {
+	if (!node.opaque) {
+		return false
+	}
 	switch (node._tag) {
 		case "Rules":
 			return node.rules.some(
@@ -1714,56 +1438,6 @@ const usesPredicateOnce = (node: Node, context: PredicateContext): boolean => {
 	}
 }
 
-const isScopeValue = (operand: Condition.Operand): boolean =>
-	operand._tag === "Principal" ||
-	operand.value === null ||
-	typeof operand.value === "string" ||
-	typeof operand.value === "number" ||
-	typeof operand.value === "boolean"
-
-/**
- * Gives the problem of a scope that is not plain data, or `undefined` when it
- * is plain data. A predicate, or a value that a condition can not hold, such
- * as `undefined` from a route parameter, is a defect: such a scope could make
- * a check pass on the wrong values. A shared node is tested one time.
- */
-const scopeProblem = (
-	ast: Ast,
-	memo: Map<Ast, string | null> = new Map(),
-): string | undefined =>
-	remember(memo, ast, (): string | null => {
-		switch (ast._tag) {
-			case "Predicate":
-				return "can not have a predicate"
-			case "Compare":
-				return isScopeValue(ast.value)
-					? null
-					: `has a value for "${ast.field}" that is not a scalar`
-			case "In":
-				return Arr.every(ast.values, isScopeValue)
-					? null
-					: `has a value for "${ast.field}" that is not a scalar`
-			case "Under":
-				return Arr.every(ast.prefix, isScopeValue)
-					? null
-					: "has a path part that is not a scalar"
-			case "And":
-			case "Or":
-				return (
-					Option.getOrNull(
-						Arr.findFirst(
-							Arr.map(ast.conditions, (child) => scopeProblem(child, memo)),
-							(problem) => problem !== undefined,
-						),
-					) ?? null
-				)
-			case "Not":
-				return scopeProblem(ast.condition, memo) ?? null
-			default:
-				return null
-		}
-	}) ?? undefined
-
 /**
  * Makes the scope of a request, with the principal in it. A scope comes from
  * code, so a scope that does not fit the domain is a defect. It is bound as a
@@ -1777,10 +1451,12 @@ const scopeOf = (
 	if (request.within === undefined) {
 		return always
 	}
+	// The builder stops a value that a condition can not hold, such as
+	// `undefined` from a route parameter. A predicate could make a check pass
+	// on the wrong values, so a scope with one is a defect too.
 	const ast = (request.within as (builder: unknown) => Ast)(Condition.builder())
-	const problem = scopeProblem(ast)
-	if (problem !== undefined) {
-		throw new globalThis.Error(`A scope ${problem}`)
+	if (Condition.hasPredicate(ast)) {
+		throw new globalThis.Error("A scope can not have a predicate")
 	}
 	const issues = Bind.ruleIssues(
 		domain,
@@ -1837,8 +1513,6 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 		field: request.field,
 		input,
 		descriptor,
-		pairs: new Map(),
-		predicates: new Map(),
 	}
 	// The type of the residual of a plain policy says that it has no
 	// predicate, so it can not be the predicate below. A residual past the
@@ -1852,7 +1526,7 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 	// predicate that runs `decide` for each value.
 	const decision = (value: object) =>
 		decideNode(
-			policy.node,
+			nodeOf(policy),
 			{
 				action: request.action,
 				kind: request.kind,
@@ -1864,8 +1538,6 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 				},
 				descriptor,
 				trace: undefined,
-				predicates: new Map(),
-				decisions: new Map(),
 			},
 			[],
 		)
@@ -2144,195 +1816,6 @@ export type EncodedNode =
 			readonly policy: EncodedNode
 	  }
 
-const AlgorithmSchema = Schema.Literals([
-	"denyOverrides",
-	"permitOverrides",
-	"firstApplicable",
-	"lastApplicable",
-])
-
-const encodedRuleSchema = (meta: Schema.Top | undefined) =>
-	Schema.Struct({
-		_tag: Schema.Literals(["Allow", "Deny"]),
-		actions: Schema.Array(Schema.String),
-		resources: Schema.Array(Schema.String),
-		when: Schema.optionalKey(Condition.schema),
-		fields: Schema.String.pipe(Schema.Array, Schema.optionalKey),
-		reason: Schema.optionalKey(Schema.String),
-		id: Schema.optionalKey(Schema.String),
-		meta: Schema.optionalKey(
-			(meta ?? Schema.Never) as Schema.Codec<unknown, unknown>,
-		),
-	})
-
-/**
- * The most levels of objects and arrays in the JSON form of a policy. The
- * Schema of a policy calls itself for each level, so a much deeper input
- * could fill the stack before the checks of the policy run. A policy tree of
- * `maxDepth` levels with deep conditions stays well below this.
- */
-const maxJsonDepth = 1000
-
-/**
- * The most objects and arrays in the JSON form of an input, with a shared one
- * counted for each place. The decoder writes out a shared one each time, so
- * an input with few objects may give a very large tree.
- */
-const maxInputNodes = 1_000_000
-
-/** The size and the height of a value, in objects and arrays. */
-interface Measure {
-	readonly size: number
-	readonly height: number
-}
-
-/**
- * Measures a value, or gives `undefined` when it is higher than `levels`. A
- * shared object is measured one time. The walk stops at that height, so it
- * does not fill the stack itself. The memo is a native `Map`, because it
- * must find an object by the object itself.
- */
-const measure = (
-	input: unknown,
-	levels: number,
-	memo: Map<object, Measure | { readonly failed: number }>,
-): Measure | undefined => {
-	if (typeof input !== "object" || input === null) {
-		return { size: 0, height: 0 }
-	}
-	const cached = memo.get(input)
-	// A value that was too high for some levels is too high for fewer.
-	if (
-		cached !== undefined &&
-		("failed" in cached ? levels <= cached.failed : true)
-	) {
-		return "failed" in cached || cached.height > levels ? undefined : cached
-	}
-	// After the first child that is too high, the fold measures no more
-	// children. The walk has few frames for each level, so it does not fill
-	// the stack at the most levels.
-	// An input with a key that a loop over the keys does not see, or with a
-	// getter, may give the decoder more than the measure sees. Such an input
-	// is not plain data, so it fails.
-	const result =
-		levels === 0 || !isPlainData(input)
-			? undefined
-			: Arr.reduce(
-					Object.values(input),
-					{ size: 1, height: 1 } as Measure | undefined,
-					(total, child) => {
-						const measured =
-							total === undefined ? undefined : measure(child, levels - 1, memo)
-						return total === undefined || measured === undefined
-							? undefined
-							: {
-									size: total.size + measured.size,
-									height: Math.max(total.height, 1 + measured.height),
-								}
-					},
-				)
-	memo.set(input, result ?? { failed: levels })
-	return result
-}
-
-/**
- * Tests if each own key of an object is a plain data key that a loop over the
- * keys sees. The `length` of an array is the one key that is not seen. The
- * decoder reads keys of the prototypes too, so a prototype other than the
- * one of a plain object or an array may have only methods, as the prototype
- * of a class has.
- */
-const isPlainData = (input: object): boolean =>
-	Arr.every(Reflect.ownKeys(input), (key) => {
-		const property = Object.getOwnPropertyDescriptor(input, key)
-		return (
-			property !== undefined &&
-			"value" in property &&
-			(property.enumerable === true ||
-				(Array.isArray(input) && key === "length"))
-		)
-	}) && hasOnlyMethods(Object.getPrototypeOf(input))
-
-/** Tests if the prototypes from `prototype` up have only methods. */
-const hasOnlyMethods = (prototype: unknown): boolean =>
-	prototype === null ||
-	prototype === Object.prototype ||
-	prototype === Array.prototype ||
-	(typeof prototype === "object" &&
-		Arr.every(Reflect.ownKeys(prototype), (key) => {
-			const property = Object.getOwnPropertyDescriptor(prototype, key)
-			return (
-				typeof key === "symbol" ||
-				key === "constructor" ||
-				(property !== undefined &&
-					"value" in property &&
-					typeof property.value === "function")
-			)
-		}) &&
-		hasOnlyMethods(Object.getPrototypeOf(prototype)))
-
-/** Tests if a value is low and small enough to decode. */
-const fitsLimits = (input: unknown): string | true => {
-	const measured = measure(input, maxJsonDepth, new Map())
-	return measured === undefined
-		? `A policy may have at most ${String(maxJsonDepth)} levels of JSON`
-		: measured.size > maxInputNodes
-			? `A policy may have at most ${String(maxInputNodes)} objects and arrays in JSON`
-			: true
-}
-
-const encodedNodeSchema = (
-	meta: Schema.Top | undefined,
-): Schema.Codec<EncodedNode> => {
-	const self: Schema.Codec<EncodedNode> = Schema.Union([
-		Schema.TaggedStruct("Rules", {
-			algorithm: AlgorithmSchema,
-			rules: Schema.Array(encodedRuleSchema(meta)),
-		}),
-		Schema.TaggedStruct("All", {
-			policies: Schema.Array(Schema.suspend(() => self)),
-		}),
-		Schema.TaggedStruct("Any", {
-			policies: Schema.Array(Schema.suspend(() => self)),
-		}),
-		Schema.TaggedStruct("FirstOf", {
-			policies: Schema.Array(Schema.suspend(() => self)),
-		}),
-		Schema.TaggedStruct("Ceiling", {
-			cap: Schema.suspend(() => self),
-			policy: Schema.suspend(() => self),
-		}),
-	]) as never
-	return self
-}
-
-/**
- * Makes a policy tree from its JSON form. Each rule gets the domain of the
- * Schema, as a rule from the builder of the domain has it.
- */
-const decodeNode = (node: EncodedNode, domain: Domain.Any): Node => {
-	switch (node._tag) {
-		case "Rules":
-			return nodes.Rules({
-				algorithm: node.algorithm,
-				rules: node.rules.map((value) =>
-					Rule.make({ ...(value as Rule.Shape), domain }),
-				),
-			})
-		case "All":
-		case "Any":
-		case "FirstOf":
-			return nodes[node._tag]({
-				policies: node.policies.map((child) => decodeNode(child, domain)),
-			})
-		case "Ceiling":
-			return nodes.Ceiling({
-				cap: decodeNode(node.cap, domain),
-				policy: decodeNode(node.policy, domain),
-			})
-	}
-}
-
 /**
  * Tests if a value is a policy.
  *
@@ -2347,6 +1830,11 @@ export const isPolicy = (u: unknown): u is Any => u instanceof PolicyData
  * every kind, action, field and principal field against the domain, and the
  * `meta` of each rule against the `meta` Schema of the domain.
  *
+ * The decoder takes at most 256 levels of policies and 1000 levels of
+ * conditions, and at most 1000000 objects and array items, with a shared
+ * object counted for each place. It reads only the own data fields of the
+ * input.
+ *
  * @stability stable
  * @category schemas
  * @since 0.3.0
@@ -2354,39 +1842,35 @@ export const isPolicy = (u: unknown): u is Any => u instanceof PolicyData
 export const schema = <D extends Domain.Any>(
 	domain: D,
 ): Schema.Codec<Policy<D>, EncodedNode> =>
-	// The input is any value until the checks of `encodedNodeSchema` run, so
-	// this guard says yes to every object.
-	Schema.declare(
-		(input): input is EncodedNode =>
-			typeof input === "object" && input !== null,
-	).pipe(
-		Schema.check(Schema.makeFilter(fitsLimits)),
-		Schema.decodeTo(
-			encodedNodeSchema(domain.meta),
-			SchemaTransformation.passthrough(),
-		),
-		Schema.check(Schema.makeFilter((node) => Bind.treeIssues(domain, node))),
+	Schema.Unknown.pipe(
 		Schema.decodeTo(
 			// A policy with a predicate is not a plain policy, and it can not
 			// become JSON.
 			Schema.declare(
 				(u): u is Policy<D> =>
-					isPolicy(u) && u.domain === domain && !nodeHasPredicate(u.node),
+					isPolicy(u) && u.domain === domain && !nodeOf(u).opaque,
+			).check(
+				Schema.makeFilter((policy) => Bind.treeIssues(domain, nodeOf(policy))),
 			),
 			SchemaTransformation.transformEffect({
-				decode: (node: EncodedNode) =>
-					Effect.succeed(fromNode(domain, decodeNode(node, domain))),
-				// A tree whose JSON form is too large fails as a Schema issue.
-				encode: (policy: Policy<D>, options) =>
-					encodedSize(policy.node) > maxEncodedNodes
-						? Effect.fail(
-								new SchemaIssue.InvalidValue(
-									{ message: tooLargeMessage },
-									policy,
-									options,
+				decode: (input: unknown, options) =>
+					Result.match(PolicyJson.decode(input, domain), {
+						onSuccess: (node) => Effect.succeed(fromNode(domain, node)),
+						onFailure: (problem) =>
+							Effect.fail(
+								new SchemaIssue.Pointer(
+									problem.path,
+									problem.issue ??
+										new SchemaIssue.InvalidValue(
+											{ message: problem.message },
+											input,
+											options,
+										),
 								),
-							)
-						: Effect.succeed(encodeNode(policy.node)),
+							),
+					}),
+				encode: (policy: Policy<D>) =>
+					Effect.sync(() => PolicyJson.toJson(nodeOf(policy), domain.meta)),
 			}),
 		),
-	)
+	) as never

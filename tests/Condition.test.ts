@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Exit, pipe, Schema } from "effect"
+import { Effect, Equal, Exit, pipe, Schema } from "effect"
 import { Condition, Resource } from "../src/index.ts"
 import { alice, aliceBot, Bot, Caller, sharedBot } from "./fixtures.ts"
 
@@ -284,6 +284,20 @@ describe("Condition", () => {
 		const start = Date.now()
 		assert.throws(() => doubled(16), /131071 nodes. The most is 100000/)
 		assert.isBelow(Date.now() - start, 100)
+	})
+
+	it("decodes an empty list as an empty list", () => {
+		const decode = Schema.decodeUnknownSync(Condition.schema)
+		assert.isTrue(
+			Equal.equals(decode({ _tag: "And", conditions: [] }), Condition.and()),
+		)
+		assert.isTrue(
+			Equal.equals(decode({ _tag: "Or", conditions: [] }), Condition.or()),
+		)
+		assert.deepStrictEqual(
+			Condition.toJsonValue(decode({ _tag: "In", field: "a", values: [] })),
+			{ _tag: "In", field: "a", values: [] },
+		)
 	})
 
 	it("does not take a field path with more than 5 parts", () => {
