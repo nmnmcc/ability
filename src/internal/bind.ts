@@ -626,14 +626,22 @@ const conditionIssues = (
 					if (!spendChecks(context.memo, node.values.length, fields.length)) {
 						return []
 					}
-					return here(
-						Arr.flatMap(node.values, (operand, index) =>
-							operandIssues(context, node.field, fields, false, operand, [
-								"values",
-								index,
-							]),
-						),
-					)
+					// Past the most issues of the binding, the checks of the other
+					// values give none, so a very long list of wrong values does not
+					// make a very long list of issues. The list belongs to this check.
+					const left = maxIssues - context.memo.issues.count + 1
+					const found: Array<Issue> = []
+					Arr.forEach(node.values, (operand, index) => {
+						if (found.length < left) {
+							found.push(
+								...operandIssues(context, node.field, fields, false, operand, [
+									"values",
+									index,
+								]),
+							)
+						}
+					})
+					return here(found)
 				}
 				case "Exists":
 					return room(0) ? here(readIssues(context, node.field, ["field"])) : []
