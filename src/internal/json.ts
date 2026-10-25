@@ -13,7 +13,6 @@ import type * as SchemaIssue from "effect/SchemaIssue"
 import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
 import * as Place from "./place.ts"
-import { readPart } from "./read.ts"
 import * as Trampoline from "./trampoline.ts"
 
 type Node = Nodes.Node
@@ -66,30 +65,41 @@ export const spend = (
 }
 
 /**
- * Reads a field of the input at the place `at`. A field that is not plain
- * data is a problem. JSON has no hidden fields, so a field that a loop over
- * the keys does not see is a problem too.
+ * Reads a field of the input at the place `at`. JSON has only plain objects
+ * and lists, with fields that a loop over the keys sees. So an object with
+ * another prototype, as a value of a class, is a problem: its prototype may
+ * have a field, as a method `when`, that a read of a condition would take as
+ * missing, and a rule that loses its condition allows more. A field that is
+ * not an own data field that a loop sees is a problem too. A missing field
+ * reads `null`.
  */
 export const read = (
 	input: unknown,
 	name: string,
 	at: Place.Place | undefined,
 ): unknown => {
-	const problem = () =>
-		problemAt(Place.at(at, name), `The field "${name}" is not plain data`)
+	if (typeof input !== "object" || input === null) {
+		return null
+	}
+	const prototype: unknown = Object.getPrototypeOf(input)
 	if (
-		typeof input === "object" &&
-		input !== null &&
-		Object.hasOwn(input, name) &&
-		!Object.prototype.propertyIsEnumerable.call(input, name)
+		prototype !== Object.prototype &&
+		prototype !== null &&
+		!Array.isArray(input)
 	) {
-		throw problem()
+		throw problemAt(
+			at,
+			"A part of the input is not plain data: it is not a plain object",
+		)
 	}
-	try {
-		return readPart(input, name)
-	} catch {
-		throw problem()
+	const property = Object.getOwnPropertyDescriptor(input, name)
+	if (property === undefined) {
+		return null
 	}
+	if (property.enumerable !== true || !("value" in property)) {
+		throw problemAt(Place.at(at, name), `The field "${name}" is not plain data`)
+	}
+	return property.value === undefined ? null : property.value
 }
 
 export const readString = (

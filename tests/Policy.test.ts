@@ -2181,6 +2181,30 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 2000)
 	})
 
+	it("does not take a rule with a method when from its class", () => {
+		class Shaped {
+			when() {
+				return { _tag: "False" }
+			}
+		}
+		const rule = Object.assign(new Shaped(), {
+			_tag: "Allow",
+			actions: ["read"],
+			resources: ["Bot"],
+		})
+		const exit = Schema.decodeUnknownExit(PolicySchemaOfApp)({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [rule],
+		})
+		// A rule with no condition would allow every read.
+		assert.isTrue(Exit.isFailure(exit))
+		assert.include(
+			String(Exit.isFailure(exit) ? exit.cause : ""),
+			"not plain data",
+		)
+	})
+
 	it("does not take a condition or fields that a rule has from a class", () => {
 		class Shaped {
 			get when() {
