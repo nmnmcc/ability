@@ -531,7 +531,22 @@ const placeOf = (place: Place): Made => {
 		return [name, below] as const
 	})
 	const signatures = Arr.flatMap(records, (struct) => struct.indexSignatures)
-	const keyTop = place.top || objects || records.length < structs.length
+	// One place holds the values of every key. A key that fits the keys of one
+	// record of a union but not the keys of another is an extra key of the
+	// other, with any value, as the extra field of a struct is. So when the
+	// records have other Schemas of keys, a value at a key may be anything.
+	const keysOf = (struct: SchemaAST.Objects) =>
+		Arr.map(struct.indexSignatures, (signature) => signature.parameter)
+	const firstKeys = records.length === 0 ? [] : keysOf(records[0]!)
+	const sameKeys = Arr.every(records, (struct) => {
+		const keys = keysOf(struct)
+		return (
+			keys.length === firstKeys.length &&
+			Arr.every(keys, (key) => firstKeys.includes(key))
+		)
+	})
+	const keyTop =
+		place.top || objects || records.length < structs.length || !sameKeys
 	return {
 		branch: {
 			kinds,

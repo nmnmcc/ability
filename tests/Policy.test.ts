@@ -2421,6 +2421,56 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 2000)
 	})
 
+	it("takes a key of a record in a union as any value when another record has other keys", () => {
+		const Flags = Resource.make("Flags", {
+			actions: ["read"],
+			fields: {
+				data: Schema.Union([
+					Schema.Record(
+						Schema.TemplateLiteral(["x", Schema.String]),
+						Schema.Boolean,
+					),
+					Schema.Record(
+						Schema.TemplateLiteral(["y", Schema.String]),
+						Schema.Boolean,
+					),
+				]),
+			},
+		})
+		const FlagDomain = Domain.make({ principal: Caller, resources: [Flags] })
+		// A value as `{ data: { y1: false, x1: "secret" } }` fits the second
+		// record, and `x1` is an extra key of it.
+		const exit = Schema.decodeExit(Policy.schema(FlagDomain))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{ _tag: "Allow", actions: ["read"], resources: ["Flags"] },
+				{
+					_tag: "Deny",
+					actions: ["read"],
+					resources: ["Flags"],
+					when: {
+						_tag: "Not",
+						condition: {
+							_tag: "In",
+							field: "data.x1",
+							values: [
+								{ _tag: "Literal", value: true },
+								{ _tag: "Literal", value: false },
+								{ _tag: "Literal", value: null },
+							],
+						},
+					},
+				},
+			],
+		})
+		// A key that may hold any value may hold a value that is not plain
+		// data, so a test of it does not bind, as for an extra field of a
+		// struct. It must never bind with the kinds of only one record.
+		assert.isTrue(Exit.isFailure(exit))
+		assert.include(String(Exit.isFailure(exit) ? exit.cause : ""), "data.x1")
+	})
+
 	it("checks each pair of a kind and a field pattern on its own", () => {
 		const Marked = Resource.make("A\u0000x", {
 			actions: ["read"],
