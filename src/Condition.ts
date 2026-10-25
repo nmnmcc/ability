@@ -49,6 +49,7 @@ import * as Catalog from "./internal/catalog.ts"
 import * as Json from "./internal/json.ts"
 import * as Nodes from "./internal/nodes.ts"
 import * as Search from "./internal/search.ts"
+import * as Trampoline from "./internal/trampoline.ts"
 import * as Resource from "./Resource.ts"
 
 /**
@@ -992,50 +993,65 @@ const literalValue = (operand: Operand, field: string): Scalar => {
 	return operand.value
 }
 
-/** Folds a condition. A shared child is folded again for each place. */
-const foldNode = <A>(node: Nodes.Node, interpreter: Interpreter<A>): A => {
-	switch (node._tag) {
-		case "True":
-			return interpreter.true()
-		case "False":
-			return interpreter.false()
-		case "Compare":
-			return interpreter.compare(
-				node.op,
-				node.field,
-				literalValue(node.value, node.field),
-			)
-		case "In":
-			return interpreter.in(
-				node.field,
-				Arr.map(node.values, (operand) => literalValue(operand, node.field)),
-			)
-		case "Exists":
-			return interpreter.exists(node.field)
-		case "Under":
-			throw Untranslatable.make({
-				reason:
-					"An Under node needs the resource path. Call Condition.partial first.",
-			})
-		case "And":
-			return interpreter.and(
-				Arr.map(node.conditions, (child) => foldNode(child, interpreter)),
-			)
-		case "Or":
-			return interpreter.or(
-				Arr.map(node.conditions, (child) => foldNode(child, interpreter)),
-			)
-		case "Not":
-			return interpreter.not(foldNode(node.condition, interpreter))
-		case "Predicate":
-			if (interpreter.predicate === undefined) {
-				throw Untranslatable.make({
-					reason: `The predicate "${node.name}" can not become a query`,
-				})
+/**
+ * Folds a condition. A shared child is folded again for each place. The walk
+ * takes the steps of a trampoline, so a deep condition does not fill the
+ * stack.
+ */
+const foldNode = <A>(root: Nodes.Node, interpreter: Interpreter<A>): A =>
+	Trampoline.run(root.depth, (R) => {
+		const go = (node: Nodes.Node): Trampoline.Step<A> => {
+			const children = (nodes: ReadonlyArray<Nodes.Node>) =>
+				R.forEach(nodes, (child) => R.suspend(() => go(child)))
+			switch (node._tag) {
+				case "True":
+					return R.succeed(interpreter.true())
+				case "False":
+					return R.succeed(interpreter.false())
+				case "Compare":
+					return R.succeed(
+						interpreter.compare(
+							node.op,
+							node.field,
+							literalValue(node.value, node.field),
+						),
+					)
+				case "In":
+					return R.succeed(
+						interpreter.in(
+							node.field,
+							Arr.map(node.values, (operand) =>
+								literalValue(operand, node.field),
+							),
+						),
+					)
+				case "Exists":
+					return R.succeed(interpreter.exists(node.field))
+				case "Under":
+					throw Untranslatable.make({
+						reason:
+							"An Under node needs the resource path. Call Condition.partial first.",
+					})
+				case "And":
+					return R.map(children(node.conditions), interpreter.and)
+				case "Or":
+					return R.map(children(node.conditions), interpreter.or)
+				case "Not":
+					return R.map(
+						R.suspend(() => go(node.condition)),
+						interpreter.not,
+					)
+				case "Predicate":
+					if (interpreter.predicate === undefined) {
+						throw Untranslatable.make({
+							reason: `The predicate "${node.name}" can not become a query`,
+						})
+					}
+					return R.succeed(interpreter.predicate(node.name))
 			}
-			return interpreter.predicate(node.name)
-	}
-}
+		}
+		return go(root)
+	})
 
 /**
  * Changes a condition into another form with an interpreter. Call

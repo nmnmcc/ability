@@ -23,6 +23,7 @@ import type * as Effect from "effect/Effect"
 import { hasProperty } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import * as Limits from "./limits.ts"
+import * as Trampoline from "./trampoline.ts"
 
 /** A value that a condition can compare. */
 export type Scalar = string | number | boolean | null
@@ -382,40 +383,61 @@ const operandJson = (operand: Operand): unknown =>
 			}
 		: { _tag: "Principal", path: operand.path }
 
-/** Gives the JSON form of a condition with no predicate. */
-export const toJson = (node: Node): unknown => {
-	switch (node._tag) {
-		case "True":
-		case "False":
-			return { _tag: node._tag }
-		case "Compare":
-			return {
-				_tag: "Compare",
-				op: node.op,
-				field: node.field,
-				value: operandJson(node.value),
+/**
+ * Gives the JSON form of a condition with no predicate. The walk takes the
+ * steps of a trampoline, so a deep condition does not fill the stack.
+ */
+export const toJson = (root: Node): unknown =>
+	Trampoline.run(root.depth, (R) => {
+		const go = (node: Node): Trampoline.Step<unknown> => {
+			switch (node._tag) {
+				case "True":
+				case "False":
+					return R.succeed({ _tag: node._tag })
+				case "Compare":
+					return R.succeed({
+						_tag: "Compare",
+						op: node.op,
+						field: node.field,
+						value: operandJson(node.value),
+					})
+				case "In":
+					return R.succeed({
+						_tag: "In",
+						field: node.field,
+						values: Arr.map(node.values, operandJson),
+					})
+				case "Exists":
+					return R.succeed({ _tag: "Exists", field: node.field })
+				case "Under":
+					return R.succeed({
+						_tag: "Under",
+						prefix: Arr.map(node.prefix, operandJson),
+					})
+				case "And":
+				case "Or": {
+					const tag = node._tag
+					return R.map(
+						R.forEach(node.conditions, (child) => R.suspend(() => go(child))),
+						(conditions) => ({ _tag: tag, conditions }),
+					)
+				}
+				case "Not":
+					return R.map(
+						R.suspend(() => go(node.condition)),
+						(condition) => ({
+							_tag: "Not",
+							condition,
+						}),
+					)
+				case "Predicate":
+					throw new Error(
+						`The predicate "${node.name}" can not become JSON. A condition with a predicate has no JSON form.`,
+					)
 			}
-		case "In":
-			return {
-				_tag: "In",
-				field: node.field,
-				values: Arr.map(node.values, operandJson),
-			}
-		case "Exists":
-			return { _tag: "Exists", field: node.field }
-		case "Under":
-			return { _tag: "Under", prefix: Arr.map(node.prefix, operandJson) }
-		case "And":
-		case "Or":
-			return { _tag: node._tag, conditions: Arr.map(node.conditions, toJson) }
-		case "Not":
-			return { _tag: "Not", condition: toJson(node.condition) }
-		case "Predicate":
-			throw new Error(
-				`The predicate "${node.name}" can not become JSON. A condition with a predicate has no JSON form.`,
-			)
-	}
-}
+		}
+		return go(root)
+	})
 
 /** Tests if a value is a node. Only a constructor of a node makes one. */
 export const isNode = (u: unknown): u is Node => u instanceof Base
