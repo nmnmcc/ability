@@ -112,6 +112,14 @@ interface Context {
 	 * of the actions, for a rule for every resource.
 	 */
 	readonly paths: ReadonlyArray<Resource.Descriptor>
+	/**
+	 * For each field name with no `*` of the rule, the first named resource
+	 * that does not have it, or `null` when every one has it. A rule may name
+	 * one field very many times, so each name is looked up one time. The
+	 * names come from a policy, so the map is native. It belongs to the
+	 * binding of the rule.
+	 */
+	readonly literals: Map<string, Resource.Descriptor | null>
 }
 
 type Operand = Nodes.Operand
@@ -173,11 +181,16 @@ const namesOf = (
 		(field) => field.text,
 	)
 
-/** The issue of a field that is not a field of every resource of the rule. */
+/**
+ * The issue of a field that is not a field of every resource of the rule.
+ * With `count`, the lookups count in the work of the binding. A test of a
+ * condition counts its work before, so it does not count it again.
+ */
 const fieldIssue = (
 	context: Context,
 	field: string,
 	at: ReadonlyArray<PropertyKey>,
+	count: boolean,
 ): ReadonlyArray<Issue> => {
 	const parts = context.memo.limits.fieldPathParts
 	if (field.split(".", parts + 1).length > parts) {
@@ -192,12 +205,23 @@ const fieldIssue = (
 	if (context.all || context.named.length === 0) {
 		return [{ path: at, issue: message }]
 	}
-	const without = Arr.filter(
-		context.named,
-		(descriptor) =>
-			Catalog.lookup(descriptor.catalog, field, parts) === undefined,
-	)
-	return without.length === 0
+	const known = context.literals.get(field)
+	const without =
+		known !== undefined
+			? known
+			: // A name is looked up in each named resource, so the work counts.
+				// Past the limit, `ruleIssues` gives one issue for it.
+				count && !spendChecks(context.memo, 1, context.named.length)
+				? null
+				: Option.getOrNull(
+						Arr.findFirst(
+							context.named,
+							(descriptor) =>
+								Catalog.lookup(descriptor.catalog, field, parts) === undefined,
+						),
+					)
+	context.literals.set(field, without)
+	return without === null
 		? []
 		: [
 				{
@@ -206,8 +230,8 @@ const fieldIssue = (
 						context.memo,
 						message,
 						field,
-						["kind", without[0]!.kind],
-						() => namesOf(without[0]!.catalog, context.memo.limits),
+						["kind", without.kind],
+						() => namesOf(without.catalog, context.memo.limits),
 					),
 				},
 			]
@@ -226,7 +250,7 @@ const readIssues = (
 	field: string,
 	at: ReadonlyArray<PropertyKey>,
 ): ReadonlyArray<Issue> => {
-	const exists = fieldIssue(context, field, at)
+	const exists = fieldIssue(context, field, at, false)
 	if (exists.length > 0) {
 		return exists
 	}
@@ -758,6 +782,7 @@ export const ruleIssues = (
 		paths: all
 			? Arr.filter(known, (descriptor) => hasAction(descriptor, rule.actions))
 			: applicable,
+		literals: new Map(),
 	}
 	// A native `Set` finds copies about ten times as fast as `Arr.dedupe`.
 	const actions = Array.from(
@@ -767,7 +792,7 @@ export const ruleIssues = (
 		here(
 			field.includes("*")
 				? patternIssues(memo, known, field, ["fields", index])
-				: fieldIssue(context, field, ["fields", index]),
+				: fieldIssue(context, field, ["fields", index], true),
 		),
 	)
 	const conditionNodes = memo.limits.conditionNodes

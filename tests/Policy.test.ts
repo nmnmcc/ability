@@ -4700,6 +4700,48 @@ describe("Policy", () => {
 		)
 	})
 
+	it("checks a field name that a rule names many times one time, and counts the work", () => {
+		const kinds = Arr.makeBy(1000, (index) =>
+			Resource.make(`Named${String(index)}`, {
+				actions: ["read"],
+				fields: { name: Schema.String },
+			}),
+		)
+		const input = {
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: Arr.map(kinds, (kind) => kind.kind),
+					fields: Arr.makeBy(50_000, () => "name"),
+				},
+			],
+		}
+		const decodeWith = (searchSteps: number) =>
+			Schema.decodeUnknownExit(
+				Policy.schema(
+					Domain.make({
+						principal: Caller,
+						resources: kinds,
+						limits: { searchSteps },
+					}),
+				),
+			)(input)
+		const start = Date.now()
+		// One name, looked up in 1000 kinds.
+		assert.isTrue(Exit.isSuccess(decodeWith(1000)))
+		const small = decodeWith(999)
+		assert.isTrue(Exit.isFailure(small))
+		assert.include(
+			String(Exit.isFailure(small) ? small.cause : ""),
+			"steps to check",
+		)
+		// A lookup of each copy in each kind took about ten seconds.
+		assert.isBelow(Date.now() - start, 2000)
+	})
+
 	it("finds the fields that many rules name in a short time, for a request with no field", () => {
 		const names = Arr.makeBy(5000, (index) => `f${String(index)}`)
 		const Wide = Resource.make("Wide", {
@@ -4711,7 +4753,8 @@ describe("Policy", () => {
 		const Wides = Domain.make({
 			principal: Caller,
 			resources: [Wide],
-			limits: { searchSteps: 1 },
+			// Each name of a rule counts one step for each of its kinds.
+			limits: { searchSteps: 10_000 },
 		})
 		const policy = Schema.decodeUnknownSync(Policy.schema(Wides))({
 			_tag: "Rules",
