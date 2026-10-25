@@ -725,43 +725,6 @@ const makeLayer = (
 			const decide = (target: AnyTarget) =>
 				Effect.flatMap(current, (snapshot) => decideWith(snapshot, target))
 
-			const kindDecision = (
-				value: Policy.Any,
-				principal: object,
-				target: AnyTarget,
-			): Decision.Decision => {
-				const request = { ...target, principal } as never
-				const covered = Policy.coverage(value, request)
-				if (covered._tag === "All") {
-					return Decision.Allow({})
-				}
-				// The decider may answer for the scope only when no value in it is
-				// denied, and when no predicate may fail. Else some value may get a
-				// "no" from the policy, so the answer for the scope is "no". An
-				// unknown answer may hide a denied value, so it is a "no" too.
-				// An empty scope never passes, so the decider is not asked for it.
-				// A scope that the search can not say has a value may be empty, so
-				// the decider is not asked for it either.
-				if (
-					covered._tag !== "Unknown" &&
-					Policy.scopeHasValue(value, request)
-				) {
-					const deny: Condition.Ast = Policy.residuals(value, request).deny
-					const schema = Domain.descriptorOf(
-						value.domain,
-						target.kind ?? "",
-					)?.schema
-					if (
-						deny._tag === "False" ||
-						Condition.satisfiable(deny as Condition.Condition, { schema })
-							._tag === "Unsatisfiable"
-					) {
-						return Decision.NotApplicable
-					}
-				}
-				return Decision.Deny({})
-			}
-
 			const checkWith = Effect.fnUntraced(function* (
 				{ principal, policy: value }: Snapshot,
 				target: AnyTarget,
@@ -778,7 +741,7 @@ const makeLayer = (
 				}
 				const fromPolicy: Decision.Decision =
 					target.resource === undefined
-						? kindDecision(value, principal, target)
+						? Policy.decideKind(value, { ...target, principal } as never)
 						: yield* withServices(
 								Policy.decide(value, { ...target, principal } as never),
 							)
@@ -817,19 +780,19 @@ const makeLayer = (
 				}
 			})
 
-			// The filter is the condition of the coverage. When the coverage is
-			// not known, it is the residual condition in the scope, which throws
-			// an error when there is none, so the filter fails.
+			// The filter is the condition of the coverage: the scope for `All`,
+			// `False` for `None`, and else the residual condition in the scope.
+			// The residual throws an error when it is too large, so the filter
+			// fails.
 			const filter = (
 				target: AnyTarget,
 			): Effect.Effect<Condition.Ast, unknown, unknown> =>
-				Effect.map(current, ({ principal, policy: value }): Condition.Ast => {
-					const request = { ...target, principal } as never
-					const covered = Policy.coverage(value, request)
-					return covered._tag === "Unknown"
-						? Policy.residual(value, request)
-						: (covered.condition as Condition.Ast)
-				})
+				Effect.map(
+					current,
+					({ principal, policy: value }): Condition.Ast =>
+						Policy.coverage(value, { ...target, principal } as never)
+							.condition as Condition.Ast,
+				)
 
 			const coverage = (
 				target: AnyTarget,

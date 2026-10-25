@@ -342,32 +342,19 @@ list query for the scope:
   so a scope with a mistake never gives a "yes".
 - `Some`: the policy allows some values and not others. It gives an example of
   each, `allowed` and `refused`.
-- `Unknown`: the policy has a predicate, a condition tests a field that is not a
-  plain scalar, or the search went past its budget.
+- `Unknown`: the policy has a predicate, or the search went past its budget.
 
-The answer is exact. Each test in a condition compares one field with fixed
-values, so these values cut the values of the field into a few parts, and every
-value in one part gives the same answer. `Condition.satisfiable` tries one value
-from each part, one field at a time. It takes the values of each field from the
-Schema of the resource: its literals, `null` for a nullable or optional field,
-and finite or integer numbers. It does not know other Schema checks, such as a
-minimum length, so a field with such a check is not plain (see below).
+`Condition.satisfiable` does the search. Each test in a condition compares one
+field with fixed values, so these values cut the values of the field into a few
+parts, and every value in one part gives the same answer. The search tries one
+value from each part, one field at a time.
 
-The search answers only for plain scalar fields: a string, a number, a boolean,
-a literal, `null`, or an optional field or a union of these, with no checks
-other than finite and integer checks, on a path of required fields of plain
-structs. For another field, such as a class, a record, a union of structs, a
-date or a field of `Schema.declare`, a value may have data that the Schema does
-not show, so the answer is `Unknown`. A check on a kind then says no.
-`Resource.isPlainField` tells if a field is plain. This is true for each rule
-that the request may use, also for a test that a smaller condition leaves out: a
-read of a field that is not plain, such as a getter, may fail in a check.
-
-A "yes" also needs a value of the whole kind, so each required field of the kind
-must surely have values, also a field that the condition does not test. A
-required field with a check other than finite and integer checks, such as a
-minimum length, may have no value, so then the answer is `Unknown` in place of
-`All` or `Some`. `Resource.hasValue` tells if a Schema surely has a value.
+The search reads the shape of the Schema of the resource: the fields, their
+literals, `null` for a nullable or optional field, and finite or integer
+numbers. It does not read other checks, such as a minimum length. A check only
+keeps values out, so the shape holds every real value and more. So `All` and
+`None` are right for every value of the Schema. `Some` means that, by the shape,
+a value may get either answer. A check may still stop one of the examples.
 
 "Some" means that some value of the Schema is allowed. It does not mean that
 such a value is in your database. To know that, run the condition as a query.

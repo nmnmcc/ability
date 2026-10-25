@@ -45,6 +45,8 @@ import { hasProperty, isObject } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import * as SchemaIssue from "effect/SchemaIssue"
 import * as SchemaTransformation from "effect/SchemaTransformation"
+import * as Catalog from "./internal/catalog.ts"
+import * as Limits from "./internal/limits.ts"
 import { readPath } from "./internal/read.ts"
 import * as Resource from "./Resource.ts"
 
@@ -1896,9 +1898,8 @@ export interface Example {
  * The answer of {@link satisfiable}:
  * - `Satisfiable`: some value makes the condition true. `example` is one.
  * - `Unsatisfiable`: no value makes the condition true.
- * - `Unknown`: the search can not say. The condition has a predicate, the
- *   search went past its budget, or it set two fields that the Schema ties
- *   together, as below a union or a field that may be missing.
+ * - `Unknown`: the search can not say. The condition has a predicate, or
+ *   the search went past its budget.
  *
  * @stability stable
  * @category models
@@ -1907,7 +1908,7 @@ export interface Example {
 export type Satisfiability = Data.TaggedEnum<{
 	Satisfiable: { readonly example: Example }
 	Unsatisfiable: {}
-	Unknown: { readonly reason: "predicate" | "budget" | "schema" }
+	Unknown: { readonly reason: "predicate" | "budget" }
 }>
 
 const satisfiability = Data.taggedEnum<Satisfiability>()
@@ -1921,8 +1922,8 @@ const satisfiability = Data.taggedEnum<Satisfiability>()
  */
 export interface SatisfiableOptions {
 	/**
-	 * The Schema of the values. It gives the domain of each field. Without
-	 * it, a field may have any value.
+	 * The Schema of the values. Its shape gives the kinds of values of each
+	 * field. Without it, a field may have any value.
 	 */
 	readonly schema?: Schema.Top | undefined
 	/** The most nodes that the search may visit. The default is 1000000. */
@@ -2029,7 +2030,7 @@ const stringCells = (
  * test gives the same answer for all the values of one cell.
  */
 const cellsOf = (
-	domain: Resource.FieldDomain,
+	domain: Catalog.Kinds,
 	constants: ReadonlyArray<Scalar>,
 ): ReadonlyArray<unknown> =>
 	dedupeCells([
@@ -2410,49 +2411,31 @@ const constantsOf = (
 	})
 
 /**
- * The most fields that the search of {@link satisfiable} takes. Past it, the
- * answer is `Unknown` with the reason `"budget"`.
- */
-const maxSearchFields = 256
-
-/**
  * The most parts of a field path that the search of {@link satisfiable}
  * takes. Past it, the answer is `Unknown` with the reason `"budget"`.
  */
 const maxSearchParts = 256
 
-const satisfiableAst = (
+/**
+ * Searches for values that make a condition true. `kindsOf` gives the kinds
+ * of values of each field. The kinds hold every real value, so the answer
+ * `Unsatisfiable` holds for the real values too. A `Satisfiable` answer holds
+ * for the kinds: a check of the Schema may still stop the example.
+ */
+export const satisfiableIn = (
 	ast: Ast,
-	options: SatisfiableOptions = {},
+	kindsOf: (field: string) => Catalog.Kinds,
+	budget: number = Limits.searchSteps,
 ): Satisfiability => {
 	if (hasPredicate(ast)) {
 		return satisfiability.Unknown({ reason: "predicate" })
 	}
-	const schema = options.schema
 	const tested = fields(ast)
-	// A Schema with no value has no value that the condition is true for.
-	if (schema !== undefined && Resource.hasNoValue(schema)) {
-		return satisfiability.Unsatisfiable()
-	}
-	// The search finds values for the fields that the condition tests. A value
-	// needs the other required fields too, and a check that the search can
-	// not see may stop every value of one of them. So a "yes" needs a Schema
-	// that surely has a value.
-	const complete = schema === undefined || Resource.hasValue(schema)
-	// The model of the values of a field is exact only for a plain scalar
-	// field. For another field, a value may have data that the Schema does not
-	// show, so the search can not say.
-	if (
-		schema !== undefined &&
-		!Arr.every(tested, (field) => Resource.isPlainField(schema, field))
-	) {
-		return satisfiability.Unknown({ reason: "schema" })
-	}
 	// The search calls itself one time for each field that it fixes, and it
 	// makes an example with a step for each part of a path. So a condition
 	// with very many fields, or a very long path, could fill the stack.
 	if (
-		tested.length > maxSearchFields ||
+		tested.length > Limits.searchFields ||
 		Arr.some(
 			tested,
 			(field) => field.split(".", maxSearchParts + 1).length > maxSearchParts,
@@ -2471,25 +2454,18 @@ const satisfiableAst = (
 			Option.getOrElse(MutableHashMap.get(cells, field), () => {
 				// The cells come from the constants, so many constants are work
 				// that the budget must count before the cells are made.
-				const known = HashMap.get(constants, field)
-				if (
-					Option.isSome(known) &&
-					HashSet.size(known.value) > (options.budget ?? 1_000_000)
-				) {
+				const known = Option.getOrElse(
+					HashMap.get(constants, field),
+					HashSet.empty,
+				)
+				if (HashSet.size(known) > budget) {
 					throw new OutOfBudget()
 				}
-				const found = cellsOf(
-					schema === undefined
-						? Resource.anyDomain
-						: Resource.domainOf(schema, field),
-					Array.from(
-						Option.getOrElse(HashMap.get(constants, field), HashSet.empty),
-					),
-				)
+				const found = cellsOf(kindsOf(field), Array.from(known))
 				MutableHashMap.set(cells, field, found)
 				return found
 			}),
-		budget: options.budget ?? 1_000_000,
+		budget,
 	}
 	try {
 		const found = searchAst(
@@ -2501,9 +2477,7 @@ const satisfiableAst = (
 		return Option.match(found.assignment, {
 			onNone: () => satisfiability.Unsatisfiable(),
 			onSome: (assignment) =>
-				complete
-					? satisfiability.Satisfiable({ example: exampleOf(assignment) })
-					: satisfiability.Unknown({ reason: "schema" }),
+				satisfiability.Satisfiable({ example: exampleOf(assignment) }),
 		})
 	} catch (error) {
 		if (error instanceof OutOfBudget) {
@@ -2514,24 +2488,44 @@ const satisfiableAst = (
 }
 
 /**
+ * Gives the kinds of each field of a catalog. A field that the catalog does
+ * not have may hold any value.
+ */
+export const kindsIn =
+	(catalog: Catalog.Catalog | undefined) =>
+	(field: string): Catalog.Kinds =>
+		(catalog === undefined ? undefined : Catalog.lookup(catalog, field))
+			?.kinds ?? Catalog.anyKinds
+
+const satisfiableAst = (
+	ast: Ast,
+	options: SatisfiableOptions = {},
+): Satisfiability =>
+	satisfiableIn(
+		ast,
+		kindsIn(
+			options.schema === undefined
+				? undefined
+				: Catalog.catalogOf(options.schema.ast),
+		),
+		options.budget,
+	)
+
+/**
  * Tests if some value makes a condition true, and gives such a value.
  *
  * Call {@link partial} first: the condition must have no principal fields and
  * no `Under` nodes. A condition with a predicate gives `Unknown`.
  *
- * With `options.schema`, each field of the condition must be a plain scalar
- * field of the Schema (see `Resource.isPlainField`). Else the answer is
- * `Unknown` with the reason `"schema"`: for another field, a value may have
- * data that the Schema does not show, so the model of its values is not
- * exact.
+ * Each test of a condition compares one field with constants, so the
+ * constants cut the values of each field into a few cells. The search tries
+ * one value from each cell, one field at a time. The values of a field come
+ * from the shape of the Schema in `options.schema`: its literals, `null` for
+ * a nullable or optional field, and finite or integer numbers.
  *
- * The answer is exact. Each test of a condition compares one field with
- * constants, so the constants cut the values of each field into a few cells.
- * The search tries one value from each cell, one field at a time. The values
- * of a field come from the Schema in `options.schema`: its literals, `null`
- * for a nullable or optional field, and finite or integer numbers. A field
- * with another Schema check is not a plain field, so the search never tries a
- * value that such a check stops.
+ * The search reads the shape of the Schema, not its other checks, such as a
+ * minimum length. So `Unsatisfiable` holds for every value of the Schema. A
+ * `Satisfiable` example fits the shape, but a check may still stop it.
  *
  * The problem is as hard as boolean satisfiability, so the search has a
  * budget. Past it, the answer is `Unknown`. A condition with more than 256

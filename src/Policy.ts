@@ -1812,21 +1812,6 @@ const scopeProblem = (
 	}) ?? undefined
 
 /**
- * Gives the condition of a scope, with the principal and the path in it.
- * With no scope, it is `True`.
- */
-/**
- * The fields that a scope reads, before it is made smaller. A smaller scope
- * may leave out a read that fails, such as a getter.
- */
-const scopeFields = (within: unknown): ReadonlyArray<string> =>
-	within === undefined
-		? []
-		: Condition.fields(
-				(within as (builder: unknown) => Ast)(Condition.builder()),
-			)
-
-/**
  * Makes the scope of a request, with the principal in it. A scope comes from
  * code, so a scope that does not fit the domain is a defect. It is bound as a
  * rule for the kind and the action of the request is.
@@ -1869,7 +1854,8 @@ interface ScopedRequest {
 /** The scope of a request, and the residual conditions inside it. */
 interface Scoped extends Pair {
 	readonly scope: Ast
-	readonly schema: Schema.Top | undefined
+	/** The catalog of the kind, when the request fits the kind. */
+	readonly catalog: Catalog.Catalog | undefined
 }
 
 const residualsAny = (policy: Any, request: ScopedRequest): Pair =>
@@ -1878,7 +1864,7 @@ const residualsAny = (policy: Any, request: ScopedRequest): Pair =>
 const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 	const descriptor = Domain.descriptorOf(policy.domain, request.kind)
 	if (descriptor === undefined || !fitsKind(descriptor, request)) {
-		return { scope: never, allow: never, deny: never, schema: undefined }
+		return { scope: never, allow: never, deny: never, catalog: undefined }
 	}
 	const input = { principal: request.principal, path: descriptor.path }
 	const scope = scopeOf(request, policy.domain, input)
@@ -1888,7 +1874,7 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 		scope,
 		allow: and([scope, pair.allow]),
 		deny: and([scope, pair.deny]),
-		schema: descriptor.schema,
+		catalog: descriptor.catalog,
 	})
 	if (scope._tag === "False") {
 		return inScope({ allow: never, deny: never })
@@ -2052,7 +2038,7 @@ export type Coverage<
 	}
 	Unknown: {
 		readonly condition: Condition.Condition<E, R, O, I>
-		readonly reason: "predicate" | "budget" | "schema"
+		readonly reason: "predicate" | "budget"
 	}
 }>
 
@@ -2067,105 +2053,40 @@ type AnyCoverage = Data.TaggedEnum<{
 	}
 	Unknown: {
 		readonly condition: Ast
-		readonly reason: "predicate" | "budget" | "schema"
+		readonly reason: "predicate" | "budget"
 	}
 }>
 
 const coverages = Data.taggedEnum<AnyCoverage>()
 
-/** The parts of a request that tell which rules it may use. */
-const targetOf = (
-	request: ScopedRequest,
-	descriptor: Resource.Descriptor,
-): PredicateContext => ({
-	action: request.action,
-	kind: request.kind,
-	field: request.field,
-	descriptor,
-	predicates: new Map(),
-})
+/** Searches for a value of the kind of a scope that makes a condition true. */
+const search = (scoped: Scoped, ast: Ast): Condition.Satisfiability =>
+	ast._tag === "False"
+		? Condition.satisfiable(Condition.never)
+		: Condition.satisfiableIn(ast, Condition.kindsIn(scoped.catalog))
 
-/**
- * Tests if each field that a rule that the request may use reads passes
- * `test`. It looks at the conditions before they are made smaller. A smaller
- * condition may leave out a field, but a read of that field, such as a
- * getter, may fail when `decide` runs. A shared node is visited one time.
- */
-const readsOnly = (
-	node: Node,
-	target: PredicateContext,
-	test: (field: string) => boolean,
-	memo: Map<Node, boolean>,
-): boolean =>
-	remember(memo, node, () => {
-		switch (node._tag) {
-			case "Rules":
-				return Arr.every(
-					node.rules,
-					(value) =>
-						value.when === undefined ||
-						!Rule.matchesTarget(value, target) ||
-						Arr.every(Condition.fields(value.when as Ast), test),
-				)
-			case "All":
-			case "Any":
-			case "FirstOf":
-				return Arr.every(node.policies, (child) =>
-					readsOnly(child, target, test, memo),
-				)
-			case "Ceiling":
-				return (
-					readsOnly(node.cap, target, test, memo) &&
-					readsOnly(node.policy, target, test, memo)
-				)
-		}
-	})
+/** The values in the scope that the policy does not allow. */
+const refusedOf = (scoped: Scoped): Ast =>
+	// Only two nodes more than the residual, so it needs no size limit.
+	Condition.simplify(
+		Condition.and(
+			scoped.scope as Condition.Condition,
+			Condition.not(scoped.allow as Condition.Condition),
+		),
+	)
 
 const coverageAny = (policy: Any, request: ScopedRequest): AnyCoverage => {
-	const descriptor = Domain.descriptorOf(policy.domain, request.kind)
 	const scoped = scopedResiduals(policy, request)
 	const allowed = scoped.allow
-	// Each field that a rule or the scope reads must be plain, also a field
-	// that a smaller condition leaves out.
-	if (descriptor !== undefined) {
-		const plain = (field: string) =>
-			Resource.isPlainField(descriptor.schema, field)
-		if (
-			!Arr.every(scopeFields(request.within), plain) ||
-			!readsOnly(
-				nodeOf(policy),
-				targetOf(request, descriptor),
-				plain,
-				new Map(),
-			)
-		) {
-			return coverages.Unknown({ condition: allowed, reason: "schema" })
-		}
-	}
-
-	const options = { schema: scoped.schema }
-	const some =
-		allowed._tag === "False"
-			? undefined
-			: Condition.satisfiable(allowed as Condition.Condition, options)
-	if (some === undefined || some._tag === "Unsatisfiable") {
+	const some = search(scoped, allowed)
+	if (some._tag === "Unsatisfiable") {
 		return coverages.None({ condition: never })
 	}
 	if (some._tag === "Unknown") {
 		return coverages.Unknown({ condition: allowed, reason: some.reason })
 	}
-	// Only two nodes more than `allowed`, so it needs no size limit.
-	const refused: Ast = Condition.simplify(
-		Condition.and(
-			scoped.scope as Condition.Condition,
-			Condition.not(allowed as Condition.Condition),
-		),
-	)
-	const missing =
-		refused._tag === "False"
-			? undefined
-			: Condition.satisfiable(refused as Condition.Condition, options)
-	if (missing === undefined || missing._tag === "Unsatisfiable") {
+	const missing = search(scoped, refusedOf(scoped))
+	if (missing._tag === "Unsatisfiable") {
 		return coverages.All({ condition: scoped.scope })
 	}
 	if (missing._tag === "Unknown") {
@@ -2179,41 +2100,37 @@ const coverageAny = (policy: Any, request: ScopedRequest): AnyCoverage => {
 }
 
 /**
- * Tests if the scope of a request has a value of the Schema of its kind. The
- * answer is `true` only when the search finds such a value. When the search
- * can not say, the answer is `false`. So a "yes" from it is safe to act on,
- * as for the question "may the decider answer for this scope?".
+ * Decides a request about every value in a scope, with at most two searches.
+ * - `Allow`: the scope has a value, and the policy allows each value in it.
+ * - `NotApplicable`: the scope has a value, and the policy denies no value in
+ *   it, but it does not allow each one. A decider may answer.
+ * - `Deny`: else. An empty scope, a search that can not say, or a predicate
+ *   that may fail is a "no".
  *
- * @stability stable
- * @category evaluation
- * @since 1.0.0
+ * The searches read the shape of the Schema. `Allow` needs no value outside
+ * the residual, and `NotApplicable` needs no value in the residual of the
+ * denials, so both hold for every real value. That the scope has a value
+ * holds for the shape only.
  */
-export const scopeHasValue = (policy: Any, request: ScopedRequest): boolean => {
+export const decideKind = (
+	policy: Any,
+	request: ScopedRequest,
+): Decision.Decision => {
 	const scoped = scopedResiduals(policy, request)
-	return (
-		Condition.satisfiable(scoped.scope as Condition.Any, {
-			schema: scoped.schema,
-		})._tag === "Satisfiable"
-	)
-}
-
-/**
- * Tests if the scope of a request has no value of the Schema of its kind. A
- * scope with a mistake, such as two values for one field, is empty. With no
- * scope, the answer is `false` when the kind has a value. When the search can
- * not say, the answer is `false`.
- *
- * @stability stable
- * @category evaluation
- * @since 1.0.0
- */
-export const scopeIsEmpty = (policy: Any, request: ScopedRequest): boolean => {
-	const scoped = scopedResiduals(policy, request)
-	return (
-		Condition.satisfiable(scoped.scope as Condition.Any, {
-			schema: scoped.schema,
-		})._tag === "Unsatisfiable"
-	)
+	const missing = search(scoped, refusedOf(scoped))
+	switch (missing._tag) {
+		case "Unknown":
+			return Decision.Deny({})
+		case "Unsatisfiable":
+			return search(scoped, scoped.scope)._tag === "Satisfiable"
+				? Decision.Allow({})
+				: Decision.Deny({})
+		case "Satisfiable":
+			// A refused value is in the scope, so the scope has a value.
+			return search(scoped, scoped.deny)._tag === "Unsatisfiable"
+				? Decision.NotApplicable
+				: Decision.Deny({})
+	}
 }
 
 /**
@@ -2221,14 +2138,15 @@ export const scopeIsEmpty = (policy: Any, request: ScopedRequest): boolean => {
  * of it. See {@link Coverage}. With no scope (`within`), the scope is every
  * value of the kind.
  *
- * The answer comes from {@link Condition.satisfiable} with the Schema of the
- * resource, so it is exact for the values of the Schema. When a condition
- * tests a field that is not a plain scalar (see `Resource.isPlainField`),
- * such as a field with a check other than a finite or integer check, the
- * answer is `Unknown`, and a check on the kind says no.
+ * The answer comes from {@link Condition.satisfiable} with the shape of the
+ * Schema of the resource. `All` and `None` hold for every value of the
+ * Schema. `Some` means that, by the shape of the Schema, a value may get
+ * either answer: a check such as a minimum length may still stop one of the
+ * examples. `Unknown` comes only from a predicate or from the budget of the
+ * search.
  *
- * `Some` means that some value of the Schema is allowed. It does not mean that
- * such a value is in your database. To know that, run `condition` as a query.
+ * `Some` does not mean that such a value is in your database. To know that,
+ * run `condition` as a query.
  *
  * @stability stable
  * @category evaluation

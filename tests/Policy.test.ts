@@ -951,6 +951,38 @@ describe("Policy", () => {
 		)
 
 		it.prop(
+			"decides a kind so that each value of the Schema agrees",
+			{
+				specs: Schema.Array(Spec),
+				request: Request,
+				scope: ScopeName,
+				bots: Schema.Array(Bot),
+			},
+			({ specs, request, scope, bots }) => {
+				const policy = build(specs, request)
+				const scoped = scopedRequest(request, scope)
+				const inside = [...bots, ...everyBot].filter((value) =>
+					inScope(scope, scoped.principal, value),
+				)
+				const tagOf = (value: Bot) =>
+					Policy.decideSync(policy, {
+						principal: scoped.principal,
+						action: scoped.action,
+						resource: value,
+						...(scoped.field === undefined ? {} : { field: scoped.field }),
+					})._tag
+				switch (Policy.decideKind(policy, scoped)._tag) {
+					case "Allow":
+						return inside.every((value) => tagOf(value) === "Allow")
+					case "NotApplicable":
+						return inside.every((value) => tagOf(value) !== "Deny")
+					case "Deny":
+						return true
+				}
+			},
+		)
+
+		it.prop(
 			"permits only the fields that decide allows",
 			{ specs: Schema.Array(Spec), bot: BotInput, request: Request },
 			({ specs, bot, request }) => {
@@ -1558,7 +1590,7 @@ describe("Policy", () => {
 		)
 	})
 
-	it("can not say for two fields below a union of structs", () => {
+	it("tests the fields below a union one by one", () => {
 		const Pair = Resource.make("Pair", {
 			actions: ["read"],
 			fields: {
@@ -1584,11 +1616,23 @@ describe("Policy", () => {
 				unknown
 			>().eq("pair.b", "b"),
 		)
-		assert.notStrictEqual(
-			Condition.satisfiable(condition, {
-				schema: Resource.descriptor(Pair).schema,
-			})._tag,
+		const schema = Resource.descriptor(Pair).schema
+		// The shape of the union lets each field hold "a" or "b". The search
+		// does not tie the two fields together.
+		assert.strictEqual(
+			Condition.satisfiable(condition, { schema })._tag,
 			"Satisfiable",
+		)
+		assert.strictEqual(
+			Condition.satisfiable(
+				Condition.builder<
+					{ readonly pair: { readonly a: string } },
+					unknown,
+					unknown
+				>().eq("pair.a", "c"),
+				{ schema },
+			)._tag,
+			"Unsatisfiable",
 		)
 	})
 
@@ -1643,7 +1687,7 @@ describe("Policy", () => {
 		)
 	})
 
-	it("can not say for two fields of a parent that may be missing", () => {
+	it("tests the fields of a parent that may be missing one by one", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],
 			fields: {
@@ -1657,11 +1701,16 @@ describe("Policy", () => {
 			unknown,
 			unknown
 		>()
-		assert.notStrictEqual(
+		const schema = Resource.descriptor(Note).schema
+		assert.strictEqual(
 			Condition.satisfiable($.and($.eq("info.a", null), $.eq("info.b", "x")), {
-				schema: Resource.descriptor(Note).schema,
+				schema,
 			})._tag,
 			"Satisfiable",
+		)
+		assert.strictEqual(
+			Condition.satisfiable($.eq("info.a", 1 as never), { schema })._tag,
+			"Unsatisfiable",
 		)
 	})
 
@@ -1781,7 +1830,7 @@ describe("Policy", () => {
 		)
 	})
 
-	it("lets a key of a record hold any value in the search", () => {
+	it("knows the values of a key of a record", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],
 			fields: { info: Schema.Record(Schema.String, Schema.Boolean) },
@@ -1805,7 +1854,9 @@ describe("Policy", () => {
 				),
 			}),
 		])
-		assert.notStrictEqual(
+		// A key holds a boolean, or it is missing. So the deny rule never
+		// applies.
+		assert.strictEqual(
 			Policy.coverage(policy, {
 				principal: alice,
 				action: "read",
@@ -2709,7 +2760,7 @@ describe("Policy", () => {
 		assert.notStrictEqual(covered.condition._tag, "False")
 	})
 
-	it("keeps the residual in an unknown coverage", () => {
+	it("gives a coverage by the shape for a field with a check", () => {
 		const Note = Resource.make("CheckedId", {
 			actions: ["read"],
 			fields: { id: Schema.String.check(Schema.isMinLength(1)) },
@@ -2723,7 +2774,7 @@ describe("Policy", () => {
 			action: "read",
 			kind: "CheckedId",
 		})
-		assert.strictEqual(covered._tag, "Unknown")
+		assert.strictEqual(covered._tag, "Some")
 		assert.strictEqual(covered.condition._tag, "Compare")
 	})
 
@@ -2898,7 +2949,7 @@ describe("Policy", () => {
 		assert.isTrue(Exit.isFailure(exit))
 	})
 
-	it("does not give exact coverage for a union in the mode oneOf", () => {
+	it("reads a union in the mode oneOf by its shape", () => {
 		const Note = Resource.make("OneOfNote", {
 			actions: ["read"],
 			fields: {
@@ -2917,11 +2968,12 @@ describe("Policy", () => {
 			kind: "OneOfNote",
 			within: ($) => $.eq("x", "blocked"),
 		} satisfies Policy.KindRequest<typeof Notes>
-		assert.strictEqual(Policy.coverage(policy, request)._tag, "Unknown")
-		assert.isFalse(Policy.scopeHasValue(policy, request))
+		// The mode oneOf stops "blocked", but the shape lets the field hold it.
+		// Each value in the scope is allowed, so `All` is right.
+		assert.strictEqual(Policy.coverage(policy, request)._tag, "All")
 	})
 
-	it("does not cover a kind whose values a check may stop", () => {
+	it("covers a kind by its shape when a check may stop each value", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],
 			fields: {
@@ -2933,8 +2985,7 @@ describe("Policy", () => {
 			yield* _.allow("read", Note)
 		})
 		const request = { principal: alice, action: "read", kind: "Note" } as const
-		assert.notStrictEqual(Policy.coverage(policy, request)._tag, "All")
-		assert.isFalse(Policy.scopeHasValue(policy, request))
+		assert.strictEqual(Policy.coverage(policy, request)._tag, "All")
 	})
 
 	it("does not write out a shared tree that would be too large as JSON", () => {
@@ -3413,8 +3464,9 @@ describe("Policy", () => {
 			)
 		})
 
-		it("lets a field named constructor be missing", () => {
-			assert.notStrictEqual(
+		it("reads a field named constructor as data", () => {
+			// The field is required, so a value always has it.
+			assert.strictEqual(
 				denyCoverage(
 					{ constructor: Schema.ObjectKeyword },
 					$.not($.exists("constructor")),
@@ -3535,7 +3587,7 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 3000)
 	})
 
-	it("gives exact coverage only for plain scalar fields", () => {
+	it("gives exact coverage for fields of any shape", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],
 			fields: {
@@ -3573,21 +3625,12 @@ describe("Policy", () => {
 			"All",
 		)
 		assert.strictEqual(coverage($.gte("level", 0))._tag, "Some")
-		const unknown = (when: Condition.Ast) => {
-			const covered = coverage(when)
-			return covered._tag === "Unknown" ? covered.reason : covered._tag
-		}
-		assert.strictEqual(unknown($.exists("tags.a")), "schema")
-		assert.strictEqual(unknown($.exists("when")), "schema")
-		assert.isFalse(
-			Resource.isPlainField(Resource.descriptor(Note).schema, "tags.a"),
-		)
-		assert.isTrue(
-			Resource.isPlainField(Resource.descriptor(Note).schema, "level"),
-		)
+		assert.strictEqual(coverage($.exists("tags.a"))._tag, "Some")
+		assert.strictEqual(coverage($.exists("when"))._tag, "All")
+		assert.throws(() => coverage($.eq("when", "x")), /can not hold the value/)
 	})
 
-	it("does not give exact coverage for a field with a check it can not see", () => {
+	it("reads a field with a check by its shape", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],
 			fields: {
@@ -3596,19 +3639,8 @@ describe("Policy", () => {
 			},
 		})
 		const Notes = Domain.make({ principal: Caller, resources: [Note] })
-		const schema = Resource.descriptor(Note).schema
-		assert.isFalse(Resource.isPlainField(schema, "ownerId"))
-		assert.isTrue(Resource.isPlainField(schema, "level"))
-		// A check on a union is a check that the search can not see.
-		const Count = Resource.make("Count", {
-			actions: ["read"],
-			fields: { count: Schema.Literals([1, 1.5]).check(Schema.isInt()) },
-		})
-		assert.isFalse(
-			Resource.isPlainField(Resource.descriptor(Count).schema, "count"),
-		)
 		const policy = Policy.define(Notes)(function* (_) {
-			yield* _.allow("read", Note)
+			yield* _.allow("read", Note, { when: ($) => $.gte("level", 0) })
 		})
 		const covered = Policy.coverage(policy, {
 			principal: alice,
@@ -3616,17 +3648,8 @@ describe("Policy", () => {
 			kind: "Note",
 			within: ($) => $.eq("ownerId", 0),
 		})
-		assert.strictEqual(covered._tag, "Unknown")
-		assert.isFalse(
-			Policy.scopeHasValue(policy, {
-				principal: alice,
-				action: "read",
-				kind: "Note",
-				within: (
-					$: Condition.Builder<{ readonly ownerId: number }, unknown, unknown>,
-				) => $.eq("ownerId", 0),
-			}),
-		)
+		// The check stops `0`, but the shape of an integer holds it.
+		assert.strictEqual(covered._tag, "Some")
 	})
 
 	it("searches many fields without a deep stack", () => {

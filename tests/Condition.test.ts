@@ -447,82 +447,35 @@ describe("Condition", () => {
 			)
 		})
 
-		it("can not say for a field that is not a plain scalar", () => {
-			const reasonOf = (condition: Plain) => {
-				const answer = Condition.satisfiable(condition, { schema: Shape })
-				return answer._tag === "Unknown" ? answer.reason : answer._tag
-			}
-			// A field below a nullable struct, a date, and a field of the type
-			// never are not plain scalars.
-			assert.strictEqual(reasonOf(_.exists("box.label")), "schema")
-			assert.strictEqual(reasonOf(loose.ne("when", "x")), "schema")
-			assert.strictEqual(reasonOf(_.exists("nothing")), "schema")
+		it("searches a field that is not a scalar by its shape", () => {
+			assert.deepStrictEqual(example(_.exists("box.label")), {
+				box: { label: "" },
+			})
+			assert.strictEqual(
+				tagOf(_.and(_.exists("box.label"), _.not(loose.exists("box")))),
+				"Unsatisfiable",
+			)
+			// A date is an object, so it is never a string.
+			assert.strictEqual(tagOf(loose.ne("when", "x")), "Satisfiable")
+			assert.strictEqual(tagOf(loose.eq("when", "x")), "Unsatisfiable")
+			assert.strictEqual(tagOf(_.exists("nothing")), "Unsatisfiable")
 		})
 
-		it("knows that a Schema with a required field of no value is empty", () => {
+		it("finds no value for a field of no value", () => {
 			const Empty = Schema.Struct({
 				name: Schema.String,
 				missing: Schema.Never,
 			})
-			assert.strictEqual(
-				Condition.satisfiable(Condition.always, { schema: Empty })._tag,
-				"Unsatisfiable",
-			)
-			interface Loop {
-				readonly next: Loop
-			}
-			const Loop: Schema.Codec<Loop> = Schema.Struct({
-				next: Schema.suspend((): Schema.Codec<Loop> => Loop),
-			})
-			assert.isTrue(Resource.hasNoValue(Loop))
-			interface List {
-				readonly next: List | null
-			}
-			const List: Schema.Codec<List> = Schema.Struct({
-				next: Schema.NullOr(Schema.suspend((): Schema.Codec<List> => List)),
-			})
-			assert.isFalse(Resource.hasNoValue(List))
-			assert.isFalse(
-				Resource.hasValue(Schema.Struct({ x: Schema.Tuple([Schema.Never]) })),
-			)
-			assert.isFalse(
-				Resource.hasValue(
-					Schema.Struct({ x: Schema.NonEmptyArray(Schema.Never) }),
-				),
-			)
-			assert.isTrue(
-				Resource.hasValue(Schema.Struct({ x: Schema.Array(Schema.Never) })),
-			)
-			assert.isTrue(
-				Resource.hasValue(Schema.Struct({ x: Schema.Option(Schema.Never) })),
-			)
-			assert.isTrue(Resource.hasValue(Schema.Struct({ x: Schema.Json })))
-			assert.isFalse(Resource.hasValue(Schema.Struct({ x: Schema.Enum({}) })))
-			assert.isFalse(
-				Resource.hasValue(
-					Schema.Struct({
-						x: Schema.StructWithRest(Schema.Struct({ name: Schema.String }), [
-							Schema.Record(Schema.String, Schema.Finite),
-						]),
-					}),
-				),
-			)
-			assert.isFalse(
-				Resource.hasValue(
-					Schema.Struct({
-						x: Schema.TemplateLiteral([
-							Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(0)),
-						]),
-					}),
-				),
-			)
-			assert.strictEqual(
-				Condition.satisfiable(Condition.always, {
-					schema: Schema.Struct({ x: Schema.Tuple([Schema.Never]) }),
-				})._tag,
-				"Unknown",
-			)
-			// A plain field next to them is still exact.
+			const $ = Condition.builder<
+				{ readonly missing: string | null },
+				unknown,
+				never
+			>()
+			const tag = (condition: Plain) =>
+				Condition.satisfiable(condition, { schema: Empty })._tag
+			assert.strictEqual(tag($.exists("missing")), "Unsatisfiable")
+			assert.strictEqual(tag($.not($.exists("missing"))), "Unsatisfiable")
+			// A plain field next to it is still exact.
 			assert.strictEqual(tagOf(_.eq("name", "a")), "Satisfiable")
 		})
 
