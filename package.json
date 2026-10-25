@@ -1,6 +1,6 @@
 {
 	"name": "@nmnmcc/ability",
-	"version": "1.0.0",
+	"version": "1.0.1",
 	"description": "Typed, composable authorization policies for Effect programs.",
 	"license": "Apache-2.0",
 	"type": "module",
@@ -57,6 +57,6 @@
 		"vitest": "5.0.5"
 	},
 	"peerDependencies": {
-		"effect": "^4.0.6"
+		"effect": "4.0.*"
 	}
 }
