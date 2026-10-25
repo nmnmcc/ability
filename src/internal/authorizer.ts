@@ -194,8 +194,9 @@ const jsonKey = (
  * uses in many places counted for each place, as its JSON form has it. The
  * walk keeps a stack of the parts to visit, so a deep value does not fill the
  * stack, and it stops at the first part past `most`. A value with a loop has
- * no end of places, so it goes past `most` too. The stack and the count
- * belong to this call.
+ * no end of places, so it goes past `most` too, and so does a value that
+ * hides its data, as a `Redacted`. The stack and the count belong to this
+ * call.
  */
 const fitsNodes = (root: unknown, most: number): boolean => {
 	const stack: Array<unknown> = [root]
@@ -211,11 +212,41 @@ const fitsNodes = (root: unknown, most: number): boolean => {
 		if (size !== undefined && count.nodes + size > most) {
 			return undefined
 		}
-		return value instanceof Map
-			? [...value.keys(), ...value.values()]
-			: value instanceof Set || Array.isArray(value)
-				? Array.from(value as Iterable<unknown>)
-				: Object.values(value)
+		if (value instanceof Map) {
+			return [...value.keys(), ...value.values()]
+		}
+		if (value instanceof Set || Array.isArray(value)) {
+			return Array.from(value as Iterable<unknown>)
+		}
+		// These keep their data inside, and it is small. An `Option` with no
+		// value has no own fields.
+		if (
+			value instanceof Date ||
+			value instanceof URL ||
+			value instanceof RegExp ||
+			(Option.isOption(value) && Option.isNone(value))
+		) {
+			return []
+		}
+		// A codec may read a hidden field too, so the walk reads each own
+		// data field. A value of a class with no own fields, as a `Redacted`,
+		// keeps its data where the walk can not see it, but its codec reads
+		// it. Such a value has no known size, so it is past the limit.
+		const names = Reflect.ownKeys(value)
+		const prototype: unknown = Object.getPrototypeOf(value)
+		if (
+			names.length === 0 &&
+			prototype !== Object.prototype &&
+			prototype !== null
+		) {
+			return undefined
+		}
+		return Arr.flatMap(names, (name) => {
+			const property = Object.getOwnPropertyDescriptor(value, name)
+			return property !== undefined && "value" in property
+				? [property.value as unknown]
+				: []
+		})
 	}
 	Arr.unfold(0, (step) => {
 		if (stack.length === 0 || count.nodes > most) {

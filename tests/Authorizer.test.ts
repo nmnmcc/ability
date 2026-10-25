@@ -9,6 +9,7 @@ import {
 	Equal,
 	Exit,
 	Layer,
+	Option,
 	Ref,
 	Schema,
 	SchemaTransformation,
@@ -717,6 +718,43 @@ describe("Authorizer", () => {
 				])
 				assert.deepStrictEqual(yield* later(false), ["Forbidden", "Forbidden"])
 			}),
+	)
+
+	it.effect("keeps a principal with an Option with no value", () =>
+		Effect.gen(function* () {
+			const Tagged = Schema.Struct({
+				id: Schema.String,
+				team: Schema.Option(Schema.String),
+			})
+			const Taggeds = Domain.make({ principal: Tagged, resources: [Bot] })
+			class CurrentTagged extends Context.Service<
+				CurrentTagged,
+				typeof Tagged.Type
+			>()("@nmnmcc/ability/tests/Authorizer.test/CurrentTagged") {}
+			class TaggedAuth extends Authorizer.Service<TaggedAuth>()(
+				"test/TaggedAuth",
+				{ domain: Taggeds, principal: CurrentTagged },
+			) {}
+			const loads = yield* Ref.make(0)
+			const layer = Authorizer.layer(TaggedAuth, {
+				policy: () =>
+					Ref.update(loads, (n) => n + 1).pipe(
+						Effect.as(
+							Policy.define(Taggeds)(function* (_) {
+								yield* _.allow("read", Bot)
+							}),
+						),
+					),
+			})
+			yield* Effect.gen(function* () {
+				yield* TaggedAuth.check({ action: "read", resource: aliceBot })
+				yield* TaggedAuth.check({ action: "read", resource: aliceBot })
+			}).pipe(
+				Effect.provideService(CurrentTagged, { id: "1", team: Option.none() }),
+				Effect.provide(layer),
+			)
+			assert.strictEqual(yield* Ref.get(loads), 1)
+		}),
 	)
 
 	it("checks a principal whose JSON form would be very large, in a small heap", () => {
