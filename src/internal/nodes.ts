@@ -12,7 +12,8 @@
  * needs no memo.
  *
  * The facts are private fields, so `Equal` and `Hash` do not read them: two
- * nodes with the same data are equal.
+ * nodes with the same data are equal. A node keeps its hash too: see
+ * `Structure`.
  */
 // A predicate gives an Effect with an error type and a service type that the
 // nodes do not know, so they are `unknown` here.
@@ -20,9 +21,12 @@
 import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
 import type * as Effect from "effect/Effect"
+import * as Equal from "effect/Equal"
+import * as Hash from "effect/Hash"
 import { hasProperty } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import * as Limits from "./limits.ts"
+import * as Structure from "./structure.ts"
 import * as Trampoline from "./trampoline.ts"
 
 /** A value that a condition can compare. */
@@ -185,10 +189,23 @@ abstract class Base extends Data.Class {
 	}
 
 	readonly #facts: Facts
+	readonly #hash: number
 
-	constructor(props: object, facts: Facts) {
+	constructor(tag: string, props: object, facts: Facts) {
 		super(props as never)
 		this.#facts = facts
+		this.#hash = Structure.hashOf(kind, tag, props)
+	}
+
+	// A condition has no limit of levels, so the hash and the equality are
+	// the ones of `Structure`, which do not fill the stack. They read the
+	// same data as the ones of `Data.Class`.
+	[Hash.symbol](): number {
+		return this.#hash
+	}
+
+	[Equal.symbol](that: unknown): boolean {
+		return Structure.equals(kind, this, that)
 	}
 
 	/** The number of nodes, with a shared child counted for each place. */
@@ -216,11 +233,16 @@ abstract class Base extends Data.Class {
 	}
 }
 
+const kind: Structure.Kind = {
+	isNode: (u): u is Base => u instanceof Base,
+	depthOf: (node) => (node as Base).depth,
+}
+
 /** Always true. */
 export class True extends Base {
 	readonly _tag = "True"
 	constructor() {
-		super({}, leaf)
+		super("True", {}, leaf)
 	}
 }
 
@@ -228,7 +250,7 @@ export class True extends Base {
 export class False extends Base {
 	readonly _tag = "False"
 	constructor() {
-		super({}, leaf)
+		super("False", {}, leaf)
 	}
 }
 
@@ -247,6 +269,7 @@ export class Compare extends Base {
 			throw new Error(`"${String(props.op)}" is not a compare operator`)
 		}
 		super(
+			"Compare",
 			{
 				op: props.op,
 				field: checkPath(props.field),
@@ -267,7 +290,7 @@ export class In extends Base {
 		readonly values: ReadonlyArray<Operand>
 	}) {
 		const values = checkOperands(props.values)
-		super({ field: checkPath(props.field), values }, valuesFacts(values))
+		super("In", { field: checkPath(props.field), values }, valuesFacts(values))
 	}
 }
 
@@ -276,7 +299,7 @@ export class Exists extends Base {
 	readonly _tag = "Exists"
 	declare readonly field: string
 	constructor(props: { readonly field: string }) {
-		super({ field: checkPath(props.field) }, leaf)
+		super("Exists", { field: checkPath(props.field) }, leaf)
 	}
 }
 
@@ -286,7 +309,7 @@ export class Under extends Base {
 	declare readonly prefix: ReadonlyArray<Operand>
 	constructor(props: { readonly prefix: ReadonlyArray<Operand> }) {
 		const prefix = checkOperands(props.prefix)
-		super({ prefix }, valuesFacts(prefix))
+		super("Under", { prefix }, valuesFacts(prefix))
 	}
 }
 
@@ -306,7 +329,7 @@ export class And extends Base {
 	declare readonly conditions: ReadonlyArray<Node>
 	constructor(conditions: ReadonlyArray<Node>) {
 		const children = checkChildren(conditions)
-		super({ conditions: children }, factsOf(children))
+		super("And", { conditions: children }, factsOf(children))
 	}
 }
 
@@ -315,7 +338,7 @@ export class Or extends Base {
 	declare readonly conditions: ReadonlyArray<Node>
 	constructor(conditions: ReadonlyArray<Node>) {
 		const children = checkChildren(conditions)
-		super({ conditions: children }, factsOf(children))
+		super("Or", { conditions: children }, factsOf(children))
 	}
 }
 
@@ -326,7 +349,7 @@ export class Not extends Base {
 		if (!isNode(condition)) {
 			throw notNode()
 		}
-		super({ condition }, factsOf([condition]))
+		super("Not", { condition }, factsOf([condition]))
 	}
 }
 
@@ -353,6 +376,7 @@ export class Predicate extends Base {
 			throw new Error("A predicate needs a name and a test")
 		}
 		super(
+			"Predicate",
 			{ name: props.name, run: props.run },
 			{ size: 1, weight: 1, depth: 1, opaque: true },
 		)

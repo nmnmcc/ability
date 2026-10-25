@@ -94,7 +94,10 @@ material. Do not change it unless the user asks.
     types give equality, hashing and `pipe`. When a value needs an equality that
     is not structural, such as a cache key that keeps more data than it
     compares, implement the public `Equal.Equal` interface on a small class, and
-    say why in a comment.
+    say why in a comment. The nodes of a condition and of a policy tree are the
+    other case: a tree has no limit of levels, and the walk of `Data.Class`
+    calls itself for each level. So a node keeps its hash, and its equality is a
+    walk of the trampoline, both in `src/internal/structure.ts`.
   - Do not mark values with a `TypeId`. A guard tests the class with
     `instanceof`.
   - Use the tools that Effect gives to its users, such as `Function.dual`,

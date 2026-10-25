@@ -11,10 +11,13 @@
  */
 import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
+import * as Equal from "effect/Equal"
+import * as Hash from "effect/Hash"
 import * as Schema from "effect/Schema"
 import * as Rule from "./rule.ts"
 import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
+import * as Structure from "./structure.ts"
 import * as Trampoline from "./trampoline.ts"
 
 /** The combining algorithms of a list of rules. The decoder reads this list too. */
@@ -67,10 +70,29 @@ const factsOf = (children: ReadonlyArray<Node>): Facts =>
 /** The base of every node. It keeps the facts. */
 abstract class Base extends Data.Class {
 	readonly #facts: Facts
+	readonly #hash: number
 
-	constructor(props: object, facts: Facts) {
+	/** `hashed` is the data that the hash reads, which is `props` at most. */
+	constructor(
+		tag: string,
+		props: object,
+		facts: Facts,
+		hashed: object = props,
+	) {
 		super(props as never)
 		this.#facts = facts
+		this.#hash = Structure.hashOf(kind, tag, hashed)
+	}
+
+	// A tree has no limit of levels, so the hash and the equality are the
+	// ones of `Structure`, which do not fill the stack. They read the same
+	// data as the ones of `Data.Class`.
+	[Hash.symbol](): number {
+		return this.#hash
+	}
+
+	[Equal.symbol](that: unknown): boolean {
+		return Structure.equals(kind, this, that)
 	}
 
 	/** The number of nodes, with the rules and their conditions. */
@@ -88,6 +110,23 @@ abstract class Base extends Data.Class {
 		return this.#facts.opaque
 	}
 }
+
+const kind: Structure.Kind = {
+	isNode: (u): u is Base => u instanceof Base,
+	depthOf: (node) => (node as Base).depth,
+}
+
+/**
+ * The hash of a rule in the hash of its node. It reads the parts of the rule
+ * that are small, and the hash that the condition keeps. It does not read
+ * the domain, which has the Schemas, or the `meta`, which may be large. Two
+ * equal rules still have one hash, since `Equal` reads every part.
+ */
+const ruleHash = (rule: Rule.Rule): number =>
+	Hash.structureKeys(
+		rule,
+		Arr.filter(Object.keys(rule), (key) => key !== "domain" && key !== "meta"),
+	)
 
 /**
  * The condition of a rule. A value that is not a node counts as one node
@@ -119,6 +158,7 @@ export class Rules extends Base {
 		}
 		const conditions = Arr.map(rules, whenOf)
 		super(
+			"Rules",
 			{ algorithm: props.algorithm, rules },
 			checked({
 				size: Arr.reduce(
@@ -130,6 +170,7 @@ export class Rules extends Base {
 				depth: 1,
 				opaque: Arr.some(conditions, (when) => when?.opaque ?? false),
 			}),
+			{ algorithm: props.algorithm, rules: Arr.map(rules, ruleHash) },
 		)
 	}
 }
@@ -150,7 +191,7 @@ export class All extends Base {
 	declare readonly policies: ReadonlyArray<Node>
 	constructor(policies: ReadonlyArray<Node>) {
 		const children = checkChildren(policies)
-		super({ policies: children }, factsOf(children))
+		super("All", { policies: children }, factsOf(children))
 	}
 }
 
@@ -160,7 +201,7 @@ export class Any extends Base {
 	declare readonly policies: ReadonlyArray<Node>
 	constructor(policies: ReadonlyArray<Node>) {
 		const children = checkChildren(policies)
-		super({ policies: children }, factsOf(children))
+		super("Any", { policies: children }, factsOf(children))
 	}
 }
 
@@ -170,7 +211,7 @@ export class FirstOf extends Base {
 	declare readonly policies: ReadonlyArray<Node>
 	constructor(policies: ReadonlyArray<Node>) {
 		const children = checkChildren(policies)
-		super({ policies: children }, factsOf(children))
+		super("FirstOf", { policies: children }, factsOf(children))
 	}
 }
 
@@ -181,7 +222,7 @@ export class Ceiling extends Base {
 	declare readonly policy: Node
 	constructor(props: { readonly cap: Node; readonly policy: Node }) {
 		const [cap, policy] = checkChildren([props.cap, props.policy])
-		super({ cap, policy }, factsOf([cap!, policy!]))
+		super("Ceiling", { cap, policy }, factsOf([cap!, policy!]))
 	}
 }
 

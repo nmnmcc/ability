@@ -1,7 +1,16 @@
 // A test gives its own layer, so it uses Effect.provide.
 // @effect-diagnostics strictEffectProvide:off
 import { assert, describe, it } from "@effect/vitest"
-import { Array as Arr, Context, Effect, Exit, Schema } from "effect"
+import {
+	Array as Arr,
+	Context,
+	Effect,
+	Equal,
+	Exit,
+	Hash,
+	HashSet,
+	Schema,
+} from "effect"
 import {
 	Authorizer,
 	Condition,
@@ -135,6 +144,49 @@ describe("Deep inputs", () => {
 			assert.isTrue(Exit.isSuccess(Schema.decodeExit(Policy.schema(App))(json)))
 		},
 	)
+
+	it("hashes and compares very deep conditions and policy trees", () => {
+		const nots = (value: string): unknown =>
+			Arr.reduce(
+				Arr.range(1, levels),
+				{
+					_tag: "Compare",
+					op: "eq",
+					field: "name",
+					value: { _tag: "Literal", value },
+				} as unknown,
+				(inner) => ({ _tag: "Not", condition: inner }),
+			)
+		const decode = Schema.decodeUnknownSync(Condition.schema)
+		const one = decode(nots("n"))
+		const again = decode(nots("n"))
+		const other = decode(nots("m"))
+		assert.strictEqual(Hash.hash(one), Hash.hash(again))
+		assert.isTrue(Equal.equals(one, again))
+		assert.isFalse(Equal.equals(one, other))
+		assert.strictEqual(HashSet.size(HashSet.make(one, again, other)), 2)
+		const tree = (condition: unknown) =>
+			Arr.reduce(
+				Arr.range(1, levels),
+				Schema.decodeUnknownSync(Policy.schema(App))({
+					_tag: "Rules",
+					algorithm: "denyOverrides",
+					rules: [
+						{
+							_tag: "Allow",
+							actions: ["read"],
+							resources: ["Bot"],
+							when: condition,
+						},
+					],
+				}) as Policy.Policy<typeof App>,
+				(inner) => Policy.all([inner]),
+			)
+		const policy = tree(nots("n"))
+		assert.strictEqual(Hash.hash(policy), Hash.hash(tree(nots("n"))))
+		assert.isTrue(Equal.equals(policy, tree(nots("n"))))
+		assert.isFalse(Equal.equals(policy, tree(nots("m"))))
+	})
 
 	it("runs a very deep tree with a predicate, and gives it services", () => {
 		class Gate extends Context.Service<Gate, boolean>()(
