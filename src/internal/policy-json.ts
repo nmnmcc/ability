@@ -186,10 +186,18 @@ const spendValue = (
 			`The value has more than ${String(Limits.conditionDepth)} levels. The most is ${String(Limits.conditionDepth)}.`,
 		)
 	}
-	const names = Array.isArray(value)
-		? Arr.map(value as ReadonlyArray<unknown>, (_, index) => String(index))
+	// The length of an array counts before its items are read, so a sparse
+	// array with a very large length stops at once.
+	const list = Array.isArray(value)
+	if (list) {
+		Json.spend(budget, 1 + value.length, path)
+	}
+	const names = list
+		? Array.from({ length: value.length }, (_, index) => String(index))
 		: Object.keys(value)
-	Json.spend(budget, 1 + names.length, path)
+	if (!list) {
+		Json.spend(budget, 1 + names.length, path)
+	}
 	Arr.forEach(names, (name) =>
 		spendValue(
 			Json.read(value, name, path),

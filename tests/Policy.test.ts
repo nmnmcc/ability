@@ -2057,6 +2057,29 @@ describe("Policy", () => {
 		}),
 	)
 
+	it("stops a sparse array in meta at once", () => {
+		const Metas = Domain.make({
+			principal: Caller,
+			resources: [Bot],
+			meta: Schema.Unknown,
+		})
+		const start = Date.now()
+		const exit = Schema.decodeExit(Policy.schema(Metas))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: ["Bot"],
+					meta: new Array(0xffffffff),
+				},
+			],
+		})
+		assert.isTrue(Exit.isFailure(exit))
+		assert.isBelow(Date.now() - start, 100)
+	})
+
 	it("counts the meta of a rule in the budget of a decode", () => {
 		const Metas = Domain.make({
 			principal: Caller,
