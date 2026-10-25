@@ -224,32 +224,24 @@ export interface Opaque<out E = never, out R = never> {
 }
 
 /**
- * The error type of the predicates of a mark `X`. A mark that may be
- * anything, as `unknown`, may have any error.
+ * The error type of the predicates of a mark `X`. A mark that is not an
+ * {@link Opaque}, as `unknown` or `object`, may have any error.
  *
  * @stability stable
  * @category utility types
  * @since 2.0.0
  */
-export type ErrorOf<X> = unknown extends X
-	? unknown
-	: X extends Opaque<infer E, infer _R>
-		? E
-		: never
+export type ErrorOf<X> = X extends Opaque<infer E, infer _R> ? E : unknown
 
 /**
- * The service type of the predicates of a mark `X`. A mark that may be
- * anything, as `unknown`, may need any service.
+ * The service type of the predicates of a mark `X`. A mark that is not an
+ * {@link Opaque}, as `unknown` or `object`, may need any service.
  *
  * @stability stable
  * @category utility types
  * @since 2.0.0
  */
-export type ServicesOf<X> = unknown extends X
-	? unknown
-	: X extends Opaque<infer _E, infer R>
-		? R
-		: never
+export type ServicesOf<X> = X extends Opaque<infer _E, infer R> ? R : unknown
 
 /**
  * The mark `X` with no services.
@@ -258,11 +250,8 @@ export type ServicesOf<X> = unknown extends X
  * @category utility types
  * @since 2.0.0
  */
-export type Provided<X> = unknown extends X
-	? Opaque<unknown>
-	: X extends Opaque<infer E, infer _R>
-		? Opaque<E>
-		: never
+export type Provided<X> =
+	X extends Opaque<infer E, infer _R> ? Opaque<E> : Opaque<unknown>
 
 /**
  * What the predicates of a condition read: a resource value of the type `V`

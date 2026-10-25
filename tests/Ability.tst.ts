@@ -209,6 +209,23 @@ describe("Rule", () => {
 			Context.empty(),
 		)
 		expect<Condition.ErrorOf<unknown>>().type.toBe<unknown>()
+		const asObject: Policy.Policy<App, object> = Policy.define(App)(
+			function* (_) {
+				yield* _.allow("read", Bot, {
+					when: ($) => $.predicate("named", (bot) => bot.name !== ""),
+				})
+			},
+		)
+		expect(Policy.decideSync).type.not.toBeCallableWith(asObject, {
+			principal: alice,
+			action: "read",
+			resource: aliceBot,
+		})
+		expect<Condition.ServicesOf<object>>().type.toBe<unknown>()
+		expect<Condition.Provided<object>>().type.toBe<Condition.Opaque<unknown>>()
+		// A plain mark and a mark of predicates keep their types.
+		expect<Condition.ErrorOf<never>>().type.toBe<never>()
+		expect<Condition.ErrorOf<Condition.Opaque<"e", "r">>>().type.toBe<"e">()
 	})
 
 	it("keeps an Exit as one field, as the catalog does", () => {
