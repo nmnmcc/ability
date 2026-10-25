@@ -405,7 +405,13 @@ const branchOf = (place: Place, count: { size: number }): Branch => {
 						values.length > 0 ||
 						records.length > 0 ||
 						(last && structs.length > 0),
-					open: records.length > 0 || valueKinds.object || place.top,
+					// A field that is a scalar in one branch of a union and a struct
+					// in another holds parts too.
+					open:
+						records.length > 0 ||
+						structs.length > 0 ||
+						valueKinds.object ||
+						place.top,
 				}
 	if (field !== undefined) {
 		count.size += 1

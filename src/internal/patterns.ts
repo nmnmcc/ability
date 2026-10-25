@@ -1,0 +1,211 @@
+/**
+ * Field patterns, as in `settings.*`, `secret*` or `**.secret`. A pattern is
+ * a list of parts with dots between them:
+ * - A name with no star matches that name.
+ * - A part with stars matches a name, and each star matches any text with no
+ *   dot, as `secret*` matches `secretKey`.
+ * - `**` matches any number of names, also none. It must be a whole part.
+ *
+ * A pattern that matches a field matches each field below it too. So `pay`
+ * matches `pay.amount`, as `pay.**` does.
+ *
+ * The match goes one name at a time, and it keeps the set of places in the
+ * pattern that it may be at. It does not go back, so the time is at most the
+ * number of names times the number of parts.
+ */
+import * as Arr from "effect/Array"
+import * as Result from "effect/Result"
+import * as Catalog from "./catalog.ts"
+import * as Limits from "./limits.ts"
+
+/** One part of a pattern. */
+export type Part =
+	| { readonly _tag: "Name"; readonly name: string }
+	/** The texts between the stars of the part. */
+	| { readonly _tag: "Glob"; readonly pieces: ReadonlyArray<string> }
+	| { readonly _tag: "Globstar" }
+
+/** A pattern, as a list of parts. Two `**` parts are never next to each other. */
+export type Pattern = ReadonlyArray<Part>
+
+const globstar: Part = { _tag: "Globstar" }
+
+const partOf = (text: string): Part =>
+	text === "**"
+		? globstar
+		: text.includes("*")
+			? { _tag: "Glob", pieces: text.split("*") }
+			: { _tag: "Name", name: text }
+
+/**
+ * Reads a pattern. It fails with the problem when the pattern has `**`
+ * inside a part, or has more parts than `patternParts`.
+ */
+export const parse = (text: string): Result.Result<Pattern, string> => {
+	const texts = text.split(".", Limits.patternParts + 1)
+	if (texts.length > Limits.patternParts) {
+		return Result.fail(
+			`The field pattern "${text}" has more than ${String(Limits.patternParts)} parts. The most is ${String(Limits.patternParts)}.`,
+		)
+	}
+	if (Arr.some(texts, (part) => part !== "**" && part.includes("**"))) {
+		return Result.fail(
+			`The field pattern "${text}" has "**" inside a part. "**" must be a whole part`,
+		)
+	}
+	// `a.**.**` matches what `a.**` matches.
+	return Result.succeed(
+		Arr.dedupeAdjacentWith(
+			Arr.map(texts, partOf),
+			(left, right) => left._tag === "Globstar" && right._tag === "Globstar",
+		),
+	)
+}
+
+/**
+ * Reads a pattern of a bound rule. The binding of the rule took the pattern,
+ * so a problem here is a defect.
+ */
+export const parseBound = (text: string): Pattern =>
+	Result.getOrThrowWith(parse(text), (problem) => new Error(problem))
+
+/** Tests if a name matches the pieces of a part with stars. */
+const globMatches = (pieces: ReadonlyArray<string>, name: string): boolean => {
+	const first = pieces[0]!
+	const last = pieces[pieces.length - 1]!
+	const middle = pieces.slice(1, -1)
+	if (
+		name.length < first.length + last.length ||
+		!name.startsWith(first) ||
+		!name.endsWith(last)
+	) {
+		return false
+	}
+	// Each piece in the middle is found as early as it can be. An earlier
+	// place never leaves less room for the pieces after it.
+	const end = name.length - last.length
+	const place = Arr.reduce(middle, first.length as number, (at, piece) => {
+		if (at < 0) {
+			return at
+		}
+		const found = name.indexOf(piece, at)
+		return found < 0 || found + piece.length > end ? -1 : found + piece.length
+	})
+	return place >= 0
+}
+
+/**
+ * Tests if a part matches one segment of a path. A part with stars matches
+ * any key of a record. A name matches a key of a record when the Schema of
+ * the keys takes it.
+ */
+const partFits = (part: Part, segment: Catalog.Segment): boolean => {
+	switch (part._tag) {
+		case "Globstar":
+			return true
+		case "Glob":
+			return typeof segment !== "string" || globMatches(part.pieces, segment)
+		case "Name":
+			return typeof segment === "string"
+				? part.name === segment
+				: Catalog.keyFits(segment, part.name)
+	}
+}
+
+/** The places of a match: the parts that it may take next. */
+type States = ReadonlyArray<number>
+
+/** Adds the place after each `**`, since a `**` may match no names. */
+const close = (pattern: Pattern, states: States): States =>
+	Arr.dedupe(
+		Arr.flatMap(states, (state) =>
+			pattern[state]?._tag === "Globstar" ? [state, state + 1] : [state],
+		),
+	)
+
+const start = (pattern: Pattern): States => close(pattern, [0])
+
+/** Gives the places after one more segment. A `**` that takes it stays. */
+const step = (
+	pattern: Pattern,
+	states: States,
+	segment: Catalog.Segment,
+): States =>
+	close(
+		pattern,
+		Arr.flatMap(states, (state) => {
+			const part = pattern[state]
+			return part === undefined
+				? []
+				: part._tag === "Globstar"
+					? [state]
+					: partFits(part, segment)
+						? [state + 1]
+						: []
+		}),
+	)
+
+const isDone = (pattern: Pattern, states: States): boolean =>
+	states.includes(pattern.length)
+
+/**
+ * Tests if a pattern matches a field, or a field above it. The field is a
+ * list of names.
+ */
+export const matches = (
+	pattern: Pattern,
+	names: ReadonlyArray<string>,
+): boolean => {
+	const found = Arr.reduce(
+		names,
+		{ states: start(pattern), done: isDone(pattern, start(pattern)) },
+		(before, name) => {
+			if (before.done || before.states.length === 0) {
+				return before
+			}
+			const states = step(pattern, before.states, name)
+			return { states, done: isDone(pattern, states) }
+		},
+	)
+	return found.done
+}
+
+/**
+ * Tests if a pattern may match a field below a field, with more names after
+ * the names of the field.
+ */
+export const matchesBelow = (
+	pattern: Pattern,
+	names: ReadonlyArray<string>,
+): boolean =>
+	Arr.some(
+		Arr.reduce(names, start(pattern), (states, name) =>
+			step(pattern, states, name),
+		),
+		(state) => state < pattern.length,
+	)
+
+/** Tests if a pattern matches some field of a catalog. */
+export const fitsCatalog = (
+	pattern: Pattern,
+	catalog: Catalog.Catalog,
+): boolean => {
+	const below = (branch: Catalog.Branch, states: States): boolean =>
+		states.length > 0 &&
+		(Arr.some(branch.children, ([name, child]) => visit(child, name, states)) ||
+			(branch.key !== undefined &&
+				branch.keyBranch !== undefined &&
+				visit(branch.keyBranch, branch.key, states)))
+	const visit = (
+		branch: Catalog.Branch,
+		segment: Catalog.Segment,
+		before: States,
+	): boolean => {
+		const states = step(pattern, before, segment)
+		return (
+			(branch.field !== undefined && isDone(pattern, states)) ||
+			below(branch, states)
+		)
+	}
+	return below(catalog.root, start(pattern))
+}

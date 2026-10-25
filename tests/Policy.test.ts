@@ -983,7 +983,7 @@ describe("Policy", () => {
 		)
 
 		it.prop(
-			"permits only the fields that decide allows",
+			"permits the fields that decide allows, and no others",
 			{ specs: Schema.Array(Spec), bot: BotInput, request: Request },
 			({ specs, bot, request }) => {
 				const policy = build(specs, request)
@@ -1000,15 +1000,25 @@ describe("Policy", () => {
 						resource: value,
 					}),
 				)
-				return permitted.every(
-					(field) =>
-						Policy.decideSync(policy, {
-							principal,
-							action: request.action,
-							resource: value,
-							// A field from the list is a field of a Bot.
-							field: field as never,
-						})._tag === "Allow",
+				const allows = (field: string) =>
+					Policy.decideSync(policy, {
+						principal,
+						action: request.action,
+						resource: value,
+						// A field from the list is a field of a Bot.
+						field: field as never,
+					})._tag === "Allow"
+				// Each listed field that holds no parts is in the list when
+				// decide allows it.
+				const plain = Arr.filter(
+					Resource.descriptor(Bot).catalog.fields,
+					(field) => field.listed && !field.open,
+				)
+				return (
+					permitted.every(allows) &&
+					plain.every(
+						(field) => permitted.includes(field.text) === allows(field.text),
+					)
 				)
 			},
 		)
@@ -1206,10 +1216,20 @@ describe("Policy", () => {
 				),
 			},
 		})
-		assert.deepStrictEqual(Resource.descriptor(Note).fieldPaths, [
-			"settings.open",
-			"settings.secret",
-		])
+		const Notes = Domain.make({ principal: Caller, resources: [Note] })
+		const policy = Policy.define(Notes)(function* (_) {
+			yield* _.allow("read", Note)
+		})
+		assert.deepStrictEqual(
+			Effect.runSync(
+				Policy.permittedFields(policy, {
+					principal: alice,
+					action: "read",
+					resource: Note.make({ settings: { open: "o", secret: "s" } }),
+				}),
+			),
+			["settings.open", "settings.secret"],
+		)
 	})
 
 	it("leaves out a record field when a deny rule names a part of it", () => {
@@ -1242,7 +1262,10 @@ describe("Policy", () => {
 
 	it("matches field patterns", () => {
 		assert.isTrue(Rule.matchesField("address.*", "address.city"))
-		assert.isFalse(Rule.matchesField("address.*", "address.city.code"))
+		// A pattern matches the fields below a field that it matches.
+		assert.isTrue(Rule.matchesField("address.*", "address.city.code"))
+		assert.isTrue(Rule.matchesField("address", "address.city"))
+		assert.isFalse(Rule.matchesField("address", "addressCity"))
 		assert.isTrue(Rule.matchesField("address.**", "address.city.code"))
 		assert.isTrue(Rule.matchesField("**", "name"))
 		assert.isTrue(Rule.matchesField("*.city", "address.city"))
@@ -2321,7 +2344,7 @@ describe("Policy", () => {
 		)
 	})
 
-	it("grants the whole value for a pattern into a record with key rules", () => {
+	it("matches a key of a record by its Schema, and any key by a star", () => {
 		const Store = Resource.make("KeyStore", {
 			actions: ["read"],
 			fields: {
@@ -2345,160 +2368,14 @@ describe("Policy", () => {
 				},
 			)._tag
 		assert.strictEqual(decide("entries.*"), "Allow")
-		assert.strictEqual(decide("entries.y*"), "NotApplicable")
-		const Labels = Resource.make("Labels", {
-			actions: ["read"],
-			fields: {
-				labels: Schema.Record(
-					Schema.TemplateLiteral(["id-", Schema.String]),
-					Schema.String,
-				),
-			},
-		})
-		const LabelDomain = Domain.make({ principal: Caller, resources: [Labels] })
-		const label = (pattern: string) =>
-			Policy.decideSync(
-				Policy.define(LabelDomain)(function* (_) {
-					yield* _.allow("read", Labels, { fields: [pattern as never] })
-				}),
-				{
-					principal: alice,
-					action: "read",
-					resource: Labels.make({ labels: {} }),
-				},
-			)._tag
-		assert.strictEqual(label("labels.*-z"), "Allow")
-		assert.strictEqual(label("labels.x*"), "NotApplicable")
-		// A number part, and a very long key, go to the check with samples.
-		const Numbered = Resource.make("Numbered", {
-			actions: ["read"],
-			fields: {
-				data: Schema.Record(
-					Schema.TemplateLiteral(["n", Schema.Finite]),
-					Schema.String,
-				),
-				names: Schema.Record(
-					Schema.TemplateLiteral(["x", Schema.String]),
-					Schema.String,
-				),
-			},
-		})
-		const NumberedDomain = Domain.make({
-			principal: Caller,
-			resources: [Numbered],
-		})
-		const numbered = (pattern: string) =>
-			Policy.decideSync(
-				Policy.define(NumberedDomain)(function* (_) {
-					yield* _.allow("read", Numbered, { fields: [pattern as never] })
-				}),
-				{
-					principal: alice,
-					action: "read",
-					resource: Numbered.make({ data: {}, names: {} }),
-				},
-			)._tag
-		// A key Schema with a union in the mode "oneOf" goes to the check
-		// with samples, which uses the Schema itself.
-		const Exclusive = Resource.make("Exclusive", {
-			actions: ["read"],
-			fields: {
-				entries: Schema.Record(
-					Schema.TemplateLiteral([
-						"key-",
-						Schema.Union(
-							[Schema.Literals(["a", "b"]), Schema.Literals(["a", "c"])],
-							{ mode: "oneOf" },
-						),
-						Schema.String,
-					]),
-					Schema.String,
-				),
-			},
-		})
-		const ExclusiveDomain = Domain.make({
-			principal: Caller,
-			resources: [Exclusive],
-		})
-		assert.strictEqual(
-			Policy.decideSync(
-				Policy.define(ExclusiveDomain)(function* (_) {
-					yield* _.allow("read", Exclusive, {
-						fields: ["entries.key-a*" as never],
-					})
-				}),
-				{
-					principal: alice,
-					action: "read",
-					resource: Exclusive.make({ entries: {} }),
-				},
-			)._tag,
-			"NotApplicable",
+		// A part with a star matches any key. It is not tested against the
+		// Schema of the keys.
+		assert.strictEqual(decide("entries.y*"), "Allow")
+		assert.strictEqual(decide("entries.x1"), "Allow")
+		assert.throws(
+			() => decide("entries.y1"),
+			/is not a field of every resource/,
 		)
-		// Many stars in a key pattern take a short time.
-		const Starred = Resource.make("Starred", {
-			actions: ["read"],
-			fields: {
-				entries: Schema.Record(
-					Schema.TemplateLiteral([
-						...Array.from({ length: 12 }).flatMap(() => [
-							"a" as const,
-							Schema.String,
-						]),
-						"z",
-					] as never),
-					Schema.String,
-				),
-			},
-		})
-		const StarredDomain = Domain.make({
-			principal: Caller,
-			resources: [Starred],
-		})
-		const start = Date.now()
-		Policy.decideSync(
-			Policy.define(StarredDomain)(function* (_) {
-				yield* _.allow("read", Starred, {
-					fields: [`entries.${"*a".repeat(12)}y` as never],
-				})
-			}),
-			{
-				principal: alice,
-				action: "read",
-				resource: Starred.make({ entries: {} } as never),
-			},
-		)
-		assert.isBelow(Date.now() - start, 1000)
-		// A ** does not step into a record whose key Schema takes no key.
-		const NoKeys = Resource.make("NoKeys", {
-			actions: ["read"],
-			fields: {
-				entries: Schema.Record(
-					Schema.String.check(Schema.isPattern(/^a/), Schema.isPattern(/^b/)),
-					Schema.Struct({ secret: Schema.String }),
-				),
-				entry: Schema.Record(
-					Schema.TemplateLiteral(["x".repeat(6000), Schema.String]),
-					Schema.String,
-				),
-			},
-		})
-		const NoKeysDomain = Domain.make({ principal: Caller, resources: [NoKeys] })
-		const noKeys = (pattern: string) =>
-			Policy.decideSync(
-				Policy.define(NoKeysDomain)(function* (_) {
-					yield* _.allow("read", NoKeys, { fields: [pattern as never] })
-				}),
-				{
-					principal: alice,
-					action: "read",
-					resource: NoKeys.make({ entries: {}, entry: {} }),
-				},
-			)._tag
-		assert.strictEqual(noKeys("entries.**.secret"), "NotApplicable")
-		assert.strictEqual(noKeys("entry.*"), "Allow")
-		assert.strictEqual(numbered("data.n-1"), "Allow")
-		assert.strictEqual(numbered(`names.x${"a".repeat(10_000)}`), "Allow")
 	})
 
 	it("checks a path test only on kinds whose path may have its whole prefix", () => {
@@ -2531,7 +2408,7 @@ describe("Policy", () => {
 		)
 	})
 
-	it("grants the whole value for a ** inside a name and a number key, not a getter", () => {
+	it("takes a ** only as a whole part, and never a getter", () => {
 		class Owner extends Schema.Class<Owner>("PatternOwner")({
 			id: Schema.String,
 		}) {
@@ -2566,11 +2443,14 @@ describe("Policy", () => {
 					}),
 				},
 			)._tag
-		assert.strictEqual(decide("data.**value"), "Allow")
-		assert.strictEqual(decide("data.**missing"), "NotApplicable")
+		assert.throws(() => decide("data.**value"), /"\*\*" inside a part/)
+		assert.strictEqual(decide("data.**.value"), "Allow")
+		// A key of the record may have the name "missing".
+		assert.strictEqual(decide("data.**.missing"), "Allow")
+		assert.throws(() => decide("data.*.missing"), /matches no field/)
 		assert.strictEqual(decide("values.*"), "Allow")
-		assert.strictEqual(decide("owner.label*"), "NotApplicable")
-		assert.strictEqual(decide("owner.name*"), "NotApplicable")
+		assert.throws(() => decide("owner.label*"), /matches no field/)
+		assert.throws(() => decide("owner.name*"), /matches no field/)
 		assert.isTrue(hasField(Box, "values.1"))
 	})
 
@@ -2604,21 +2484,20 @@ describe("Policy", () => {
 		assert.isTrue(Exit.isSuccess(decode("123")))
 	})
 
-	it("checks a pattern with very many parts in a short time", () => {
-		const policy = Policy.rules(App, [
-			Rule.make({
-				_tag: "Allow",
-				actions: ["read"],
-				resources: ["Bot"],
-				fields: [`${"a**b.".repeat(8000)}*`],
-			}),
-		])
+	it("does not take a pattern with very many parts", () => {
 		const start = Date.now()
-		Policy.decideSync(policy, {
-			principal: alice,
-			action: "read",
-			resource: aliceBot,
-		})
+		assert.throws(
+			() =>
+				Policy.rules(App, [
+					Rule.make({
+						_tag: "Allow",
+						actions: ["read"],
+						resources: ["Bot"],
+						fields: [`${"a*b.".repeat(8000)}*`],
+					}),
+				]),
+			/more than 16 parts/,
+		)
 		assert.isBelow(Date.now() - start, 1000)
 	})
 
@@ -2791,18 +2670,12 @@ describe("Policy", () => {
 			fields: { owner: Owner },
 		})
 		const Boxes = Domain.make({ principal: Caller, resources: [Box] })
-		assert.strictEqual(
-			Policy.decideSync(
+		assert.throws(
+			() =>
 				Policy.define(Boxes)(function* (_) {
 					yield* _.allow("read", Box, { fields: ["**.label" as never] })
 				}),
-				{
-					principal: alice,
-					action: "read",
-					resource: Box.make({ owner: Owner.make({ id: "o" }) }),
-				},
-			)._tag,
-			"NotApplicable",
+			/matches no field/,
 		)
 	})
 
@@ -2916,8 +2789,9 @@ describe("Policy", () => {
 				},
 			)._tag
 		assert.strictEqual(decide("items.**.secret"), "Allow")
-		assert.strictEqual(decide("items.**.missing"), "NotApplicable")
-		assert.strictEqual(decide("items.*.info"), "NotApplicable")
+		assert.throws(() => decide("items.*.**.missing"), /matches no field/)
+		// A struct name covers the fields below it.
+		assert.strictEqual(decide("items.*.info"), "Allow")
 	})
 
 	it("does not take a test with a principal field that is an object", () => {
@@ -3083,9 +2957,7 @@ describe("Policy", () => {
 		assert.isFalse(Rule.matchesField("settings.**", "settingsx"))
 		assert.isTrue(Rule.matchesField("secret.**.**", "secret"))
 		assert.isTrue(Rule.matchesField("**.**.secret", "secret"))
-		const start = Date.now()
-		assert.isTrue(Rule.matchesField(`${"**.".repeat(5000)}secret`, "secret"))
-		assert.isBelow(Date.now() - start, 1000)
+		assert.isTrue(Rule.matchesField(`${"**.".repeat(14)}secret`, "secret"))
 		const policy = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot)
 			yield* _.deny("read", Bot, { fields: ["**.model"] })
@@ -3157,7 +3029,7 @@ describe("Policy", () => {
 
 		it("in the values of a record", () => {
 			assert.strictEqual(decide("entries.*.public"), "Allow")
-			assert.strictEqual(decide("entries.*.secret"), "NotApplicable")
+			assert.throws(() => decide("entries.*.secret"), /matches no field/)
 		})
 
 		it("in the keys of a struct with a record part", () => {
@@ -4021,9 +3893,8 @@ describe("Policy", () => {
 
 	it("matches long patterns in a short time", () => {
 		const start = Date.now()
-		// Two stars or more match any number of parts.
-		assert.isTrue(Rule.matchesField("*".repeat(10_000), "name.x"))
-		assert.isTrue(Rule.matchesField("*".repeat(10_000), "name"))
+		// Only a whole part may be "**".
+		assert.throws(() => Rule.matchesField("*".repeat(10_000), "name"))
 		assert.isFalse(Rule.matchesField(`${"x".repeat(40_000)}*`, "name"))
 		assert.isBelow(Date.now() - start, 1000)
 	})
@@ -4049,7 +3920,7 @@ describe("Policy", () => {
 	it("matches a pattern with many stars in a short time", () => {
 		const start = Date.now()
 		assert.isFalse(
-			Rule.matchesField(`${"*".repeat(80)}Z`, "organizationIdentifier"),
+			Rule.matchesField(`${"*a".repeat(80)}Z`, "organizationIdentifier"),
 		)
 		assert.isBelow(Date.now() - start, 1000)
 	})

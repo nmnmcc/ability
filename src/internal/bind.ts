@@ -9,11 +9,13 @@ import * as Arr from "effect/Array"
 import * as HashMap from "effect/HashMap"
 import * as HashSet from "effect/HashSet"
 import * as Option from "effect/Option"
+import * as Result from "effect/Result"
 import { hasProperty, isObject } from "effect/Predicate"
 import type * as Domain from "../Domain.ts"
 import type * as Resource from "../Resource.ts"
 import * as Catalog from "./catalog.ts"
 import * as Limits from "./limits.ts"
+import * as Patterns from "./patterns.ts"
 import { withSuggestion } from "./suggest.ts"
 
 /** One problem of a rule or a policy, with its path. */
@@ -138,6 +140,33 @@ const fieldIssue = (
 				},
 			]
 }
+
+/**
+ * The issues of a field pattern: a pattern that does not parse, or that
+ * matches no field of the resources of the rule, as a pattern with a mistake
+ * in a name does.
+ */
+const patternIssues = (
+	known: ReadonlyArray<Resource.Descriptor>,
+	pattern: string,
+	at: ReadonlyArray<PropertyKey>,
+): ReadonlyArray<Issue> =>
+	Result.match(Patterns.parse(pattern), {
+		onFailure: (issue) => [{ path: at, issue }],
+		onSuccess: (parsed) =>
+			// A rule with no known resource has an issue for that already.
+			known.length === 0 ||
+			Arr.some(known, (descriptor) =>
+				Patterns.fitsCatalog(parsed, descriptor.catalog),
+			)
+				? []
+				: [
+						{
+							path: at,
+							issue: `The field pattern "${pattern}" matches no field of the resources of the rule`,
+						},
+					],
+	})
 
 /** The fields of the resources that a test of the rule may read. */
 const fieldsAt = (
@@ -509,9 +538,8 @@ export const ruleIssues = (
 			}),
 		),
 		...Arr.flatMap(rule.fields ?? [], (field, index) =>
-			// A pattern is checked when its kinds are known, as the builder does.
 			field.includes("*")
-				? []
+				? patternIssues(known, field, [...at, "fields", index])
 				: fieldIssue(context, field, [...at, "fields", index]),
 		),
 		...(rule.when === undefined

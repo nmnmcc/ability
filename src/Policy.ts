@@ -1338,7 +1338,8 @@ const deniesInside = (
 
 /**
  * Gives the fields of a resource value that the policy lets a request use. It
- * tests each field of the resource Schema, with dots for nested fields.
+ * tests each field that a list of fields shows: each scalar, record or array
+ * of the resource Schema, with dots for nested fields.
  *
  * A field that holds more than one value, such as a record, is left out when a
  * deny rule names a part of it. The list can not name that part, and the whole
@@ -1370,20 +1371,30 @@ export const permittedFields: {
 		if (descriptor === undefined) {
 			return Effect.succeed([])
 		}
-		return Effect.filter(descriptor.fieldPaths, (field) =>
-			Effect.map(
-				decideAny(policy, { ...request, field }),
-				(result) =>
-					result._tag === "Allow" &&
-					!(
-						descriptor.openPaths.includes(field) &&
-						deniesInside(
-							nodeOf(policy),
-							{ ...request, kind: descriptor.kind },
-							field,
-						)
-					),
+		// The fields with names only: a list can not name every key of a record.
+		const listed = Arr.filter(
+			descriptor.catalog.fields,
+			(field) =>
+				field.listed &&
+				Arr.every(field.path, (segment) => typeof segment === "string"),
+		)
+		return Effect.map(
+			Effect.filter(listed, (field) =>
+				Effect.map(
+					decideAny(policy, { ...request, field: field.text }),
+					(result) =>
+						result._tag === "Allow" &&
+						!(
+							field.open &&
+							deniesInside(
+								nodeOf(policy),
+								{ ...request, kind: descriptor.kind },
+								field.text,
+							)
+						),
+				),
 			),
+			Arr.map((field) => field.text),
 		)
 	},
 ) as never

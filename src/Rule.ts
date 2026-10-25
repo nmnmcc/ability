@@ -21,10 +21,10 @@
  */
 import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
-import * as HashSet from "effect/HashSet"
 import type * as Pipeable from "effect/Pipeable"
 import * as Condition from "./Condition.ts"
 import type * as Domain from "./Domain.ts"
+import * as Patterns from "./internal/patterns.ts"
 import * as Resource from "./Resource.ts"
 
 /**
@@ -417,217 +417,34 @@ export const builder = <D extends Domain.Any>(domain: D): Builder<D> =>
 export const isRule = (u: unknown): u is Any => u instanceof RuleData
 
 /**
- * A part of a field pattern: `"**"`, `"*"`, or one plain Unicode code point.
- */
-type Token = string
-
-/**
- * Gives the parts of a pattern. It reads the pattern by Unicode code points,
- * as `run` reads the field. One star is `*`. Two or more stars next to each
- * other match what `**` matches, so they are one part, `**`. So two star parts
- * are never next to each other.
- */
-const tokensOf = (pattern: string): ReadonlyArray<Token> =>
-	Arr.map(normalize(pattern).match(/\*+|[^*]/gu) ?? [], (part) =>
-		part.startsWith("*") ? (part.length === 1 ? "*" : "**") : part,
-	)
-
-/**
- * Puts each run of whole `**` parts together into one part. `a.**.**` matches
- * what `a.**` matches, and with one part the rule of {@link skips} for no
- * parts covers the whole run.
- */
-const normalize = (pattern: string): string =>
-	Arr.dedupeAdjacentWith(
-		pattern.split("."),
-		(left, right) => isGlobstar(left) && isGlobstar(right),
-	).join(".")
-
-/** Tests if a part of a pattern is only stars, two or more of them. */
-const isGlobstar = (part: string): boolean => /^\*{2,}$/u.test(part)
-
-const isStar = (token: Token | undefined): boolean =>
-	token === "*" || token === "**"
-
-type States = HashSet.HashSet<number>
-
-/**
- * Gives the places that a match may reach from `state` with no input. A star
- * may match nothing. A `**` that is a whole part may also match no parts, so
- * the dot next to it may be left out too: `**.secret` and `settings.**.secret`
- * match `secret` and `settings.secret`, and `settings.**` matches `settings`.
- */
-const skips = (
-	tokens: ReadonlyArray<Token>,
-	state: number,
-): ReadonlyArray<number> => {
-	const token = tokens[state]
-	const startsPart = state === 0 || tokens[state - 1] === "."
-	return [
-		...(isStar(token) ? [state + 1] : []),
-		...(token === "**" && startsPart && tokens[state + 1] === "."
-			? [state + 2]
-			: []),
-		...(token === "." &&
-		tokens[state + 1] === "**" &&
-		state + 2 === tokens.length &&
-		state > 0
-			? [state + 2]
-			: []),
-	]
-}
-
-/**
- * Adds the places that a match may reach with no input. See {@link skips}.
- * Each step reads only the places that the step before found, so each place
- * is read one time.
- */
-const close = (
-	tokens: ReadonlyArray<Token>,
-	states: States,
-	found: States = states,
-): States => {
-	const after = HashSet.filter(
-		HashSet.fromIterable(
-			Arr.flatMap(Array.from(found), (state) => skips(tokens, state)),
-		),
-		(state) => !HashSet.has(states, state),
-	)
-	return HashSet.size(after) === 0
-		? states
-		: close(tokens, HashSet.union(states, after), after)
-}
-
-/**
- * Gives the places in the pattern after one more character of the input. A
- * star that takes the character stays at its place. It has taken part of a
- * name, so it may not match no parts any more: only the place after it is
- * added, with no other skips from {@link skips}.
- */
-const step = (
-	tokens: ReadonlyArray<Token>,
-	states: States,
-	char: string,
-): States => {
-	const list = Array.from(states)
-	const stars = Arr.filter(list, (state) => {
-		const token = tokens[state]
-		return token === "**" || (token === "*" && char !== ".")
-	})
-	const moved = Arr.flatMap(list, (state) =>
-		!isStar(tokens[state]) && tokens[state] === char ? [state + 1] : [],
-	)
-	return HashSet.union(
-		HashSet.fromIterable(stars),
-		close(
-			tokens,
-			HashSet.fromIterable([...moved, ...Arr.map(stars, (state) => state + 1)]),
-		),
-	)
-}
-
-/**
- * Gives every place in the pattern that a match may have reached after
- * `input`. It keeps a set of places, and it does not go back, so the time is
- * at most the length of the input times the length of the pattern. A regular
- * expression may take a very long time on a pattern with many stars.
- */
-const run = (tokens: ReadonlyArray<Token>, input: string): States =>
-	Arr.reduce(
-		Array.from(input),
-		close(tokens, HashSet.make(0)),
-		(states, char) =>
-			HashSet.size(states) === 0 ? states : step(tokens, states, char),
-	)
-
-/**
- * Tests if a field name matches a field name or a field pattern of a rule.
+ * Tests if a field name matches a field name or a field pattern of a rule. A
+ * pattern matches the fields below a field that it matches too, so `settings`
+ * matches `settings.model`. See `Policy.define` for the rules of patterns.
  *
  * @stability stable
  * @category predicates
  * @since 0.3.0
  */
-export const matchesField = (pattern: string, field: string): boolean => {
-	if (!pattern.includes("*")) {
-		return pattern === field
-	}
-	const tokens = tokensOf(pattern)
-	return HashSet.has(run(tokens, field), tokens.length)
-}
+export const matchesField = (pattern: string, field: string): boolean =>
+	Patterns.matches(Patterns.parseBound(pattern), field.split("."))
 
 /**
  * Tests if a field pattern may match a field inside `field`, such as
- * `settings.secret` inside `settings`, or `settings.` for the empty key of a
- * record.
+ * `settings.secret` inside `settings`.
  *
  * @stability stable
  * @category predicates
  * @since 1.0.0
  */
 export const matchesInside = (pattern: string, field: string): boolean =>
-	// The name of a part may be empty, as a key of a record may be. So a match
-	// that ends just after the dot names a part too.
-	HashSet.size(run(tokensOf(pattern), `${field}.`)) > 0
+	Patterns.matchesBelow(Patterns.parseBound(pattern), field.split("."))
 
-/**
- * Tests if a field pattern may match a field of a kind: a field in its list,
- * or a path that the Schema has, such as a key of a record. See
- * `Resource.hasMatchingPath`.
- */
+/** Tests if a field pattern matches some field of a kind. */
 const fitsSomeField = (
 	pattern: string,
 	descriptor: Resource.Descriptor,
 ): boolean =>
-	Arr.some(descriptor.fieldPaths, (field) => matchesField(pattern, field)) ||
-	// A pattern with more parts than a field path may have fits no other
-	// field, and it is not cut into lists of parts.
-	(pattern.split(".", maxPatternParts + 1).length <= maxPatternParts &&
-		Arr.some(partLists(pattern), (parts) =>
-			Resource.hasMatchingPath(descriptor.schema, parts, matchesField),
-		))
-
-/** The most parts of a pattern that the walk of the Schema takes. */
-const maxPatternParts = 256
-
-/**
- * The lists of parts that a pattern may stand for. A part that is only stars
- * is `**`. One `**` inside a part, as in `**value`, may take the dots of more
- * parts, so such a part gives two lists: one with the part as it is, with
- * `*` for `**`, and one with the part cut at the stars, as in `*`, `**`,
- * `*value`. A part with two such runs stays as it is, with `*` for `**`, so
- * it may miss a field but never fits one too many. The number of lists is
- * kept small.
- */
-const partLists = (pattern: string): ReadonlyArray<ReadonlyArray<string>> =>
-	Arr.take(
-		Arr.reduce(
-			normalize(pattern).split("."),
-			[[]] as ReadonlyArray<ReadonlyArray<string>>,
-			(lists, part) => {
-				const choices: ReadonlyArray<ReadonlyArray<string>> = isGlobstar(part)
-					? [["**"]]
-					: // Only one run of stars: with two, the cut would leave out the
-						// text between them, and the lists would fit more fields.
-						(part.match(/\*{2,}/gu) ?? []).length === 1
-						? [
-								[part.replace(/\*{2,}/gu, "*")],
-								[
-									`${part.slice(0, part.indexOf("**"))}*`,
-									"**",
-									`*${part.slice(part.lastIndexOf("**") + 2)}`,
-								],
-							]
-						: [[part]]
-				return Arr.take(
-					Arr.flatMap(lists, (list) =>
-						Arr.map(choices, (choice) => [...list, ...choice]),
-					),
-					16,
-				)
-			},
-		),
-		16,
-	)
+	Patterns.fitsCatalog(Patterns.parseBound(pattern), descriptor.catalog)
 
 /**
  * Tests the parts of a rule that do not need the resource value: the action,

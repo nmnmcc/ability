@@ -183,9 +183,12 @@ _.allow("read", "*", {
   and the resource may be lists.
 - The action `"*"` means every action. The resource `"*"` means every resource.
 - `when` is the condition. It gets a builder with the types of the resource.
-- `fields` makes the rule about some fields only. `*` stands for any part of one
-  field name, and `**` for any number of parts, also none: `settings.*` covers
-  `settings.model`, and `**.secret` covers `secret` and `settings.secret`.
+- `fields` makes the rule about some fields only. A field name covers the fields
+  below it too, so `settings` covers `settings.model`. In a pattern, `*` stands
+  for any text inside one part of a name, as in `secret*`. `**` stands for any
+  number of parts, also none, and it must be a whole part: `**.secret` covers
+  `secret` and `settings.secret`. A pattern that matches no field of the
+  resources of the rule is an error, so a mistake in a name shows at once.
 - `reason`, `id` and `meta` are kept with the rule. `meta` is extra data, such
   as the scope of a grant. Give its Schema to `Domain.make({ meta })`.
 
@@ -193,11 +196,10 @@ An allow rule with fields covers a request for the whole value: "may update some
 fields" is a yes. This is true only for a kind that has one of these fields. A
 deny rule with fields does not stop a request for the whole value.
 
-To know if a kind has a field that a pattern fits, the library walks the Schema
-of the kind: its fields, the keys of its records, and the getters of its
-classes. For some key Schemas it can only try sample keys, so it may not find a
-field that is there. Then the answer for the whole value is "no", never a wrong
-"yes".
+To know if a kind has a field that a pattern fits, the library reads the shape
+of the Schema of the kind: its fields and the keys of its records. A name in a
+pattern fits a key of a record when the Schema of the keys takes it. A part with
+a star fits any key.
 
 ## Conditions
 
