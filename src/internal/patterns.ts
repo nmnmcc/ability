@@ -117,9 +117,13 @@ type States = ReadonlyArray<number>
 
 /** Adds the place after each `**`, since a `**` may match no names. */
 const close = (pattern: Pattern, states: States): States =>
-	Arr.dedupe(
-		Arr.flatMap(states, (state) =>
-			pattern[state]?._tag === "Globstar" ? [state, state + 1] : [state],
+	// A native `Set` keeps the first copy of each place, in order. It is
+	// faster than `Arr.dedupe`, and this is on the path of each match.
+	Array.from(
+		new Set(
+			Arr.flatMap(states, (state) =>
+				pattern[state]?._tag === "Globstar" ? [state, state + 1] : [state],
+			),
 		),
 	)
 
