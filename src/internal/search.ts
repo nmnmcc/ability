@@ -17,6 +17,7 @@ import * as Algebra from "./algebra.ts"
 import * as Catalog from "./catalog.ts"
 import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
+import * as Trampoline from "./trampoline.ts"
 
 type Node = Nodes.Node
 
@@ -279,51 +280,65 @@ const testFixed = (
 }
 
 /** Puts one value into a field, and into the fields below it. */
-const fix = (
-	node: Node,
-	field: string,
-	value: unknown,
-	search: Search,
-): Node => {
-	const fixChild = (child: Node) => fix(child, field, value, search)
-	switch (node._tag) {
-		case "Compare":
-		case "In":
-		case "Exists": {
-			const known = fixedValue(node.field, field, value)
-			return known === free
-				? node
-				: testFixed(node, known, search)
-					? Nodes.always
-					: Nodes.never
+const fix = (root: Node, field: string, value: unknown, search: Search): Node =>
+	// The walks of a condition take the steps of a trampoline, so a deep
+	// condition does not fill the stack.
+	Trampoline.run(root.depth, (R) => {
+		const go = (node: Node): Trampoline.Step<Node> => {
+			const children = (nodes: ReadonlyArray<Node>) =>
+				R.forEach(nodes, (child) => R.suspend(() => go(child)))
+			switch (node._tag) {
+				case "Compare":
+				case "In":
+				case "Exists": {
+					const known = fixedValue(node.field, field, value)
+					return R.succeed(
+						known === free
+							? node
+							: testFixed(node, known, search)
+								? Nodes.always
+								: Nodes.never,
+					)
+				}
+				case "And":
+					return R.map(children(node.conditions), Algebra.and)
+				case "Or":
+					return R.map(children(node.conditions), Algebra.or)
+				case "Not":
+					return R.map(
+						R.suspend(() => go(node.condition)),
+						Algebra.not,
+					)
+				default:
+					return R.succeed(node)
+			}
 		}
-		case "And":
-			return Algebra.and(Arr.map(node.conditions, fixChild))
-		case "Or":
-			return Algebra.or(Arr.map(node.conditions, fixChild))
-		case "Not":
-			return node.condition.pipe(fixChild, Algebra.not)
-		default:
-			return node
-	}
-}
+		return go(root)
+	})
 
 /** The fields of the tests of a condition, once for each test. */
-const testedFields = (node: Node): ReadonlyArray<string> => {
-	switch (node._tag) {
-		case "Compare":
-		case "In":
-		case "Exists":
-			return [node.field]
-		case "And":
-		case "Or":
-			return Arr.flatMap(node.conditions, testedFields)
-		case "Not":
-			return testedFields(node.condition)
-		default:
-			return []
-	}
-}
+const testedFields = (root: Node): ReadonlyArray<string> =>
+	Trampoline.run(root.depth, (R) => {
+		const go = (node: Node): Trampoline.Step<ReadonlyArray<string>> => {
+			switch (node._tag) {
+				case "Compare":
+				case "In":
+				case "Exists":
+					return R.succeed([node.field])
+				case "And":
+				case "Or":
+					return R.map(
+						R.forEach(node.conditions, (child) => R.suspend(() => go(child))),
+						Arr.flatten,
+					)
+				case "Not":
+					return R.suspend(() => go(node.condition))
+				default:
+					return R.succeed([])
+			}
+		}
+		return go(root)
+	})
 
 /**
  * Picks the next field to split on. A field comes before the fields below it,
@@ -353,59 +368,66 @@ const nextField = (node: Node): string => {
  * one field at a time, and tries one value from each cell of the field. Each
  * step reads the whole condition, so the budget counts its size.
  */
-const searchNode = (
-	node: Node,
-	search: Search,
-	state: SearchState,
-	assignment: ReadonlyArray<readonly [string, unknown]>,
-): Found => {
-	if (node._tag === "True") {
-		return { assignment: Option.some(assignment), state }
+const searchNode = (search: Search) => (R: Trampoline.Runner) => {
+	const go = (
+		node: Node,
+		state: SearchState,
+		assignment: ReadonlyArray<readonly [string, unknown]>,
+	): Trampoline.Step<Found> => {
+		if (node._tag === "True") {
+			return R.succeed({ assignment: Option.some(assignment), state })
+		}
+		if (node._tag === "False") {
+			return R.succeed({ assignment: Option.none(), state })
+		}
+		// The key reads at most a small part of the node: a node with very
+		// many nodes, or with very many values in its `In` tests, is its own
+		// key. A step reads the nodes but not the values, which `membersOf`
+		// keeps, so the budget counts the size.
+		const key = Algebra.keyOf(node)
+		if (search.failed.has(key)) {
+			return R.succeed({ assignment: Option.none(), state })
+		}
+		if (state.steps + node.size > search.budget) {
+			throw new OutOfBudget()
+		}
+		const field = nextField(node)
+		// The cells are tried in order, until one gives values. A fold over
+		// the cells does no work after a found answer, and it does not grow
+		// the stack with the number of cells. Each call for the next field
+		// is a step of the runner, so very many fields do not fill the stack.
+		return R.map(
+			R.reduce(
+				search.cells(field),
+				{
+					assignment: Option.none(),
+					state: { ...state, steps: state.steps + node.size },
+				} as Found,
+				(before, cell): Trampoline.Step<Found> => {
+					if (Option.isSome(before.assignment)) {
+						return R.succeed(before)
+					}
+					const steps = before.state.steps + node.size
+					if (steps > search.budget) {
+						throw new OutOfBudget()
+					}
+					return R.suspend(() =>
+						go(fix(node, field, cell, search), { ...before.state, steps }, [
+							...assignment,
+							[field, cell],
+						]),
+					)
+				},
+			),
+			(result) => {
+				if (Option.isNone(result.assignment)) {
+					search.failed.add(key)
+				}
+				return result
+			},
+		)
 	}
-	if (node._tag === "False") {
-		return { assignment: Option.none(), state }
-	}
-	// The key reads at most a small part of the node: a node with very many
-	// nodes, or with very many values in its `In` tests, is its own key. A
-	// step reads the nodes but not the values, which `membersOf` keeps, so the
-	// budget counts the size.
-	const key = Algebra.keyOf(node)
-	if (search.failed.has(key)) {
-		return { assignment: Option.none(), state }
-	}
-	if (state.steps + node.size > search.budget) {
-		throw new OutOfBudget()
-	}
-	const field = nextField(node)
-	// The cells are tried in order, until one gives values. A fold over the
-	// cells does no work after a found answer, and it does not grow the stack
-	// with the number of cells.
-	const result = Arr.reduce(
-		search.cells(field),
-		{
-			assignment: Option.none(),
-			state: { ...state, steps: state.steps + node.size },
-		} as Found,
-		(before, cell): Found => {
-			if (Option.isSome(before.assignment)) {
-				return before
-			}
-			const steps = before.state.steps + node.size
-			if (steps > search.budget) {
-				throw new OutOfBudget()
-			}
-			return searchNode(
-				fix(node, field, cell, search),
-				search,
-				{ ...before.state, steps },
-				[...assignment, [field, cell]],
-			)
-		},
-	)
-	if (Option.isNone(result.assignment)) {
-		search.failed.add(key)
-	}
-	return result
+	return go
 }
 
 /**
@@ -413,28 +435,40 @@ const searchNode = (
  * parts (`opaque`) becomes an empty object, and it keeps an object that is
  * there.
  */
+type Fields = Readonly<Record<string, unknown>>
+
 const setPath = (
-	root: Readonly<Record<string, unknown>>,
+	root: Fields,
 	names: ReadonlyArray<string>,
 	value: unknown,
-): Readonly<Record<string, unknown>> => {
-	const [name, ...rest] = names
-	if (name === undefined) {
+): Fields => {
+	const last = names[names.length - 1]
+	if (last === undefined) {
 		return root
 	}
 	// Only an own field counts, as a condition reads it. An inherited one,
 	// such as `__proto__`, is not a field of the example.
-	const inner = Object.hasOwn(root, name) ? root[name] : undefined
-	if (rest.length === 0) {
-		return value === opaque && isObject(inner)
-			? root
-			: { ...root, [name]: value === opaque ? {} : value }
-	}
-	const base =
-		isObject(inner) && inner !== opaque
-			? (inner as Readonly<Record<string, unknown>>)
-			: {}
-	return { ...root, [name]: setPath(base, rest, value) }
+	const own = (base: Fields, name: string): unknown =>
+		Object.hasOwn(base, name) ? base[name] : undefined
+	// The object at each part of the path, from the root down to the object
+	// that gets the value. A part that is not an object becomes empty. The
+	// path is walked in a loop, so a long path does not fill the stack.
+	const bases = Arr.scan(names.slice(0, -1), root, (base, name): Fields => {
+		const inner = own(base, name)
+		return isObject(inner) && inner !== opaque ? (inner as Fields) : {}
+	})
+	const target = bases[bases.length - 1]!
+	const inner = own(target, last)
+	const placed: Fields =
+		value === opaque && isObject(inner)
+			? target
+			: { ...target, [last]: value === opaque ? {} : value }
+	// Each object above gets the new object below it, from the bottom up.
+	return Arr.reduceRight(
+		names.slice(0, -1),
+		placed,
+		(below, name, index): Fields => ({ ...bases[index]!, [name]: below }),
+	)
 }
 
 const exampleOf = (
@@ -452,31 +486,42 @@ const exampleOf = (
  * belongs to one search.
  */
 const constantsOf = (node: Node): Map<string, Set<Nodes.Scalar>> => {
-	const pairs = (
-		current: Node,
-	): ReadonlyArray<readonly [string, ReadonlyArray<Nodes.Scalar>]> => {
-		switch (current._tag) {
-			case "Compare":
-				return [[current.field, [literalOf(current.value)]]]
-			case "In":
-				return [[current.field, Arr.map(current.values, literalOf)]]
-			case "Exists":
-				return [[current.field, []]]
-			case "Under":
-				throw new Error(
-					"Condition.satisfiable needs a condition with no Under nodes. Call Condition.partial first.",
-				)
-			case "And":
-			case "Or":
-				return Arr.flatMap(current.conditions, pairs)
-			case "Not":
-				return pairs(current.condition)
-			default:
-				return []
+	type Pair = readonly [string, ReadonlyArray<Nodes.Scalar>]
+	// The walk takes the steps of a trampoline, so a deep condition does not
+	// fill the stack.
+	const pairs = Trampoline.run(node.depth, (R) => {
+		const go = (current: Node): Trampoline.Step<ReadonlyArray<Pair>> => {
+			switch (current._tag) {
+				case "Compare":
+					return R.succeed([[current.field, [literalOf(current.value)]]])
+				case "In":
+					return R.succeed([
+						[current.field, Arr.map(current.values, literalOf)],
+					])
+				case "Exists":
+					return R.succeed([[current.field, []]])
+				case "Under":
+					throw new Error(
+						"Condition.satisfiable needs a condition with no Under nodes. Call Condition.partial first.",
+					)
+				case "And":
+				case "Or":
+					return R.map(
+						R.forEach(current.conditions, (child) =>
+							R.suspend(() => go(child)),
+						),
+						Arr.flatten,
+					)
+				case "Not":
+					return R.suspend(() => go(current.condition))
+				default:
+					return R.succeed([])
+			}
 		}
-	}
+		return go(node)
+	})
 	const all = new Map<string, Set<Nodes.Scalar>>()
-	Arr.forEach(pairs(node), ([field, values]) => {
+	Arr.forEach(pairs, ([field, values]) => {
 		const known = all.get(field) ?? new Set<Nodes.Scalar>()
 		Arr.forEach(values, (value) => known.add(value))
 		all.set(field, known)
@@ -532,7 +577,11 @@ export const satisfiable = (
 		budget,
 	}
 	try {
-		const found = searchNode(Algebra.simplify(node), search, { steps: 0 }, [])
+		// The search goes one call deeper for each field, so the runner is the
+		// one for that many levels.
+		const found = Trampoline.run(constants.size, (R) =>
+			searchNode(search)(R)(Algebra.simplify(node), { steps: 0 }, []),
+		)
 		return Option.match(found.assignment, {
 			onNone: () => satisfiability.Unsatisfiable(),
 			onSome: (assignment) =>

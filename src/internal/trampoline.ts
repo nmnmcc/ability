@@ -41,6 +41,15 @@ export interface Runner {
 		items: ReadonlyArray<A>,
 		f: (item: A, index: number) => Step<B>,
 	) => Step<ReadonlyArray<B>>
+	/**
+	 * Runs a step for each item, in order, with the value of the step before.
+	 * It does not grow the stack with the number of items.
+	 */
+	readonly reduce: <A, B>(
+		items: ReadonlyArray<A>,
+		initial: B,
+		f: (before: B, item: A) => Step<B>,
+	) => Step<B>
 	/** Runs a step for each item, in order, up to the first `true`. */
 	readonly some: <A>(
 		items: ReadonlyArray<A>,
@@ -65,6 +74,8 @@ export const direct: Runner = {
 	flatMap: (from, f) => f(value(from)),
 	forEach: (items, f) =>
 		step(Arr.map(items, (item, index) => value(f(item, index)))),
+	reduce: (items, initial, f) =>
+		step(Arr.reduce(items, initial, (before, item) => value(f(before, item)))),
 	some: (items, f) => step(Arr.some(items, (item) => value(f(item)))),
 	every: (items, f) => step(Arr.every(items, (item) => value(f(item)))),
 }
@@ -84,6 +95,14 @@ export const loop: Runner = {
 		fromEffect(Effect.flatMap(effect(from), (value) => effect(f(value)))),
 	forEach: (items, f) =>
 		fromEffect(Effect.forEach(items, (item, index) => effect(f(item, index)))),
+	reduce: (items, initial, f) =>
+		fromEffect(
+			Effect.reduce(
+				items,
+				() => initial,
+				(before, item) => effect(f(before, item)),
+			),
+		),
 	some: (items, f) =>
 		fromEffect(
 			Effect.map(
