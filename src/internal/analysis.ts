@@ -22,7 +22,7 @@ import { decideNode, fitsKind } from "./decide.ts"
 import * as DomainData from "./domain.ts"
 import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
-import type * as PolicyNodes from "./policy-nodes.ts"
+import * as PolicyNodes from "./policy-nodes.ts"
 import { nodeOf } from "./policy.ts"
 import * as ResourceData from "./resource.ts"
 import * as RuleData from "./rule.ts"
@@ -85,14 +85,28 @@ interface ResidualContext {
 	}
 	/** The resource of the kind, for the fields that a rule may grant. */
 	readonly descriptor: Resource.Descriptor
+	/**
+	 * The condition of each rule, with the principal in it. They are made
+	 * first, from a flat list of the rules, so the walk does not go down the
+	 * levels of the tree and of a condition at once. It is a native map,
+	 * because it must find a rule by the rule itself: two rules with the same
+	 * data are `Equal`.
+	 */
+	readonly conditions: Map<RuleData.Rule, Ast>
 }
 
-const ruleCondition = (value: RuleData.Rule, context: ResidualContext): Ast =>
+const makeCondition = (
+	value: RuleData.Rule,
+	context: Omit<ResidualContext, "conditions">,
+): Ast =>
 	!RuleData.matchesTarget(value, context)
 		? never
 		: value.when === undefined
 			? always
 			: Condition.partial(value.when as Condition.Any, context.input)
+
+const ruleCondition = (value: RuleData.Rule, context: ResidualContext): Ast =>
+	context.conditions.get(value) ?? makeCondition(value, context)
 
 /**
  * Gives the conditions for "the first rule that applies is an allow rule" and
@@ -325,12 +339,21 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 	if (scope._tag === "False") {
 		return inScope({ allow: never, deny: never })
 	}
-	const context: ResidualContext = {
+	const target = {
 		action: request.action,
 		kind: request.kind,
 		field: request.field,
 		input,
 		descriptor,
+	}
+	const context: ResidualContext = {
+		...target,
+		conditions: new Map(
+			Arr.map(policy.pipe(nodeOf, PolicyNodes.rulesOf), (value) => [
+				value,
+				makeCondition(value, target),
+			]),
+		),
 	}
 	// The type of the residual of a plain policy says that it has no
 	// predicate, so it can not be the predicate below. A residual past the

@@ -166,41 +166,53 @@ export const ceiling = dual(2, (policy: Any, cap: Any): any =>
 	),
 )
 
-/** Gives the services to the predicates of a tree. A node with none stays. */
+/**
+ * Gives the services to the predicates of a tree. A node with none stays. The
+ * conditions get the services first, from a flat list of the rules, so the
+ * walk does not go down the levels of the tree and of a condition at once.
+ */
 const provideNode = (
-	node: PolicyNodes.Node,
+	root: PolicyNodes.Node,
 	context: Context.Context<never>,
 ): PolicyNodes.Node => {
-	if (!node.opaque) {
-		return node
+	// A native map, because it must find a rule by the rule itself: two rules
+	// with the same data are `Equal`.
+	const provided = new Map<RuleData.Rule, RuleData.Rule>(
+		Arr.map(PolicyNodes.rulesOf(root), (value) => [
+			value,
+			value.when === undefined || !Nodes.toNode(value.when).opaque
+				? value
+				: RuleData.make({
+						...value,
+						when: Condition.provideContext(
+							value.when as Condition.Any,
+							context as never,
+						),
+					}),
+		]),
+	)
+	const provide = (node: PolicyNodes.Node): PolicyNodes.Node => {
+		if (!node.opaque) {
+			return node
+		}
+		switch (node._tag) {
+			case "Rules":
+				return new PolicyNodes.Rules({
+					algorithm: node.algorithm,
+					rules: Arr.map(node.rules, (value) => provided.get(value) ?? value),
+				})
+			case "All":
+			case "Any":
+			case "FirstOf":
+				return new PolicyNodes[node._tag](Arr.map(node.policies, provide))
+			case "Ceiling":
+				return new PolicyNodes.Ceiling({
+					cap: provide(node.cap),
+					policy: provide(node.policy),
+				})
+		}
 	}
-	const provide = (child: PolicyNodes.Node) => provideNode(child, context)
-	switch (node._tag) {
-		case "Rules":
-			return new PolicyNodes.Rules({
-				algorithm: node.algorithm,
-				rules: Arr.map(node.rules, (value) =>
-					value.when === undefined || !Nodes.toNode(value.when).opaque
-						? value
-						: RuleData.make({
-								...value,
-								when: Condition.provideContext(
-									value.when as Condition.Any,
-									context as never,
-								),
-							}),
-				),
-			})
-		case "All":
-		case "Any":
-		case "FirstOf":
-			return new PolicyNodes[node._tag](Arr.map(node.policies, provide))
-		case "Ceiling":
-			return new PolicyNodes.Ceiling({
-				cap: provide(node.cap),
-				policy: provide(node.policy),
-			})
-	}
+	return provide(root)
 }
 
 /** Gives the services in `context` to every predicate of a policy. */

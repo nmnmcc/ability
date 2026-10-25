@@ -187,3 +187,21 @@ export type Node = Rules | All | Any | FirstOf | Ceiling
 
 /** Tests if a value is a node of a policy tree. */
 export const isNode = (u: unknown): u is Node => u instanceof Base
+
+/**
+ * The rules of a tree, in order, once for each place. A walk that also goes
+ * into the condition of each rule takes the rules from this list first, so it
+ * does not go down the levels of the tree and of a condition at once.
+ */
+export const rulesOf = (node: Node): ReadonlyArray<Rule.Rule> => {
+	switch (node._tag) {
+		case "Rules":
+			return node.rules
+		case "All":
+		case "Any":
+		case "FirstOf":
+			return Arr.flatMap(node.policies, rulesOf)
+		case "Ceiling":
+			return [...rulesOf(node.cap), ...rulesOf(node.policy)]
+	}
+}

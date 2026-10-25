@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest"
 import {
 	Array as Arr,
+	Context,
 	Effect,
 	Equal,
 	Exit,
@@ -1859,7 +1860,12 @@ describe("Policy", () => {
 			"Allow",
 		)
 		assert.strictEqual(Policy.coverage(policy, request)._tag, "All")
+		assert.strictEqual(Policy.residual(policy, request)._tag, "Exists")
 		assert.deepStrictEqual(Schema.encodeSync(PolicySchemaOfApp)(policy), json)
+		assert.deepStrictEqual(JSON.parse(JSON.stringify(policy)), json)
+		assert.isTrue(
+			Equal.equals(Policy.provideContext(policy, Context.empty()), policy),
+		)
 	})
 
 	it("binds a policy with very many wrong names in a short time", () => {

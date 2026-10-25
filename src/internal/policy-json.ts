@@ -33,16 +33,21 @@ export const syncMeta =
 					rule.meta,
 				)
 
+/** The JSON form of the condition of each rule, by the rule. */
+type WhenJson = (rule: Rule.Rule) => unknown
+
 /** Gives the JSON form of a rule. The domain of a rule is not in it. */
-const ruleJson = (rule: Rule.Rule, metaJson: MetaJson): unknown => {
+const ruleJson = (
+	rule: Rule.Rule,
+	metaJson: MetaJson,
+	whenJson: WhenJson,
+): unknown => {
 	const meta = metaJson(rule)
 	return {
 		_tag: rule._tag,
 		actions: rule.actions,
 		resources: rule.resources,
-		...(rule.when === undefined
-			? {}
-			: { when: Json.toJson(rule.when as never) }),
+		...(rule.when === undefined ? {} : { when: whenJson(rule) }),
 		...(rule.fields === undefined ? {} : { fields: rule.fields }),
 		...(rule.reason === undefined ? {} : { reason: rule.reason }),
 		...(rule.id === undefined ? {} : { id: rule.id }),
@@ -54,44 +59,45 @@ const ruleJson = (rule: Rule.Rule, metaJson: MetaJson): unknown => {
 
 /**
  * Gives the JSON form of a policy tree with no predicate. A condition with a
- * predicate has no JSON form, so it throws an error.
+ * predicate has no JSON form, so it throws an error. The conditions are
+ * written first, from a flat list of the rules, so the walk does not go down
+ * the levels of the tree and of a condition at once.
  */
 export const toJson = (node: Node, meta: MetaJson): unknown => {
-	switch (node._tag) {
-		case "Rules":
-			return {
-				_tag: "Rules",
-				algorithm: node.algorithm,
-				rules: Arr.map(node.rules, (rule) => ruleJson(rule, meta)),
-			}
-		case "All":
-		case "Any":
-		case "FirstOf":
-			return {
-				_tag: node._tag,
-				policies: Arr.map(node.policies, (child) => toJson(child, meta)),
-			}
-		case "Ceiling":
-			return {
-				_tag: "Ceiling",
-				cap: toJson(node.cap, meta),
-				policy: toJson(node.policy, meta),
-			}
+	// A native map, because it must find a rule by the rule itself: two rules
+	// with the same data are `Equal`.
+	const whens = new Map<Rule.Rule, unknown>(
+		Arr.map(PolicyNodes.rulesOf(node), (rule) => [
+			rule,
+			rule.when === undefined ? undefined : Json.toJson(rule.when as never),
+		]),
+	)
+	const tree = (current: Node): unknown => {
+		switch (current._tag) {
+			case "Rules":
+				return {
+					_tag: "Rules",
+					algorithm: current.algorithm,
+					rules: Arr.map(current.rules, (rule) =>
+						ruleJson(rule, meta, (found) => whens.get(found)),
+					),
+				}
+			case "All":
+			case "Any":
+			case "FirstOf":
+				return {
+					_tag: current._tag,
+					policies: Arr.map(current.policies, tree),
+				}
+			case "Ceiling":
+				return {
+					_tag: "Ceiling",
+					cap: tree(current.cap),
+					policy: tree(current.policy),
+				}
+		}
 	}
-}
-
-/** The rules of a tree, in order, once for each place. */
-const rulesOf = (node: Node): ReadonlyArray<Rule.Rule> => {
-	switch (node._tag) {
-		case "Rules":
-			return node.rules
-		case "All":
-		case "Any":
-		case "FirstOf":
-			return Arr.flatMap(node.policies, rulesOf)
-		case "Ceiling":
-			return [...rulesOf(node.cap), ...rulesOf(node.policy)]
-	}
+	return tree(node)
 }
 
 /**
@@ -103,7 +109,10 @@ export const encode = (
 	meta: Schema.Top | undefined,
 ): Effect.Effect<unknown, Schema.SchemaError> =>
 	Effect.gen(function* () {
-		const rules = Arr.filter(rulesOf(node), (rule) => rule.meta !== undefined)
+		const rules = Arr.filter(
+			PolicyNodes.rulesOf(node),
+			(rule) => rule.meta !== undefined,
+		)
 		const encoded =
 			meta === undefined
 				? []
