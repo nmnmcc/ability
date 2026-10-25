@@ -88,6 +88,15 @@ export const equals = (kind: Kind, self: object, that: unknown): boolean => {
 				if (x === y) {
 					return R.succeed(true)
 				}
+				// Tells if the walk has met the pair, and marks it as met.
+				const known = (a: object, b: object): boolean => {
+					const seen = met.get(a)
+					if (seen?.has(b) ?? false) {
+						return true
+					}
+					met.set(a, (seen ?? new Set()).add(b))
+					return false
+				}
 				const pairs = (
 					xs: ReadonlyArray<unknown>,
 					ys: ReadonlyArray<unknown>,
@@ -96,11 +105,9 @@ export const equals = (kind: Kind, self: object, that: unknown): boolean => {
 						? R.every(Arr.zip(xs, ys), (pair) => child(pair, depth + 1))
 						: R.succeed(false)
 				const fields = (a: object, b: object) => {
-					const seen = met.get(a)
-					if (seen?.has(b) ?? false) {
+					if (known(a, b)) {
 						return R.succeed(true)
 					}
-					met.set(a, (seen ?? new Set()).add(b))
 					const keys = Object.keys(a)
 					return keys.length === Object.keys(b).length &&
 						Arr.every(keys, (key) => Object.hasOwn(b, key))
@@ -117,7 +124,7 @@ export const equals = (kind: Kind, self: object, that: unknown): boolean => {
 						: R.succeed(false)
 				}
 				if (Array.isArray(x) && Array.isArray(y)) {
-					return pairs(x, y)
+					return known(x, y) ? R.succeed(true) : pairs(x, y)
 				}
 				if (
 					isRecord(kind, x) &&

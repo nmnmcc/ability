@@ -219,6 +219,23 @@ describe("Deep inputs", () => {
 		)
 	})
 
+	it("compares policies with a meta that holds itself", () => {
+		const Noted = Domain.make({
+			principal: App.principal,
+			resources: [Bot],
+			meta: Schema.Unknown,
+		})
+		const policy = () => {
+			// A list that holds itself, as code may make.
+			const meta: Array<unknown> = []
+			meta.push(meta)
+			return Policy.define(Noted)(function* (_) {
+				yield* _.allow("read", Bot, { meta })
+			})
+		}
+		assert.isTrue(Equal.equals(policy(), policy()))
+	})
+
 	it("runs a very deep tree with a predicate, and gives it services", () => {
 		class Gate extends Context.Service<Gate, boolean>()(
 			"@nmnmcc/ability/tests/Deep.test/Gate",
