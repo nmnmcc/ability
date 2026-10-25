@@ -12,6 +12,7 @@ export default defineConfig({
 		Decision: "src/Decision.ts",
 		Authorizer: "src/Authorizer.ts",
 		HttpApi: "src/HttpApi.ts",
+		Limits: "src/Limits.ts",
 	},
 	format: "esm",
 	platform: "neutral",

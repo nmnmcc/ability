@@ -29,6 +29,7 @@ import * as Option from "effect/Option"
 import { hasProperty, isObject } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import * as SchemaAST from "effect/SchemaAST"
+import * as Catalog from "./internal/catalog.ts"
 
 /**
  * One part of a resource path. A string is a fixed part. A field reference
@@ -71,6 +72,8 @@ export interface Descriptor {
 	 * in `fieldPaths`, but a rule may name them.
 	 */
 	readonly openPaths: ReadonlyArray<string>
+	/** The catalog of the data fields of the values. */
+	readonly catalog: Catalog.Catalog
 	/**
 	 * A struct Schema of the data of the values, with the `_tag` field. It is a
 	 * struct also for a `Resource.Class`. The class Schema must not be read
@@ -1608,7 +1611,8 @@ const makeDescriptor = (
 			{ _tag: "Field", field: key },
 		]),
 	)
-	const visits = walkFields(Schema.Struct(options.fields).ast)
+	const struct = Schema.Struct(options.fields)
+	const visits = walkFields(struct.ast)
 	const leaves = Arr.filter(visits, (visit) => visit.leaf)
 	// In a union, one path may hold a scalar in one branch and a struct in
 	// another. Such a path holds more than one value, so it is open too.
@@ -1632,6 +1636,7 @@ const makeDescriptor = (
 				: checkPath(kind, options.fields, options.path(refs)),
 		fieldPaths: Arr.dedupe(Arr.map(leaves, (visit) => visit.path)),
 		openPaths: Arr.dedupe(Arr.map(open, (visit) => visit.path)),
+		catalog: Catalog.catalogOf(struct.ast),
 		schema: Schema.TaggedStruct(kind, options.fields),
 	})
 }

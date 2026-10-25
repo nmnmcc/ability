@@ -19,6 +19,7 @@ import * as Data from "effect/Data"
 import * as HashMap from "effect/HashMap"
 import * as Option from "effect/Option"
 import type * as Schema from "effect/Schema"
+import * as Catalog from "./internal/catalog.ts"
 import type * as PrincipalSchema from "./Principal.ts"
 import * as Resource from "./Resource.ts"
 
@@ -36,6 +37,8 @@ export interface Domain<
 	Meta,
 > {
 	readonly principal: PrincipalSchema.Any
+	/** The catalog of the data fields of the principal. */
+	readonly principalCatalog: Catalog.Catalog
 	/** The descriptor of each resource, by its kind name. */
 	readonly resources: HashMap.HashMap<string, Resource.Descriptor>
 	readonly meta: Schema.Top | undefined
@@ -170,6 +173,7 @@ export type AnyValue<D> = Resource.Value<Resources<D>>
  */
 class DomainData extends Data.Class<{
 	readonly principal: PrincipalSchema.Any
+	readonly principalCatalog: Catalog.Catalog
 	readonly resources: HashMap.HashMap<string, Resource.Descriptor>
 	readonly meta: Schema.Top | undefined
 }> {}
@@ -213,10 +217,11 @@ export const make: <
 			(descriptor) => [descriptor.kind, descriptor] as const,
 		),
 	)
-	// This checks the field names of the principal. See `Resource.fieldPaths`.
-	Resource.fieldPaths(options.principal)
+	// The catalog checks the field names of the principal, so a bad name is a
+	// defect when the domain is made.
 	return new DomainData({
 		principal: options.principal,
+		principalCatalog: Catalog.catalogOf(options.principal.ast),
 		resources,
 		meta: options.meta,
 	})

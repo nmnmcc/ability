@@ -1,0 +1,479 @@
+/**
+ * The catalog of the fields of a Schema. One walk over the Schema makes it,
+ * and every question about the fields of a resource or of the principal reads
+ * it: which names a rule may use, which values a field may hold, which fields
+ * a pattern fits, and which fields a list of permitted fields shows.
+ *
+ * The catalog describes the shape of the values, not the checks of the
+ * Schema. A check, such as a minimum length, only keeps some values out, so a
+ * catalog that leaves the checks out holds every real value and more. An
+ * answer that holds for all of these values, as `All` and `None` of a
+ * coverage do, then holds for the real values too.
+ */
+import * as Arr from "effect/Array"
+import * as HashMap from "effect/HashMap"
+import * as Option from "effect/Option"
+import * as Schema from "effect/Schema"
+import * as SchemaAST from "effect/SchemaAST"
+import * as Limits from "./limits.ts"
+
+/** The kinds of values that a field may hold. */
+export interface Kinds {
+	/** The field may be `null`, `undefined` or missing. */
+	readonly null: boolean
+	readonly boolean: boolean
+	/** The field may hold any string. */
+	readonly string: boolean
+	/** The numbers that the field may hold. */
+	readonly number: "none" | "integer" | "finite" | "any"
+	/** The field may hold an object, or a value that is not a scalar. */
+	readonly object: boolean
+	/** Single values that the field may hold, other than the ones above. */
+	readonly literals: ReadonlyArray<string | number | boolean>
+}
+
+/** No value: the kinds of a field of `Schema.Never`. */
+export const noKinds: Kinds = {
+	null: false,
+	boolean: false,
+	string: false,
+	number: "none",
+	object: false,
+	literals: [],
+}
+
+/** Any value. */
+export const anyKinds: Kinds = {
+	null: true,
+	boolean: true,
+	string: true,
+	number: "any",
+	object: true,
+	literals: [],
+}
+
+const nullKinds: Kinds = { ...noKinds, null: true }
+const objectKinds: Kinds = { ...noKinds, object: true }
+
+const numberOrder = ["none", "integer", "finite", "any"] as const
+
+/** The kinds of a field that may hold a value of `left` or of `right`. */
+export const joinKinds = (left: Kinds, right: Kinds): Kinds => ({
+	null: left.null || right.null,
+	boolean: left.boolean || right.boolean,
+	string: left.string || right.string,
+	number:
+		numberOrder.indexOf(left.number) >= numberOrder.indexOf(right.number)
+			? left.number
+			: right.number,
+	object: left.object || right.object,
+	literals: Arr.dedupe([...left.literals, ...right.literals]),
+})
+
+/** Tests if a number fits the numbers of a field. */
+export const fitsNumber = (number: Kinds["number"], value: number): boolean => {
+	switch (number) {
+		case "none":
+			return false
+		case "integer":
+			return Number.isInteger(value)
+		case "finite":
+			return Number.isFinite(value)
+		case "any":
+			return true
+	}
+}
+
+/**
+ * Tests if a field with these kinds may hold a value. A missing value and
+ * `undefined` are `null`.
+ */
+export const accepts = (kinds: Kinds, value: unknown): boolean => {
+	if (value === null || value === undefined) {
+		return kinds.null
+	}
+	switch (typeof value) {
+		case "boolean":
+			return kinds.boolean || kinds.literals.includes(value)
+		case "string":
+			return kinds.string || kinds.literals.includes(value)
+		case "number":
+			return fitsNumber(kinds.number, value) || kinds.literals.includes(value)
+		default:
+			return kinds.object
+	}
+}
+
+/** A part of a field path that stands for any key of a record. */
+export interface Key {
+	readonly _tag: "Key"
+	/** The Schemas of the keys. A key must fit one of them. */
+	readonly parameters: ReadonlyArray<SchemaAST.AST>
+}
+
+/** One part of a field path: a name, or any key of a record. */
+export type Segment = string | Key
+
+/** One field of a catalog. */
+export interface Field {
+	readonly path: ReadonlyArray<Segment>
+	/** The path with dots, and `*` for a key of a record. */
+	readonly text: string
+	readonly kinds: Kinds
+	/**
+	 * The field holds a value that a list of fields shows as one field: a
+	 * scalar, a record, an array, or a struct at the last part a path may have.
+	 */
+	readonly listed: boolean
+	/** The field may hold parts that the Schema does not name, as a record may. */
+	readonly open: boolean
+}
+
+/** A place in the tree of a catalog, with the places below it. */
+export interface Branch {
+	/** The field at this place. The root has none. */
+	readonly field: Field | undefined
+	/** The places below, by name, in the order of the Schema. */
+	readonly children: ReadonlyArray<readonly [string, Branch]>
+	readonly names: HashMap.HashMap<string, Branch>
+	/** The place for the keys of a record, when the value may be a record. */
+	readonly key: Key | undefined
+	readonly keyBranch: Branch | undefined
+}
+
+/** The catalog of the fields of a Schema. */
+export interface Catalog {
+	/** Every field, a field before the fields below it. */
+	readonly fields: ReadonlyArray<Field>
+	readonly root: Branch
+}
+
+/**
+ * Tests if a key of an object fits the Schemas of the keys of a record. A key
+ * of an object is a string, also a key that a number Schema takes: `{ 1: "a" }`
+ * has the key `"1"`. So a key that is the text of a number is tried as that
+ * number too.
+ */
+export const keyFits = (key: Key, name: string): boolean =>
+	Arr.some(key.parameters, (parameter) => {
+		const is = Schema.is(Schema.make(parameter))
+		return (
+			is(name) ||
+			(name !== "" && String(Number(name)) === name && is(Number(name)))
+		)
+	})
+
+/**
+ * Gives the struct of a `Schema.Class`. A class is a declaration with one
+ * struct as its type parameter, and Effect marks it with a `"~constructor"`
+ * annotation, also through more codec steps, as in
+ * `Schema.fromJsonString(User)`. Other declarations, such as `Schema.Option`
+ * or `Schema.ReadonlyMap`, have no such mark, and the fields of their type
+ * parameter are not fields of the value.
+ */
+const classStruct = (
+	ast: SchemaAST.Declaration,
+): SchemaAST.Objects | undefined => {
+	const [inner] = ast.typeParameters
+	return ast.annotations?.["~constructor"] !== undefined &&
+		ast.typeParameters.length === 1 &&
+		inner?._tag === "Objects"
+		? inner
+		: undefined
+}
+
+/**
+ * Gives the Schemas that a value at one place may fit: it opens unions,
+ * `Schema.suspend` and classes. The open suspend nodes are in a native `Set`,
+ * because the walk must find a node by the node itself: `Equal` compares
+ * Schema nodes by structure, and a recursive Schema has no end. A suspend
+ * node that gives itself again, with no step on the path, gives nothing.
+ */
+const alternatives = (
+	ast: SchemaAST.AST,
+	open: ReadonlySet<SchemaAST.AST>,
+): ReadonlyArray<SchemaAST.AST> => {
+	switch (ast._tag) {
+		case "Union":
+			return Arr.flatMap(ast.types, (type) => alternatives(type, open))
+		case "Suspend":
+			return open.has(ast)
+				? []
+				: alternatives(ast.thunk(), new Set([...open, ast]))
+		case "Declaration": {
+			const inner = classStruct(ast)
+			return inner === undefined ? [ast] : alternatives(inner, open)
+		}
+		default:
+			return [ast]
+	}
+}
+
+const hasCheck = (
+	checks: ReadonlyArray<SchemaAST.Check<never>>,
+	id: string,
+): boolean =>
+	Arr.some(
+		checks,
+		(check) =>
+			check.annotations?.representation?.id === id ||
+			(check._tag === "FilterGroup" && hasCheck(check.checks, id)),
+	)
+
+/** A struct with named fields, or with the keys of a record. */
+const isStruct = (ast: SchemaAST.AST): ast is SchemaAST.Objects =>
+	ast._tag === "Objects" &&
+	(ast.propertySignatures.length > 0 || ast.indexSignatures.length > 0)
+
+/** The kinds of the values of a Schema that is not a struct. */
+const kindsOf = (ast: SchemaAST.AST): Kinds => {
+	switch (ast._tag) {
+		case "Null":
+		case "Undefined":
+			return nullKinds
+		case "Never":
+			return noKinds
+		case "String":
+		case "TemplateLiteral":
+			return { ...noKinds, string: true }
+		case "Boolean":
+			return { ...noKinds, boolean: true }
+		case "Number": {
+			// The two checks that a search uses. Effect names a number with
+			// them, as `Schema.Int` and `Schema.Finite`; other checks are left
+			// out, as all checks are.
+			const checks = ast.checks ?? []
+			return {
+				...noKinds,
+				number: hasCheck(checks, "effect/schema/isInt")
+					? "integer"
+					: hasCheck(checks, "effect/schema/isFinite")
+						? "finite"
+						: "any",
+			}
+		}
+		case "Literal":
+			return typeof ast.literal === "bigint"
+				? objectKinds
+				: { ...noKinds, literals: [ast.literal] }
+		case "Enum":
+			return { ...noKinds, literals: Arr.map(ast.enums, ([, value]) => value) }
+		case "Arrays":
+		case "ObjectKeyword":
+		case "BigInt":
+		case "Symbol":
+		case "UniqueSymbol":
+			return objectKinds
+		default:
+			// `Schema.Unknown`, `Schema.Void`, `Struct({})`, which takes a string
+			// too, and a declaration that is not a class, such as `Schema.Json`
+			// or one from `Schema.declare`: these may hold any value.
+			return anyKinds
+	}
+}
+
+/** The things that a walk of the catalog knows at one place. */
+interface Place {
+	readonly path: ReadonlyArray<Segment>
+	readonly schemas: ReadonlyArray<SchemaAST.AST>
+	/** The value may be missing. */
+	readonly missing: boolean
+	/** The value may be anything, as an extra field of a struct may be. */
+	readonly top: boolean
+}
+
+const textOf = (path: ReadonlyArray<Segment>): string =>
+	Arr.map(path, (segment) =>
+		typeof segment === "string" ? segment : "*",
+	).join(".")
+
+/** Gives the property of a struct with a name, if it has one. */
+const propertyOf = (
+	struct: SchemaAST.Objects,
+	name: string,
+): SchemaAST.PropertySignature | undefined =>
+	Option.getOrUndefined(
+		Arr.findFirst(
+			struct.propertySignatures,
+			(signature) => signature.name === name,
+		),
+	)
+
+/** The names of the fields of the structs, in the order that they first come. */
+const namesOf = (
+	structs: ReadonlyArray<SchemaAST.Objects>,
+): ReadonlyArray<string> =>
+	Arr.dedupe(
+		Arr.flatMap(structs, (struct) =>
+			Arr.flatMap(struct.propertySignatures, (signature) => {
+				const name = signature.name
+				if (typeof name !== "string") {
+					return []
+				}
+				// A dot in a path is the step into a nested field. A field name with
+				// a dot would make two fields have one path, so it is a defect.
+				if (name.includes(".")) {
+					throw new Error(`A field name may not have a dot: "${name}"`)
+				}
+				// An empty name would make an empty part in a path, such as
+				// `.secret`.
+				if (name === "") {
+					throw new Error("A field name may not be empty")
+				}
+				return [name]
+			}),
+		),
+	)
+
+/**
+ * Makes the branch of a place, with the branches below it. `count` is the
+ * number of fields so far. It belongs to one walk, and it stops a Schema with
+ * very many fields before the walk is done.
+ */
+const branchOf = (place: Place, count: { size: number }): Branch => {
+	const structs = Arr.filter(place.schemas, isStruct)
+	const values = Arr.filter(place.schemas, (schema) => !isStruct(schema))
+	const valueKinds = Arr.reduce(values, noKinds, (kinds, schema) =>
+		joinKinds(kinds, kindsOf(schema)),
+	)
+	const kinds = place.top
+		? anyKinds
+		: joinKinds(
+				joinKinds(valueKinds, structs.length > 0 ? objectKinds : noKinds),
+				place.missing ? nullKinds : noKinds,
+			)
+	const records = Arr.filter(
+		structs,
+		(struct) => struct.indexSignatures.length > 0,
+	)
+	// The last part that a path may have: the walk does not go below it.
+	const last = place.path.length === Limits.fieldPathParts
+	const field: Field | undefined =
+		place.path.length === 0
+			? undefined
+			: {
+					path: place.path,
+					text: textOf(place.path),
+					kinds,
+					listed:
+						values.length > 0 ||
+						records.length > 0 ||
+						(last && structs.length > 0),
+					open: records.length > 0 || valueKinds.object || place.top,
+				}
+	if (field !== undefined) {
+		count.size += 1
+		if (count.size > Limits.catalogFields) {
+			throw Limits.exceeded(
+				"A Schema",
+				"catalogFields",
+				"fields",
+				count.size,
+				Limits.catalogFields,
+			)
+		}
+	}
+	if (last) {
+		return {
+			field,
+			children: [],
+			names: HashMap.empty(),
+			key: undefined,
+			keyBranch: undefined,
+		}
+	}
+	const children = Arr.map(namesOf(structs), (name) => {
+		const properties = Arr.flatMap(structs, (struct) => {
+			const property = propertyOf(struct, name)
+			return property === undefined ? [] : [property]
+		})
+		const below: Place = {
+			path: [...place.path, name],
+			schemas: Arr.flatMap(properties, (property) =>
+				alternatives(property.type, new Set()),
+			),
+			// A field below a value that is not a struct reads `null`, and so
+			// does a field that may be missing.
+			missing:
+				place.missing ||
+				values.length > 0 ||
+				Arr.some(properties, (property) => SchemaAST.isOptional(property.type)),
+			// A struct without the name may still have it as an extra field,
+			// with any value: only a decode takes extra fields away.
+			top:
+				place.top ||
+				Arr.some(structs, (struct) => propertyOf(struct, name) === undefined),
+		}
+		return [name, branchOf(below, count)] as const
+	})
+	const names = HashMap.fromIterable(children)
+	const signatures = Arr.flatMap(records, (struct) => struct.indexSignatures)
+	if (signatures.length === 0) {
+		return { field, children, names, key: undefined, keyBranch: undefined }
+	}
+	const key: Key = {
+		_tag: "Key",
+		parameters: Arr.map(signatures, (signature) => signature.parameter),
+	}
+	const keyBranch = branchOf(
+		{
+			path: [...place.path, key],
+			schemas: Arr.flatMap(signatures, (signature) =>
+				alternatives(signature.type, new Set()),
+			),
+			// A record may not have a given key.
+			missing: true,
+			top: place.top || records.length < structs.length,
+		},
+		count,
+	)
+	return { field, children, names, key, keyBranch }
+}
+
+const fieldsOf = (branch: Branch): ReadonlyArray<Field> => [
+	...(branch.field === undefined ? [] : [branch.field]),
+	...Arr.flatMap(branch.children, ([, child]) => fieldsOf(child)),
+	...(branch.keyBranch === undefined ? [] : fieldsOf(branch.keyBranch)),
+]
+
+/**
+ * Makes the catalog of a Schema. It throws when a field name has a dot or is
+ * empty, and when the Schema has more fields than `catalogFields`.
+ */
+export const catalogOf = (ast: SchemaAST.AST): Catalog => {
+	const root = branchOf(
+		{
+			path: [],
+			schemas: alternatives(ast, new Set()),
+			missing: false,
+			top: false,
+		},
+		{ size: 0 },
+	)
+	return { fields: fieldsOf(root), root }
+}
+
+/** Gives the field of a catalog at a path with dots, if the catalog has it. */
+export const lookup = (catalog: Catalog, path: string): Field | undefined => {
+	const names = path.split(".", Limits.fieldPathParts + 1)
+	if (names.length > Limits.fieldPathParts) {
+		return undefined
+	}
+	const branch = Arr.reduce(
+		names,
+		catalog.root as Branch | undefined,
+		(current, name) => {
+			if (current === undefined) {
+				return undefined
+			}
+			const named = HashMap.get(current.names, name)
+			if (Option.isSome(named)) {
+				return named.value
+			}
+			return current.key !== undefined && keyFits(current.key, name)
+				? current.keyBranch
+				: undefined
+		},
+	)
+	return branch?.field
+}

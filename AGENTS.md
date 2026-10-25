@@ -35,11 +35,12 @@ material. Do not change it unless the user asks.
   itself, so the examples need no other runner.
 - Public entry points: `src/index.ts`, and one module for each concept:
   `Resource`, `Principal`, `Domain`, `Condition`, `Rule`, `Policy`, `Decision`,
-  `Authorizer`.
+  `Authorizer`, `Limits`.
 - `src/HttpApi.ts` is a separate entry point, because `effect/http-api` is not
   stable. Do not export it from `src/index.ts`.
-- Each module keeps its types, its docs and its code in one file. There is no
-  `src/internal/` folder.
+- A public module in `src/` keeps the public types, the docs, and short exports.
+  The code is in `src/internal/`, with one file for each part of the work.
+  `package.json` does not export `src/internal/`, so a user can not import it.
 - Examples are in `examples/`.
 - Tests are in `tests/`.
 
@@ -101,10 +102,11 @@ material. Do not change it unless the user asks.
   `every`, `findFirst`, `groupWith`, `unfold`) for values, and `Effect.forEach`,
   `Effect.filter` and `Effect.findFirst` for Effects. A walk that must stop
   early may call itself with the next index.
-- A public function gives its full types. When the code under it works on nodes
-  with no types, give it a short private function, and give the public type in
-  the `export const` line. Such a file may turn off the
-  `anyUnknownInErrorContext` check, with a comment that says why.
+- A public function gives its full types. The code in `src/internal/` works on
+  values with no types, and the public module gives the public type in the
+  `export const` line, as in `export const f: PublicType = internal.f`. A file
+  may turn off the `anyUnknownInErrorContext` check, with a comment that says
+  why.
 - Follow the style of the code near your change before you add new layers.
 - Keep each change to what the user asked for.
 - Do not change generated files or reference material by hand.

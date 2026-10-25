@@ -25,6 +25,7 @@
 		"./Decision": "./dist/Decision.js",
 		"./Domain": "./dist/Domain.js",
 		"./HttpApi": "./dist/HttpApi.js",
+		"./Limits": "./dist/Limits.js",
 		"./Policy": "./dist/Policy.js",
 		"./Principal": "./dist/Principal.js",
 		"./Resource": "./dist/Resource.js",
