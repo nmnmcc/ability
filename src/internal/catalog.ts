@@ -358,16 +358,19 @@ const textOf = (path: ReadonlyArray<Segment>): string =>
 const nameOf = (signature: SchemaAST.PropertySignature): string | undefined =>
 	typeof signature.name === "symbol" ? undefined : String(signature.name)
 
-/** Gives the property of a struct with a name, if it has one. */
-const propertyOf = (
+/**
+ * The properties of a struct by name. A walk makes it one time for each
+ * struct of a place, so a struct with very many fields does not take a
+ * search for each name.
+ */
+const propertiesOf = (
 	struct: SchemaAST.Objects,
-	name: string,
-): SchemaAST.PropertySignature | undefined =>
-	Option.getOrUndefined(
-		Arr.findFirst(
-			struct.propertySignatures,
-			(signature) => nameOf(signature) === name,
-		),
+): HashMap.HashMap<string, SchemaAST.PropertySignature> =>
+	HashMap.fromIterable(
+		Arr.flatMap(struct.propertySignatures, (signature) => {
+			const name = nameOf(signature)
+			return name === undefined ? [] : [[name, signature] as const]
+		}),
 	)
 
 /** The names of the fields of the structs, in the order that they first come. */
@@ -472,11 +475,12 @@ const branchOf = (place: Place, count: { size: number }): Branch => {
 			keyBranch: undefined,
 		}
 	}
+	const structProperties = Arr.map(structs, propertiesOf)
+	const classProperties = Arr.map(classes, propertiesOf)
 	const children = Arr.map(namesOf(structs), (name) => {
-		const properties = Arr.flatMap(structs, (struct) => {
-			const property = propertyOf(struct, name)
-			return property === undefined ? [] : [property]
-		})
+		const properties = Arr.flatMap(structProperties, (named) =>
+			Option.toArray(HashMap.get(named, name)),
+		)
 		const below: Place = {
 			path: [...place.path, name],
 			schemas: Arr.flatMap(properties, (property) =>
@@ -492,14 +496,11 @@ const branchOf = (place: Place, count: { size: number }): Branch => {
 			// with any value: only a decode takes extra fields away. A value
 			// that may be any object, as one of `Schema.Unknown` may, may have
 			// the name with any value too.
-			top:
-				place.top ||
-				valueKinds.object ||
-				Arr.some(structs, (struct) => propertyOf(struct, name) === undefined),
+			top: place.top || valueKinds.object || properties.length < structs.length,
 			plain:
 				place.plain &&
 				!valueKinds.object &&
-				Arr.every(classes, (struct) => propertyOf(struct, name) !== undefined),
+				Arr.every(classProperties, (named) => HashMap.has(named, name)),
 		}
 		return [name, branchOf(below, count)] as const
 	})
