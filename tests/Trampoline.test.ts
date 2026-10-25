@@ -61,6 +61,18 @@ describe("Trampoline", () => {
 		assert.isTrue(Trampoline.run(100_000, has(deep, 0)))
 	})
 
+	it("walks an input of unknown depth on the stack, then in the loop", () => {
+		const walk = Trampoline.adaptive<Tree, number>(
+			(R, child) => (node, depth) =>
+				R.map(
+					R.forEach(node.children, (inner) => child(inner, depth + 1)),
+					(values) => Arr.reduce(values, node.value, (total, x) => total + x),
+				),
+		)
+		assert.strictEqual(walk(chain(10)), 55)
+		assert.strictEqual(walk(chain(100_000)), (100_000 * 100_001) / 2)
+	})
+
 	it("gives back an error of a step as it was", () => {
 		class Stop extends Error {}
 		const failing = (R: Trampoline.Runner) =>

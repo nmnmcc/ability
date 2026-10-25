@@ -14,6 +14,7 @@ import * as Json from "./json.ts"
 import * as Limits from "./limits.ts"
 import * as Place from "./place.ts"
 import * as PolicyNodes from "./policy-nodes.ts"
+import * as Trampoline from "./trampoline.ts"
 
 type Node = PolicyNodes.Node
 
@@ -80,32 +81,43 @@ export const toJson = (node: Node, meta: MetaJson): unknown => {
 			rule.when === undefined ? undefined : Json.toJson(rule.when as never),
 		]),
 	)
-	const tree = (current: Node): unknown => {
-		switch (current._tag) {
-			case "Rules":
-				return {
-					_tag: "Rules",
-					algorithm: current.algorithm,
-					rules: Arr.map(current.rules, (rule) =>
-						ruleJson(rule, meta, (found) => whens.get(found)),
-					),
+	// The walk of the tree takes the steps of a trampoline, so a deep tree
+	// does not fill the stack.
+	return Trampoline.run(node.depth, (R) => {
+		const tree = (current: Node): Trampoline.Step<unknown> => {
+			switch (current._tag) {
+				case "Rules":
+					return R.succeed({
+						_tag: "Rules",
+						algorithm: current.algorithm,
+						rules: Arr.map(current.rules, (rule) =>
+							ruleJson(rule, meta, (found) => whens.get(found)),
+						),
+					})
+				case "All":
+				case "Any":
+				case "FirstOf": {
+					const tag = current._tag
+					return R.map(
+						R.forEach(current.policies, (child) =>
+							R.suspend(() => tree(child)),
+						),
+						(policies) => ({ _tag: tag, policies }),
+					)
 				}
-			case "All":
-			case "Any":
-			case "FirstOf":
-				return {
-					_tag: current._tag,
-					policies: Arr.map(current.policies, tree),
-				}
-			case "Ceiling":
-				return {
-					_tag: "Ceiling",
-					cap: tree(current.cap),
-					policy: tree(current.policy),
-				}
+				case "Ceiling":
+					return R.flatMap(
+						R.suspend(() => tree(current.cap)),
+						(cap) =>
+							R.map(
+								R.suspend(() => tree(current.policy)),
+								(policy) => ({ _tag: "Ceiling", cap, policy }),
+							),
+					)
+			}
 		}
-	}
-	return tree(node)
+		return tree(node)
+	})
 }
 
 /**
@@ -140,12 +152,15 @@ export const encode = (
 const readStrings = (
 	input: object,
 	name: string,
-	path: ReadonlyArray<PropertyKey>,
+	at: Place.Place | undefined,
 	budget: Json.Budget,
 ): ReadonlyArray<string> =>
-	Arr.map(Json.readList(input, name, path, budget), (value, index) => {
+	Arr.map(Json.readList(input, name, at, budget), (value, index) => {
 		if (typeof value !== "string") {
-			throw Json.problem([...path, name, index], "The item must be a string")
+			throw Json.problemAt(
+				Place.at(at, name, index),
+				"The item must be a string",
+			)
 		}
 		return value
 	})
@@ -158,54 +173,61 @@ const readStrings = (
 const readOptional = <A>(
 	input: object,
 	name: string,
-	path: ReadonlyArray<PropertyKey>,
+	at: Place.Place | undefined,
 	read: () => A,
 ): A | undefined => {
 	if (Object.hasOwn(input, name)) {
 		return read()
 	}
 	// A read of the field throws a problem when the field is not data.
-	Json.read(input, name, path)
+	Json.read(input, name, at)
 	return undefined
 }
 
-/** Counts the objects and items of a value, as the other parts count. */
-const spendValue = (
-	value: unknown,
-	path: ReadonlyArray<PropertyKey>,
-	depth: number,
-	budget: Json.Budget,
-): void => {
-	if (typeof value !== "object" || value === null) {
-		return
-	}
-	if (depth > Limits.conditionDepth) {
-		throw Json.problem(
-			path,
-			`The value has more than ${String(Limits.conditionDepth)} levels. The most is ${String(Limits.conditionDepth)}.`,
-		)
-	}
-	// The length of an array counts before its items are read, so a sparse
-	// array with a very large length stops at once.
-	const list = Array.isArray(value)
-	if (list) {
-		Json.spend(budget, 1 + value.length, path)
-	}
-	const names = list
-		? Array.from({ length: value.length }, (_, index) => String(index))
-		: Object.keys(value)
-	if (!list) {
-		Json.spend(budget, 1 + names.length, path)
-	}
-	Arr.forEach(names, (name) =>
-		spendValue(
-			Json.read(value, name, path),
-			[...path, name],
-			depth + 1,
-			budget,
-		),
-	)
+/** A value of the input to count, with its place. */
+interface Part {
+	readonly value: unknown
+	readonly at: Place.Place | undefined
 }
+
+/**
+ * Counts the objects and items of a value, as the other parts count. It is a
+ * walk of the trampoline, so a deep value does not fill the stack.
+ */
+const spendValue = (budget: Json.Budget): ((part: Part) => void) =>
+	Trampoline.adaptive<Part, void>((R, child) => (part, depth) => {
+		const { value, at } = part
+		if (typeof value !== "object" || value === null) {
+			return R.succeed(undefined)
+		}
+		if (depth > Limits.conditionDepth) {
+			throw Json.problemAt(
+				at,
+				`The value has more than ${String(Limits.conditionDepth)} levels. The most is ${String(Limits.conditionDepth)}.`,
+			)
+		}
+		// The length of an array counts before its items are read, so a sparse
+		// array with a very large length stops at once.
+		const list = Array.isArray(value)
+		if (list) {
+			Json.spend(budget, 1 + value.length, at)
+		}
+		const names = list
+			? Array.from({ length: value.length }, (_, index) => String(index))
+			: Object.keys(value)
+		if (!list) {
+			Json.spend(budget, 1 + names.length, at)
+		}
+		return R.map(
+			R.forEach(names, (name) =>
+				child(
+					{ value: Json.read(value, name, at), at: Place.at(at, name) },
+					depth + 1,
+				),
+			),
+			() => undefined,
+		)
+	})
 
 /**
  * A rule in the input, with its place, to decode after the tree. The place
@@ -253,21 +275,18 @@ const decodeMeta = (
 	domain: Domain.Any,
 	budget: Json.Budget,
 ): Effect.Effect<unknown, Json.Problem> => {
-	const { input } = rule
-	const path = Place.pathOf(rule.place)
+	const { input, place } = rule
+	const at = Place.at(place, "meta")
 	return Effect.flatMap(
 		attempt(() =>
 			typeof input !== "object" || input === null
 				? undefined
-				: readOptional(input, "meta", path, () => {
-						const value = Json.read(input, "meta", path)
+				: readOptional(input, "meta", place, () => {
+						const value = Json.read(input, "meta", place)
 						if (domain.meta === undefined) {
-							throw Json.problem(
-								[...path, "meta"],
-								"The domain has no Schema for meta",
-							)
+							throw Json.problemAt(at, "The domain has no Schema for meta")
 						}
-						spendValue(value, [...path, "meta"], 1, budget)
+						spendValue(budget)({ value, at })
 						return { value, schema: domain.meta }
 					}),
 		),
@@ -278,7 +297,7 @@ const decodeMeta = (
 						Schema.decodeUnknownEffect(metaCodec(found.schema))(found.value),
 						(error) =>
 							new Json.Problem({
-								path: [...path, "meta"],
+								path: Place.pathOf(at),
 								message: error.message,
 								issue: error.issue,
 							}),
@@ -292,34 +311,40 @@ const decodeRule = (
 	budget: Json.Budget,
 	domain: Domain.Any,
 ): Rule.Rule => {
-	const { input } = rule
-	const path = Place.pathOf(rule.place)
+	const { input, place } = rule
 	if (typeof input !== "object" || input === null) {
-		throw Json.problem(path, "A rule must be an object")
+		throw Json.problemAt(place, "A rule must be an object")
 	}
-	Json.spend(budget, 1, path)
-	const tag = Json.read(input, "_tag", path)
+	Json.spend(budget, 1, place)
+	const tag = Json.read(input, "_tag", place)
 	if (tag !== "Allow" && tag !== "Deny") {
-		throw Json.problem([...path, "_tag"], 'A rule must be "Allow" or "Deny"')
+		throw Json.problemAt(
+			Place.at(place, "_tag"),
+			'A rule must be "Allow" or "Deny"',
+		)
 	}
-	const when = readOptional(input, "when", path, () =>
-		Json.decodeAt(Json.read(input, "when", path), [...path, "when"], budget),
+	const when = readOptional(input, "when", place, () =>
+		Json.decodeAt(
+			Json.read(input, "when", place),
+			Place.at(place, "when"),
+			budget,
+		),
 	)
-	const fields = readOptional(input, "fields", path, () =>
-		readStrings(input, "fields", path, budget),
+	const fields = readOptional(input, "fields", place, () =>
+		readStrings(input, "fields", place, budget),
 	)
-	const reason = readOptional(input, "reason", path, () =>
-		Json.readString(input, "reason", path),
+	const reason = readOptional(input, "reason", place, () =>
+		Json.readString(input, "reason", place),
 	)
-	const id = readOptional(input, "id", path, () =>
-		Json.readString(input, "id", path),
+	const id = readOptional(input, "id", place, () =>
+		Json.readString(input, "id", place),
 	)
 	// Each rule gets the domain of the Schema, as a rule from the builder of
 	// the domain has it.
 	return Rule.make({
 		_tag: tag,
-		actions: readStrings(input, "actions", path, budget),
-		resources: readStrings(input, "resources", path, budget),
+		actions: readStrings(input, "actions", place, budget),
+		resources: readStrings(input, "resources", place, budget),
 		...(when === undefined ? {} : { when: when as never }),
 		...(fields === undefined ? {} : { fields }),
 		...(reason === undefined ? {} : { reason }),
@@ -329,136 +354,157 @@ const decodeRule = (
 	})
 }
 
+/** A node of the input of a tree, with its place. */
+interface TreePart {
+	readonly input: unknown
+	readonly at: Place.Place | undefined
+}
+
 /**
  * Reads the shape of a tree, and puts each rule in `rules`. The rules are
  * decoded after the walk: a condition has levels of its own, and a decode
- * inside the walk would go down the levels of both. `path` is the path of the
- * node for a problem here, and `place` keeps it for later.
+ * inside the walk would go down the levels of both. The walk is a walk of
+ * the trampoline, so a deep tree does not fill the stack.
  */
 const readTree = (
-	input: unknown,
-	path: ReadonlyArray<PropertyKey>,
-	place: Place.Place | undefined,
-	depth: number,
 	budget: Json.Budget,
 	// The rules of one decode. The list belongs to that decode.
 	rules: Array<RuleInput>,
-): Plan => {
-	if (depth > Limits.policyDepth) {
-		throw Json.problem(
-			path,
-			`A policy tree has more than ${String(Limits.policyDepth)} levels. The most is ${String(Limits.policyDepth)}.`,
-		)
-	}
-	if (typeof input !== "object" || input === null) {
-		throw Json.problem(path, "A node of a policy must be an object")
-	}
-	Json.spend(budget, 1, path)
-	const child = (value: unknown, ...parts: ReadonlyArray<PropertyKey>) =>
-		readTree(
-			value,
-			[...path, ...parts],
-			Place.at(place, ...parts),
-			depth + 1,
-			budget,
-			rules,
-		)
-	const tag = Json.read(input, "_tag", path)
-	switch (tag) {
-		case "Rules": {
-			const algorithm = Json.readString(input, "algorithm", path)
-			if (!PolicyNodes.isAlgorithm(algorithm)) {
-				throw Json.problem(
-					[...path, "algorithm"],
-					`"${algorithm}" is not a combining algorithm`,
+): ((part: TreePart) => Plan) =>
+	Trampoline.adaptive<TreePart, Plan>((R, child) => (part, depth) => {
+		const { input, at } = part
+		if (depth > Limits.policyDepth) {
+			throw Json.problemAt(
+				at,
+				`A policy tree has more than ${String(Limits.policyDepth)} levels. The most is ${String(Limits.policyDepth)}.`,
+			)
+		}
+		if (typeof input !== "object" || input === null) {
+			throw Json.problemAt(at, "A node of a policy must be an object")
+		}
+		Json.spend(budget, 1, at)
+		const below = (value: unknown, ...parts: ReadonlyArray<PropertyKey>) =>
+			child({ input: value, at: Place.at(at, ...parts) }, depth + 1)
+		const tag = Json.read(input, "_tag", at)
+		switch (tag) {
+			case "Rules": {
+				const algorithm = Json.readString(input, "algorithm", at)
+				if (!PolicyNodes.isAlgorithm(algorithm)) {
+					throw Json.problemAt(
+						Place.at(at, "algorithm"),
+						`"${algorithm}" is not a combining algorithm`,
+					)
+				}
+				const found = Arr.map(
+					Json.readList(input, "rules", at, budget),
+					(rule, index) =>
+						rules.push({
+							input: rule,
+							place: Place.at(at, "rules", index),
+						}) - 1,
+				)
+				return R.succeed(
+					sized({
+						_tag: "Rules",
+						place: at,
+						size: 1 + found.length,
+						algorithm,
+						rules: found,
+					}),
 				)
 			}
-			const found = Arr.map(
-				Json.readList(input, "rules", path, budget),
-				(rule, index) =>
-					rules.push({
-						input: rule,
-						place: Place.at(place, "rules", index),
-					}) - 1,
-			)
-			return sized(path, {
-				_tag: "Rules",
-				place,
-				size: 1 + found.length,
-				algorithm,
-				rules: found,
-			})
+			case "All":
+			case "Any":
+			case "FirstOf":
+				return R.map(
+					R.forEach(
+						Json.readList(input, "policies", at, budget),
+						(value, index) => below(value, "policies", index),
+					),
+					(policies) =>
+						sized({
+							_tag: tag,
+							place: at,
+							size: Arr.reduce(policies, 1, (total, plan) => total + plan.size),
+							policies,
+						}),
+				)
+			case "Ceiling": {
+				const cap = Json.read(input, "cap", at)
+				const policy = Json.read(input, "policy", at)
+				return R.flatMap(below(cap, "cap"), (capPlan) =>
+					R.map(below(policy, "policy"), (policyPlan) =>
+						sized({
+							_tag: "Ceiling",
+							place: at,
+							size: 1 + capPlan.size + policyPlan.size,
+							cap: capPlan,
+							policy: policyPlan,
+						}),
+					),
+				)
+			}
+			default:
+				throw Json.problemAt(Place.at(at, "_tag"), "The node has no known tag")
 		}
-		case "All":
-		case "Any":
-		case "FirstOf": {
-			const policies = Arr.map(
-				Json.readList(input, "policies", path, budget),
-				(value, index) => child(value, "policies", index),
-			)
-			return sized(path, {
-				_tag: tag,
-				place,
-				size: Arr.reduce(policies, 1, (total, plan) => total + plan.size),
-				policies,
-			})
-		}
-		case "Ceiling": {
-			const cap = child(Json.read(input, "cap", path), "cap")
-			const policy = child(Json.read(input, "policy", path), "policy")
-			return sized(path, {
-				_tag: "Ceiling",
-				place,
-				size: 1 + cap.size + policy.size,
-				cap,
-				policy,
-			})
-		}
-		default:
-			throw Json.problem([...path, "_tag"], "The node has no known tag")
-	}
-}
+	})
 
 /** Stops a plan past `policyNodes`, with the message of the nodes. */
-const sized = (path: ReadonlyArray<PropertyKey>, plan: Plan): Plan => {
+const sized = (plan: Plan): Plan => {
 	if (plan.size > Limits.policyNodes) {
-		throw Json.problem(
-			path,
+		throw Json.problemAt(
+			plan.place,
 			`A policy tree has ${String(plan.size)} nodes. The most is ${String(Limits.policyNodes)}.`,
 		)
 	}
 	return plan
 }
 
-/** Makes the nodes of a plan, with the decoded rules. */
-const build = (plan: Plan, rules: ReadonlyArray<Rule.Rule>): Node => {
-	try {
+/**
+ * Makes the nodes of a plan, with the decoded rules. It is a walk of the
+ * trampoline, so a deep plan does not fill the stack.
+ */
+const build = (rules: ReadonlyArray<Rule.Rule>): ((plan: Plan) => Node) =>
+	Trampoline.adaptive<Plan, Node>((R, child) => (plan, depth) => {
+		// A node past a limit is a problem at its place.
+		const make = (node: () => Node): Node => {
+			try {
+				return node()
+			} catch (error) {
+				if (error instanceof Limits.LimitExceeded) {
+					throw Json.problemAt(plan.place, error.message)
+				}
+				throw error
+			}
+		}
 		switch (plan._tag) {
 			case "Rules":
-				return new PolicyNodes.Rules({
-					algorithm: plan.algorithm,
-					rules: Arr.map(plan.rules, (index) => rules[index]!),
-				})
+				return R.succeed(
+					make(
+						() =>
+							new PolicyNodes.Rules({
+								algorithm: plan.algorithm,
+								rules: Arr.map(plan.rules, (index) => rules[index]!),
+							}),
+					),
+				)
 			case "All":
 			case "Any":
-			case "FirstOf":
-				return new PolicyNodes[plan._tag](
-					Arr.map(plan.policies, (child) => build(child, rules)),
+			case "FirstOf": {
+				const tag = plan._tag
+				return R.map(
+					R.forEach(plan.policies, (inner) => child(inner, depth + 1)),
+					(policies) => make(() => new PolicyNodes[tag](policies)),
 				)
+			}
 			case "Ceiling":
-				return new PolicyNodes.Ceiling({
-					cap: build(plan.cap, rules),
-					policy: build(plan.policy, rules),
-				})
+				return R.flatMap(child(plan.cap, depth + 1), (cap) =>
+					R.map(child(plan.policy, depth + 1), (policy) =>
+						make(() => new PolicyNodes.Ceiling({ cap, policy })),
+					),
+				)
 		}
-	} catch (error) {
-		// A node past a limit is a problem at its place.
-		if (error instanceof Limits.LimitExceeded) {
-			throw Json.problem(Place.pathOf(plan.place), error.message)
-		}
-		throw error
-	}
-}
+	})
 
 /** Runs a step that may throw a problem, and puts the problem in the error. */
 const attempt = <A>(step: () => A): Effect.Effect<A, Json.Problem> =>
@@ -486,7 +532,7 @@ export const decode = (
 		// The rules of this decode. The list belongs to this decode.
 		const inputs: Array<RuleInput> = []
 		const plan = yield* attempt(() =>
-			readTree(input, [], undefined, 1, budget, inputs),
+			readTree(budget, inputs)({ input, at: undefined }),
 		)
 		const metas = yield* Effect.forEach(inputs, (rule) =>
 			decodeMeta(rule, domain, budget),
@@ -496,5 +542,5 @@ export const decode = (
 				decodeRule(rule, metas[index], budget, domain),
 			),
 		)
-		return yield* attempt(() => build(plan, rules))
+		return yield* attempt(() => build(rules)(plan))
 	})

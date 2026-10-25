@@ -141,6 +141,33 @@ export const runWith = <A>(
 }
 
 /**
+ * Makes a walk of an input with an unknown depth, as the input of a decoder.
+ * It runs with `direct` while the input is low. A part more than
+ * `directDepth` levels down runs with `loop`, and the walk stays in the loop
+ * below it, so it goes into the loop one time on each path. `walk` gets the
+ * runner, and the call for a child at the next level: `child(item, depth)`.
+ */
+export const adaptive = <I, A>(
+	walk: (
+		R: Runner,
+		child: (item: I, depth: number) => Step<A>,
+	) => (item: I, depth: number) => Step<A>,
+): ((item: I) => A) => {
+	const inLoop: (item: I, depth: number) => Step<A> = walk(
+		loop,
+		(item, depth) => loop.suspend(() => inLoop(item, depth)),
+	)
+	const onStack: (item: I, depth: number) => Step<A> = walk(
+		direct,
+		(item, depth) =>
+			depth > directDepth
+				? step(runWith(loop, () => inLoop(item, depth)))
+				: onStack(item, depth),
+	)
+	return (item) => value(onStack(item, 1))
+}
+
+/**
  * Gives the Effect of a step of `loop`, so a walk can go on in an Effect
  * that runs a predicate.
  */

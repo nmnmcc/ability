@@ -1,8 +1,8 @@
 /**
- * The JSON form of a condition. The decoder is a plain walk with two limits:
- * it goes at most `conditionDepth` levels down, and it reads at most
- * `jsonNodes` objects and array items, with a shared object counted for each
- * place. So no input can fill the stack or take a very long time. It makes
+ * The JSON form of a condition. The decoder is a walk of the trampoline, so a
+ * deep input does not fill the stack. It reads at most `jsonNodes` objects
+ * and array items, with a shared object counted for each place, so no input
+ * can take a very long time. It makes
  * each node with its constructor, and it reads only the own data fields of
  * the input, as a condition reads a value.
  */
@@ -12,7 +12,9 @@ import * as Result from "effect/Result"
 import type * as SchemaIssue from "effect/SchemaIssue"
 import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
+import * as Place from "./place.ts"
 import { readPart } from "./read.ts"
+import * as Trampoline from "./trampoline.ts"
 
 type Node = Nodes.Node
 
@@ -35,65 +37,76 @@ export interface Budget {
 export const problem = (path: ReadonlyArray<PropertyKey>, message: string) =>
 	new Problem({ path, message })
 
+/**
+ * The problem at a place of the input. A decoder keeps the place of each
+ * part, which shares the path of its parent, and makes the full path only for
+ * a problem: see `Place`.
+ */
+export const problemAt = (at: Place.Place | undefined, message: string) =>
+	problem(Place.pathOf(at), message)
+
 /** Counts `count` more objects or items, and stops past the limit. */
 export const spend = (
 	budget: Budget,
 	count: number,
-	path: ReadonlyArray<PropertyKey>,
+	at: Place.Place | undefined,
 ): void => {
 	budget.used += count
 	if (budget.used > Limits.jsonNodes) {
-		throw problem(
-			path,
+		throw problemAt(
+			at,
 			`The input has more than ${String(Limits.jsonNodes)} objects and items. The most is ${String(Limits.jsonNodes)}.`,
 		)
 	}
 }
 
-/** Reads a field of the input. A field that is not plain data is a problem. */
+/**
+ * Reads a field of the input at the place `at`. A field that is not plain
+ * data is a problem.
+ */
 export const read = (
 	input: unknown,
 	name: string,
-	path: ReadonlyArray<PropertyKey>,
+	at: Place.Place | undefined,
 ): unknown => {
 	try {
 		return readPart(input, name)
 	} catch {
-		throw problem([...path, name], `The field "${name}" is not plain data`)
+		throw problemAt(Place.at(at, name), `The field "${name}" is not plain data`)
 	}
 }
 
 export const readString = (
 	input: unknown,
 	name: string,
-	path: ReadonlyArray<PropertyKey>,
+	at: Place.Place | undefined,
 ): string => {
-	const value = read(input, name, path)
+	const value = read(input, name, at)
 	if (typeof value !== "string") {
-		throw problem([...path, name], `The field "${name}" must be a string`)
+		throw problemAt(Place.at(at, name), `The field "${name}" must be a string`)
 	}
 	return value
 }
 
-/** Reads the items of an array. */
+/** Reads the items of an array. The place of an item is `at`, `name`, index. */
 export const readList = (
 	input: unknown,
 	name: string,
-	path: ReadonlyArray<PropertyKey>,
+	at: Place.Place | undefined,
 	budget: Budget,
 ): ReadonlyArray<unknown> => {
-	const value = read(input, name, path)
-	const at = [...path, name]
+	const value = read(input, name, at)
+	const place = Place.at(at, name)
 	if (!Array.isArray(value)) {
-		throw problem(at, `The field "${name}" must be an array`)
+		throw problemAt(place, `The field "${name}" must be an array`)
 	}
 	const list: ReadonlyArray<unknown> = value
-	spend(budget, list.length, at)
+	spend(budget, list.length, place)
 	// `Array.makeBy` of Effect gives at least one item, so it can not make an
 	// empty list. An array-like object with a length makes one with no read
 	// of the items before the read rule.
 	return Array.from({ length: list.length }, (_, index) =>
-		read(list, String(index), at),
+		read(list, String(index), place),
 	)
 }
 
@@ -102,9 +115,9 @@ const isJsonScalar = (value: unknown): value is Nodes.Scalar =>
 
 const decodeOperand = (
 	input: unknown,
-	path: ReadonlyArray<PropertyKey>,
+	at: Place.Place | undefined,
 ): Nodes.Operand => {
-	const tag = read(input, "_tag", path)
+	const tag = read(input, "_tag", at)
 	if (tag === "Literal") {
 		// A missing value is not `null`: a test with `null` has its own
 		// meaning, and a lost value must not become one.
@@ -113,22 +126,22 @@ const decodeOperand = (
 				? Object.getOwnPropertyDescriptor(input, "value")
 				: undefined
 		if (own === undefined || ("value" in own && own.value === undefined)) {
-			throw problem([...path, "value"], "A fixed value is missing")
+			throw problemAt(Place.at(at, "value"), "A fixed value is missing")
 		}
-		const value = read(input, "value", path)
+		const value = read(input, "value", at)
 		if (!isJsonScalar(value)) {
-			throw problem(
-				[...path, "value"],
+			throw problemAt(
+				Place.at(at, "value"),
 				"A fixed value must be a string, a finite number, a boolean or null",
 			)
 		}
 		return Nodes.literal(value)
 	}
 	if (tag === "Principal") {
-		return Nodes.principalRef(readString(input, "path", path))
+		return Nodes.principalRef(readString(input, "path", at))
 	}
-	throw problem(
-		[...path, "_tag"],
+	throw problemAt(
+		Place.at(at, "_tag"),
 		'An operand must have the tag "Literal" or "Principal"',
 	)
 }
@@ -136,97 +149,129 @@ const decodeOperand = (
 const decodeOperands = (
 	input: unknown,
 	name: string,
-	path: ReadonlyArray<PropertyKey>,
+	at: Place.Place | undefined,
 	budget: Budget,
 ): ReadonlyArray<Nodes.Operand> =>
-	Arr.map(readList(input, name, path, budget), (operand, index) =>
-		decodeOperand(operand, [...path, name, index]),
+	Arr.map(readList(input, name, at, budget), (operand, index) =>
+		decodeOperand(operand, Place.at(at, name, index)),
 	)
 
-const decodeNode = (
-	input: unknown,
-	path: ReadonlyArray<PropertyKey>,
-	depth: number,
-	budget: Budget,
-): Node => {
-	if (depth > Limits.conditionDepth) {
-		throw problem(
-			path,
-			`A condition has more than ${String(Limits.conditionDepth)} levels. The most is ${String(Limits.conditionDepth)}.`,
-		)
-	}
-	if (typeof input !== "object" || input === null) {
-		throw problem(path, "A condition node must be an object")
-	}
-	spend(budget, 1, path)
-	const children = (name: string) =>
-		Arr.map(readList(input, name, path, budget), (child, index) =>
-			decodeNode(child, [...path, name, index], depth + 1, budget),
-		)
-	try {
-		return makeNode(input, path, depth, budget, children)
-	} catch (error) {
-		// A node past a limit, such as a field path with too many parts, is a
-		// problem at its place.
-		if (error instanceof Limits.LimitExceeded) {
-			throw problem(path, error.message)
-		}
-		throw error
-	}
+/** A part of the input to decode, with its place. */
+interface Part {
+	readonly input: unknown
+	readonly at: Place.Place | undefined
 }
 
-const makeNode = (
-	input: object,
-	path: ReadonlyArray<PropertyKey>,
-	depth: number,
-	budget: Budget,
-	children: (name: string) => ReadonlyArray<Node>,
-): Node => {
-	const tag = read(input, "_tag", path)
-	switch (tag) {
-		case "True":
-			return Nodes.always
-		case "False":
-			return Nodes.never
-		case "Compare": {
-			const op = readString(input, "op", path)
-			if (!Nodes.isCompareOperator(op)) {
-				throw problem([...path, "op"], `"${op}" is not a compare operator`)
-			}
-			return new Nodes.Compare({
-				op,
-				field: readString(input, "field", path),
-				value: decodeOperand(read(input, "value", path), [...path, "value"]),
-			})
-		}
-		case "In":
-			return new Nodes.In({
-				field: readString(input, "field", path),
-				values: decodeOperands(input, "values", path, budget),
-			})
-		case "Exists":
-			return new Nodes.Exists({ field: readString(input, "field", path) })
-		case "Under":
-			return new Nodes.Under({
-				prefix: decodeOperands(input, "prefix", path, budget),
-			})
-		case "And":
-			return new Nodes.And(children("conditions"))
-		case "Or":
-			return new Nodes.Or(children("conditions"))
-		case "Not":
-			return new Nodes.Not(
-				decodeNode(
-					read(input, "condition", path),
-					[...path, "condition"],
-					depth + 1,
-					budget,
-				),
+/**
+ * The decoder of a condition, with the budget of one decode. It is a walk of
+ * the trampoline for an input of unknown depth, so a deep input does not fill
+ * the stack.
+ */
+const decoder = (budget: Budget): ((part: Part) => Node) =>
+	Trampoline.adaptive<Part, Node>((R, child) => (part, depth) => {
+		const { input, at } = part
+		if (depth > Limits.conditionDepth) {
+			throw problemAt(
+				at,
+				`A condition has more than ${String(Limits.conditionDepth)} levels. The most is ${String(Limits.conditionDepth)}.`,
 			)
-		default:
-			throw problem([...path, "_tag"], "The node has no known tag")
-	}
-}
+		}
+		if (typeof input !== "object" || input === null) {
+			throw problemAt(at, "A condition node must be an object")
+		}
+		spend(budget, 1, at)
+		// A node past a limit, such as a field path with too many parts, is a
+		// problem at its place.
+		const make = (build: () => Node): Node => {
+			try {
+				return build()
+			} catch (error) {
+				if (error instanceof Limits.LimitExceeded) {
+					throw problemAt(at, error.message)
+				}
+				throw error
+			}
+		}
+		const children = (name: string) =>
+			R.forEach(readList(input, name, at, budget), (item, index) =>
+				child({ input: item, at: Place.at(at, name, index) }, depth + 1),
+			)
+		const tag = read(input, "_tag", at)
+		switch (tag) {
+			case "True":
+				return R.succeed(Nodes.always)
+			case "False":
+				return R.succeed(Nodes.never)
+			case "Compare": {
+				const op = readString(input, "op", at)
+				if (!Nodes.isCompareOperator(op)) {
+					throw problemAt(
+						Place.at(at, "op"),
+						`"${op}" is not a compare operator`,
+					)
+				}
+				return R.succeed(
+					make(
+						() =>
+							new Nodes.Compare({
+								op,
+								field: readString(input, "field", at),
+								value: decodeOperand(
+									read(input, "value", at),
+									Place.at(at, "value"),
+								),
+							}),
+					),
+				)
+			}
+			case "In":
+				return R.succeed(
+					make(
+						() =>
+							new Nodes.In({
+								field: readString(input, "field", at),
+								values: decodeOperands(input, "values", at, budget),
+							}),
+					),
+				)
+			case "Exists":
+				return R.succeed(
+					make(
+						() => new Nodes.Exists({ field: readString(input, "field", at) }),
+					),
+				)
+			case "Under":
+				return R.succeed(
+					make(
+						() =>
+							new Nodes.Under({
+								prefix: decodeOperands(input, "prefix", at, budget),
+							}),
+					),
+				)
+			case "And":
+				return R.map(children("conditions"), (conditions) =>
+					make(() => new Nodes.And(conditions)),
+				)
+			case "Or":
+				return R.map(children("conditions"), (conditions) =>
+					make(() => new Nodes.Or(conditions)),
+				)
+			case "Not":
+				return R.map(
+					child(
+						{
+							input: read(input, "condition", at),
+							at: Place.at(at, "condition"),
+						},
+						depth + 1,
+					),
+					(condition) => make(() => new Nodes.Not(condition)),
+				)
+			default:
+				throw problemAt(Place.at(at, "_tag"), "The node has no known tag")
+		}
+	})
 
 /**
  * Decodes the JSON form of a condition at a path, with the budget of a larger
@@ -234,14 +279,14 @@ const makeNode = (
  */
 export const decodeAt = (
 	input: unknown,
-	path: ReadonlyArray<PropertyKey>,
+	at: Place.Place | undefined,
 	budget: Budget,
-): Node => decodeNode(input, path, 1, budget)
+): Node => decoder(budget)({ input, at })
 
 /** Decodes the JSON form of a condition. */
 export const decode = (input: unknown): Result.Result<Node, Problem> => {
 	try {
-		return Result.succeed(decodeNode(input, [], 1, { used: 0 }))
+		return Result.succeed(decoder({ used: 0 })({ input, at: undefined }))
 	} catch (error) {
 		if (error instanceof Problem) {
 			return Result.fail(error)
