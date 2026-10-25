@@ -583,10 +583,9 @@ const list = HttpApiEndpoint.get("list", "/users/:user/posts", {
 const PostsLive = HttpApiBuilder.group(Api, "posts", (handlers) =>
 	Effect.map(Auth, (auth) =>
 		handlers.handle("list", () =>
-			postsOfUser.filter(auth).pipe(
-				Effect.flatMap((where) => Condition.fold(where, toSql)),
-				Effect.flatMap(Posts.query),
-			),
+			postsOfUser
+				.filter(auth)
+				.pipe(Effect.flatMap(toSql), Effect.flatMap(Posts.query)),
 		),
 	),
 )
