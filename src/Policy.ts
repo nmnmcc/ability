@@ -533,14 +533,19 @@ export const builder = <D extends Domain.Any>(domain: D): Builder<D> =>
  * against a domain: a policy does that when the rule goes into it. Use
  * {@link builder} for rules with types, or {@link schema} for rules from JSON.
  *
+ * The condition may not have a predicate. A policy checks the fields of a
+ * condition against the resources of its rule, but it can not check what
+ * the code of a predicate reads. A rule from the builder keeps that in its
+ * types; this one could give a predicate of one kind to another kind.
+ *
  * @stability stable
  * @category constructors
  * @since 2.0.0
  */
-export const rule = <I = unknown, X = never>(
-	data: RuleShape<I, X>,
+export const rule: <I = unknown>(
+	data: RuleShape<I, never>,
 	// The types come from the data only, not from where the rule goes.
-): Rule<any, NoInfer<I>, NoInfer<X>> => RuleData.make(data as never) as never
+) => Rule<any, NoInfer<I>> = RuleData.makePlain as never
 
 /**
  * The options of a list of rules.

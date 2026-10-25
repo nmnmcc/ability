@@ -1990,6 +1990,16 @@ describe("Policy", () => {
 		)
 	})
 
+	it("does not take a predicate in a rule that Policy.rule makes", () => {
+		const rule = Policy.builder(App).allow("read", Bot, {
+			when: ($) => $.predicate("named", (bot) => bot.name !== ""),
+		})
+		assert.throws(
+			() => Policy.rule({ ...rule, resources: ["Trigger"] } as never),
+			/no condition with a predicate/,
+		)
+	})
+
 	it("keeps at most 100 problems of a deep and wide condition", () => {
 		const Note = Resource.make("Note", {
 			actions: ["read"],

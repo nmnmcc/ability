@@ -11,6 +11,7 @@ import * as Condition from "../Condition.ts"
 import type * as Domain from "../Domain.ts"
 import type * as Resource from "../Resource.ts"
 import * as Catalog from "./catalog.ts"
+import * as Nodes from "./nodes.ts"
 import * as ResourceData from "./resource.ts"
 import * as Patterns from "./patterns.ts"
 
@@ -54,6 +55,20 @@ export const make = (data: Shape): Rule =>
 		...(data.meta === undefined ? {} : { meta: data.meta }),
 		...(data.domain === undefined ? {} : { domain: data.domain }),
 	})
+
+/**
+ * Makes a rule from its data, as `Policy.rule` does. A condition with a
+ * predicate is a defect: the types of the predicate tie it to the kinds of
+ * the rule of a builder, and the binding can not check it.
+ */
+export const makePlain = (data: Shape): Rule => {
+	if (data.when !== undefined && Nodes.isNode(data.when) && data.when.opaque) {
+		throw new Error(
+			"Policy.rule takes no condition with a predicate. Make the rule with Policy.builder.",
+		)
+	}
+	return make(data)
+}
 
 /** Tests if a value is a rule. */
 export const isRule = (u: unknown): u is Rule => u instanceof Rule

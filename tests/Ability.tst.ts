@@ -177,6 +177,21 @@ describe("Rule", () => {
 		})
 	})
 
+	it("takes no predicate in Policy.rule", () => {
+		const rule = Policy.builder(App).allow("read", Bot, {
+			when: ($) => $.predicate("named", (bot) => bot.name !== ""),
+		})
+		expect(Policy.rule).type.not.toBeCallableWith({
+			...rule,
+			resources: ["Trigger"],
+		})
+		expect(Policy.rule).type.toBeCallableWith({
+			_tag: "Allow",
+			actions: ["read"],
+			resources: ["Trigger"],
+		})
+	})
+
 	it("keeps the predicates of a policy with a mark of the type unknown", () => {
 		const widened: Policy.Policy<App, unknown> = Policy.define(App)(
 			function* (_) {

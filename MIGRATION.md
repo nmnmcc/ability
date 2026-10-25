@@ -21,6 +21,10 @@ The types and the builder of rules are in `Policy` now.
 | `Policy.rules(domain, xs)` | `Policy.define(domain)(…)` |
 | `Policy.empty(domain)`     | `Policy.define(domain)(…)` |
 
+`Policy.rule` takes no condition with a predicate: a predicate reads the values
+of the kinds of its rule, and only the builder keeps that in the types. Make a
+rule with a predicate with `Policy.builder`.
+
 A principal is any Schema of objects. A list of rules goes into a policy through
 `Policy.define`:
 
