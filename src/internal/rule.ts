@@ -258,11 +258,11 @@ export const fitsOf = (
 		if (known !== undefined) {
 			return known
 		}
-		const found = Patterns.fitsCatalog(
-			Patterns.parseBound(pattern),
-			catalog,
-			parts,
-		)
+		// A name with no `*` is one path, so a lookup finds it, as the binding
+		// does. A search of the catalog would read every place for each name.
+		const found = pattern.includes("*")
+			? Patterns.fitsCatalog(Patterns.parseBound(pattern), catalog, parts)
+			: Catalog.lookup(catalog, pattern, parts) !== undefined
 		memo.set(pattern, found)
 		return found
 	}

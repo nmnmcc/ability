@@ -4666,6 +4666,43 @@ describe("Policy", () => {
 		)
 	})
 
+	it("finds the fields that many rules name in a short time, for a request with no field", () => {
+		const names = Arr.makeBy(5000, (index) => `f${String(index)}`)
+		const Wide = Resource.make("Wide", {
+			actions: ["read"],
+			fields: Object.fromEntries(
+				Arr.map(names, (name) => [name, Schema.String]),
+			) as Record<string, typeof Schema.String>,
+		})
+		const Wides = Domain.make({
+			principal: Caller,
+			resources: [Wide],
+			limits: { searchSteps: 1 },
+		})
+		const policy = Schema.decodeUnknownSync(Policy.schema(Wides))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: Arr.map(names, (name) => ({
+				_tag: "Allow",
+				actions: ["read"],
+				resources: ["Wide"],
+				fields: [name],
+				when: { _tag: "False" },
+			})),
+		})
+		const start = Date.now()
+		const decision = Policy.decideSync(policy, {
+			principal: alice,
+			action: "read",
+			resource: Wide.make(
+				Object.fromEntries(Arr.map(names, (name) => [name, ""])) as never,
+			),
+		})
+		assert.strictEqual(decision._tag, "NotApplicable")
+		// A search of the catalog for each name took about two seconds.
+		assert.isBelow(Date.now() - start, 500)
+	})
+
 	it("tests a field pattern that a rule names many times one time on a long field", () => {
 		interface Node {
 			readonly a: Node | null
