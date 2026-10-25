@@ -193,15 +193,19 @@ export const makeLayer = (
 	// It gives `undefined` when the principal has no key. Such a principal does
 	// not use the cache.
 	const custom = options.cache === false ? undefined : options.cache?.key
+	// With no cache, no key is made, so the Schema of the principal need not
+	// have a JSON form.
 	const keyOf: (principal: object) => PrincipalKey | undefined =
-		custom === undefined
-			? jsonKey(domain.principal)
-			: (principal) => {
-					const text = custom(principal)
-					return text === undefined
-						? undefined
-						: new PrincipalKey(principal, text)
-				}
+		options.cache === false
+			? () => undefined
+			: custom === undefined
+				? jsonKey(domain.principal)
+				: (principal) => {
+						const text = custom(principal)
+						return text === undefined
+							? undefined
+							: new PrincipalKey(principal, text)
+					}
 	return Layer.effect(
 		service,
 		Effect.gen(function* () {

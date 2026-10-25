@@ -594,6 +594,35 @@ describe("Authorizer", () => {
 			}),
 	)
 
+	it.effect("needs no JSON form of the principal with no cache", () =>
+		Effect.gen(function* () {
+			const role = Symbol.for("@nmnmcc/ability/tests/role")
+			const Symbolic = Schema.Struct({ [role]: Schema.String })
+			const Symbolics = Domain.make({ principal: Symbolic, resources: [Bot] })
+			class CurrentSymbolic extends Context.Service<
+				CurrentSymbolic,
+				typeof Symbolic.Type
+			>()("@nmnmcc/ability/tests/Authorizer.test/CurrentSymbolic") {}
+			class SymbolicAuth extends Authorizer.Service<SymbolicAuth>()(
+				"test/SymbolicAuth",
+				{ domain: Symbolics, principal: CurrentSymbolic },
+			) {}
+			const layer = Authorizer.layer(SymbolicAuth, {
+				policy: () =>
+					Effect.succeed(
+						Policy.define(Symbolics)(function* (_) {
+							yield* _.allow("read", Bot)
+						}),
+					),
+				cache: false,
+			})
+			yield* SymbolicAuth.check({ action: "read", resource: aliceBot }).pipe(
+				Effect.provideService(CurrentSymbolic, { [role]: "admin" }),
+				Effect.provide(layer),
+			)
+		}),
+	)
+
 	it.effect("loads the policy again after invalidate", () =>
 		Effect.gen(function* () {
 			const { loads } = yield* run(
