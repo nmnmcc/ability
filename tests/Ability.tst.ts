@@ -133,6 +133,23 @@ describe("Rule", () => {
 		})
 	})
 
+	it("takes a record as one field of a request", () => {
+		const Tagged = Resource.make("Tagged", {
+			actions: ["read"],
+			fields: { tags: Schema.Record(Schema.String, Schema.String) },
+		})
+		const Tags = Domain.make({ principal: Caller, resources: [Tagged] })
+		const policy = Policy.define(Tags)(function* (_) {
+			yield* _.allow("read", Tagged, { fields: ["tags"] })
+		})
+		expect(Policy.decideSync).type.toBeCallableWith(policy, {
+			principal: alice,
+			action: "read",
+			resource: Tagged.make({ tags: {} }),
+			field: "tags",
+		})
+	})
+
 	it("keeps the predicates of a policy with a mark of the type unknown", () => {
 		const widened: Policy.Policy<App, unknown> = Policy.define(App)(
 			function* (_) {

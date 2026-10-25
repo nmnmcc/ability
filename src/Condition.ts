@@ -375,7 +375,15 @@ type FieldPathInternal<
 							? K
 							: never
 						: NonNullable<T[K]> extends object
-							? | (Parents extends true ? K : never)
+							? // A record is one field to a rule or a request, as
+								// `permittedFields` lists it.
+								| (Parents extends true
+										? K
+										: Arrays extends true
+											? string extends keyof NonNullable<T[K]>
+												? K
+												: never
+											: never)
 								| `${K}.${FieldPathInternal<NonNullable<T[K]>, PreviousDepth[Depth], Arrays, Parents>}`
 							: never
 		}[keyof T & string]
