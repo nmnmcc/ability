@@ -190,24 +190,29 @@ const patternIssues = (
 	Result.match(Patterns.parse(pattern), {
 		onFailure: (issue) => [{ path: at, issue }],
 		onSuccess: (parsed) => {
-			// A rule with no known resource has an issue for that already.
+			// A rule with no known resource has an issue for that already. The
+			// pattern is checked on every kind, not only up to the first that it
+			// fits: a decision on a kind does this check, so the limit of the
+			// work below is a limit of the work of a decision too.
 			const fits =
 				known.length === 0 ||
-				Arr.some(known, (descriptor) => {
+				Arr.reduce(known, false, (before, descriptor) => {
 					const key = `${descriptor.kind}\u0000${pattern}`
-					return Option.getOrElse(MutableHashMap.get(memo.fits, key), () => {
-						// Each check of a pattern reads the fields of a catalog. The
-						// work of one binding has a limit, so very many patterns stop
-						// with one issue, and the policy does not load.
-						memo.work.steps +=
-							descriptor.catalog.fields.length * Math.max(parsed.length, 1)
-						if (memo.work.steps > Limits.searchSteps) {
-							return true
-						}
-						const found = Patterns.fitsCatalog(parsed, descriptor.catalog)
-						MutableHashMap.set(memo.fits, key, found)
-						return found
-					})
+					return (
+						Option.getOrElse(MutableHashMap.get(memo.fits, key), () => {
+							// Each check of a pattern reads the fields of a catalog. The
+							// work of one binding has a limit, so very many patterns stop
+							// with one issue, and the policy does not load.
+							memo.work.steps +=
+								descriptor.catalog.fields.length * Math.max(parsed.length, 1)
+							if (memo.work.steps > Limits.searchSteps) {
+								return true
+							}
+							const found = Patterns.fitsCatalog(parsed, descriptor.catalog)
+							MutableHashMap.set(memo.fits, key, found)
+							return found
+						}) || before
+					)
 				})
 			if (memo.work.steps > Limits.searchSteps && !memo.work.noted) {
 				memo.work.noted = true

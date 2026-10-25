@@ -615,19 +615,19 @@ stack or take a very long time. An input past a limit is an error, as in "A
 condition has 100001 nodes. The most is 100000.". In an `Authorizer`, such an
 error is never a "yes". The `Limits` module gives each value.
 
-| Limit            | Value   | What it limits                                          |
-| ---------------- | ------- | ------------------------------------------------------- |
-| `fieldPathParts` | 5       | The parts of a field path, as in `settings.model`.      |
-| `patternParts`   | 16      | The parts of a field pattern.                           |
-| `conditionNodes` | 100000  | The nodes of a condition, a shared part for each place. |
-| `conditionDepth` | 500     | The levels of a condition.                              |
-| `residualNodes`  | 10000   | The nodes of a residual condition.                      |
-| `policyDepth`    | 256     | The levels of a policy tree.                            |
-| `policyNodes`    | 100000  | The nodes of a policy tree, with its rules.             |
-| `jsonNodes`      | 1000000 | The objects and items that a decoder reads.             |
-| `catalogFields`  | 10000   | The fields of the Schema of a resource.                 |
-| `searchSteps`    | 1000000 | The steps of one search, as in `Policy.coverage`.       |
-| `searchFields`   | 256     | The fields that one search may test.                    |
+| Limit            | Value   | What it limits                                                                                         |
+| ---------------- | ------- | ------------------------------------------------------------------------------------------------------ |
+| `fieldPathParts` | 5       | The parts of a field path, as in `settings.model`.                                                     |
+| `patternParts`   | 16      | The parts of a field pattern.                                                                          |
+| `conditionNodes` | 100000  | The nodes of a condition, a shared part for each place.                                                |
+| `conditionDepth` | 500     | The levels of a condition.                                                                             |
+| `residualNodes`  | 10000   | The nodes of a residual condition.                                                                     |
+| `policyDepth`    | 256     | The levels of a policy tree.                                                                           |
+| `policyNodes`    | 100000  | The nodes of a policy tree, with its rules.                                                            |
+| `jsonNodes`      | 1000000 | The objects and items that a decoder reads.                                                            |
+| `catalogFields`  | 10000   | The fields of the Schema of a resource.                                                                |
+| `searchSteps`    | 1000000 | The steps of one search, as in `Policy.coverage`, and of the checks of the field patterns of a policy. |
+| `searchFields`   | 256     | The fields that one search may test.                                                                   |
 
 ## Examples
 

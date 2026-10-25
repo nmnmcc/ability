@@ -2062,6 +2062,80 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 3000)
 	})
 
+	describe("the work of field patterns on a whole value", () => {
+		const fieldsNamed = (prefix: string, length: number) =>
+			Object.fromEntries(
+				Array.from({ length }, (_, index) => [
+					`${prefix}${String(index)}`,
+					Schema.String,
+				]),
+			)
+		const Narrow = Resource.make("Narrow", {
+			actions: ["read"],
+			fields: fieldsNamed("match", 600),
+		})
+		const Wide = Resource.make("Wide", {
+			actions: ["read"],
+			fields: fieldsNamed("other", 2000),
+		})
+		const Kinds = Domain.make({
+			principal: Caller,
+			resources: [Narrow, Wide],
+		})
+		const load = (fields: ReadonlyArray<string>) =>
+			Schema.decodeResult(Policy.schema(Kinds))({
+				_tag: "Rules",
+				algorithm: "denyOverrides",
+				rules: [
+					{
+						_tag: "Allow",
+						actions: ["read"],
+						resources: ["Narrow", "Wide"],
+						fields,
+					},
+				],
+			})
+
+		it("checks one pattern one time in a decision", () => {
+			const result = load(Array.from({ length: 20_000 }, () => "match*"))
+			assert.isTrue(Result.isSuccess(result))
+			if (Result.isFailure(result)) {
+				return
+			}
+			const resource = Wide.make(
+				Object.fromEntries(
+					Array.from({ length: 2000 }, (_, index) => [
+						`other${String(index)}`,
+						"a",
+					]),
+				) as never,
+			)
+			const start = Date.now()
+			assert.strictEqual(
+				Policy.decideSync(result.success, {
+					principal: alice,
+					action: "read",
+					resource,
+				})._tag,
+				"NotApplicable",
+			)
+			assert.isBelow(Date.now() - start, 1000)
+		})
+
+		it("counts the work of a pattern on every kind of the rule", () => {
+			// Each pattern fits the first kind. The check on the second kind,
+			// which a decision does too, takes the work past the limit.
+			const result = load(
+				Array.from({ length: 600 }, (_, index) => `match${String(index)}*`),
+			)
+			assert.isTrue(Result.isFailure(result))
+			assert.include(
+				String(Result.isFailure(result) ? result.failure : ""),
+				"steps to check",
+			)
+		})
+	})
+
 	it("binds a very long wrong name in a short time", () => {
 		const Wide = Resource.make("Wide", {
 			actions: ["read"],

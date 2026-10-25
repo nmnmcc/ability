@@ -7,6 +7,8 @@
  */
 import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
+import * as MutableHashMap from "effect/MutableHashMap"
+import * as Option from "effect/Option"
 import * as Condition from "../Condition.ts"
 import type * as Domain from "../Domain.ts"
 import type * as Resource from "../Resource.ts"
@@ -133,6 +135,25 @@ export const matchesInside = (pattern: string, field: string): boolean =>
 	Patterns.matchesBelow(Patterns.parseBound(pattern), field.split("."))
 
 /**
+ * Makes the test "a field pattern matches some field of the catalog" for one
+ * walk, such as one decision. A policy may name one pattern very many times,
+ * so the test keeps each answer by the text of the pattern, and the memo goes
+ * away when the walk ends. The binding puts a limit on the work of the
+ * patterns of a policy on each kind, so one walk does at most that work.
+ */
+export const fitsOf = (
+	catalog: Catalog.Catalog,
+): ((pattern: string) => boolean) => {
+	const memo = MutableHashMap.empty<string, boolean>()
+	return (pattern) =>
+		Option.getOrElse(MutableHashMap.get(memo, pattern), () => {
+			const found = Patterns.fitsCatalog(Patterns.parseBound(pattern), catalog)
+			MutableHashMap.set(memo, pattern, found)
+			return found
+		})
+}
+
+/**
  * Tests the parts of a rule that do not need the resource value: the action,
  * the kind and the field.
  *
@@ -152,6 +173,8 @@ export const matchesTarget = (
 		readonly kind: string
 		readonly field?: string | undefined
 		readonly descriptor?: Resource.Descriptor | undefined
+		/** The test of {@link fitsOf} for the catalog of the descriptor. */
+		readonly fits?: ((pattern: string) => boolean) | undefined
 	},
 ): boolean => {
 	if (!rule.actions.includes("*") && !rule.actions.includes(target.action)) {
@@ -173,12 +196,7 @@ export const matchesTarget = (
 		return (
 			rule._tag === "Allow" &&
 			(descriptor === undefined ||
-				Arr.some(rule.fields, (pattern) =>
-					Patterns.fitsCatalog(
-						Patterns.parseBound(pattern),
-						descriptor.catalog,
-					),
-				))
+				Arr.some(rule.fields, target.fits ?? fitsOf(descriptor.catalog)))
 		)
 	}
 	const field = target.field

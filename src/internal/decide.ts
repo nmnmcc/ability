@@ -37,6 +37,8 @@ interface DecideContext {
 	readonly input: Condition.Input
 	/** The resource of the kind, for the fields that a rule may grant. */
 	readonly descriptor: Resource.Descriptor
+	/** The test of `RuleData.fitsOf` for the catalog, for this decision. */
+	readonly fits: (pattern: string) => boolean
 	/** The rules that were tested, for {@link explain}. */
 	readonly trace: Ref.Ref<Chunk.Chunk<Step>> | undefined
 }
@@ -282,6 +284,7 @@ const makeContext = (
 			path: descriptor.path,
 		},
 		descriptor,
+		fits: RuleData.fitsOf(descriptor.catalog),
 		trace,
 	}
 }

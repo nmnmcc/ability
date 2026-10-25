@@ -85,6 +85,8 @@ interface ResidualContext {
 	}
 	/** The resource of the kind, for the fields that a rule may grant. */
 	readonly descriptor: Resource.Descriptor
+	/** The test of `RuleData.fitsOf` for the catalog, for this request. */
+	readonly fits: (pattern: string) => boolean
 	/**
 	 * The condition of each rule, with the principal in it. They are made
 	 * first, from a flat list of the rules, so the walk does not go down the
@@ -241,6 +243,7 @@ interface PredicateContext {
 	readonly kind: string
 	readonly field: string | undefined
 	readonly descriptor: Resource.Descriptor
+	readonly fits: (pattern: string) => boolean
 }
 
 /** Tests if a rule that the request may use has a predicate. */
@@ -345,6 +348,7 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 		field: request.field,
 		input,
 		descriptor,
+		fits: RuleData.fitsOf(descriptor.catalog),
 	}
 	const context: ResidualContext = {
 		...target,
@@ -378,6 +382,7 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 					path: descriptor.path,
 				},
 				descriptor,
+				fits: RuleData.fitsOf(descriptor.catalog),
 				trace: undefined,
 			},
 			[],

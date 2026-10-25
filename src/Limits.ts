@@ -97,7 +97,9 @@ export const catalogFields: number = Limits.catalogFields
 
 /**
  * The most steps of one search for a value, as in `Policy.coverage`. Past
- * it, the answer is `Unknown`.
+ * it, the answer is `Unknown`. It is also the most steps of the checks of
+ * the field patterns of one policy on every kind of their rules. Past it, the
+ * policy does not load.
  *
  * @stability stable
  * @category constants
