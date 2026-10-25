@@ -225,6 +225,40 @@ describe("Catalog", () => {
 		)
 	})
 
+	it("makes the catalog of a union very many levels deep", () => {
+		const deep = Arr.reduce(
+			Arr.range(1, 5000),
+			Schema.String as Schema.Codec<string>,
+			(inner) => Schema.Union([Schema.String, inner]),
+		)
+		const Deep = Resource.make("DeepUnion", {
+			actions: ["read"],
+			fields: { name: deep },
+		})
+		assert.doesNotThrow(() =>
+			Domain.make({ principal: Caller, resources: [Deep] }),
+		)
+		assert.isTrue(fieldOf(Schema.Struct({ name: deep }), "name").kinds.string)
+	})
+
+	it("makes the catalog of a struct with very many fields", () => {
+		const Wide = Resource.make("VeryWide", {
+			actions: ["read"],
+			fields: Object.fromEntries(
+				Array.from({ length: 150_000 }, (_, index) => [
+					`f${String(index)}`,
+					Schema.String,
+				]),
+			),
+		})
+		const domain = Domain.make({
+			principal: Caller,
+			resources: [Wide],
+			limits: { catalogFields: 200_000 },
+		})
+		assert.isDefined(domain.resources)
+	}, 60_000)
+
 	it("stops a Schema with more fields than its domain takes", () => {
 		const wide = Resource.make("Wide", {
 			actions: ["read"],

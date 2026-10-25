@@ -18,6 +18,7 @@ import { hasProperty } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import * as SchemaAST from "effect/SchemaAST"
 import * as Limits from "./limits.ts"
+import * as Trampoline from "./trampoline.ts"
 
 /** The kinds of values that a field may hold. */
 export interface Kinds {
@@ -234,18 +235,31 @@ const classStruct = (
 const alternatives = (
 	ast: SchemaAST.AST,
 	open: ReadonlySet<SchemaAST.AST>,
-): ReadonlyArray<SchemaAST.AST> => {
+): ReadonlyArray<SchemaAST.AST> => alternativesOf({ ast, open })
+
+/**
+ * The walk of {@link alternatives}. A union may hold a union, very many
+ * levels down, so it is a walk of the trampoline for an input of an unknown
+ * depth.
+ */
+const alternativesOf = Trampoline.adaptive<
+	{ readonly ast: SchemaAST.AST; readonly open: ReadonlySet<SchemaAST.AST> },
+	ReadonlyArray<SchemaAST.AST>
+>((R, child) => ({ ast, open }, depth) => {
 	switch (ast._tag) {
 		case "Union":
-			return Arr.flatMap(ast.types, (type) => alternatives(type, open))
+			return R.map(
+				R.forEach(ast.types, (type) => child({ ast: type, open }, depth + 1)),
+				Arr.flatten,
+			)
 		case "Suspend":
 			return open.has(ast)
-				? []
-				: alternatives(ast.thunk(), new Set([...open, ast]))
+				? R.succeed([])
+				: child({ ast: ast.thunk(), open: new Set([...open, ast]) }, depth + 1)
 		default:
-			return [ast]
+			return R.succeed([ast])
 	}
-}
+})
 
 /** The struct of a Schema: a struct, or the struct of a class. */
 const structOf = (ast: SchemaAST.AST): SchemaAST.Objects | undefined =>
@@ -667,7 +681,12 @@ const listOf = (
 			if (visit === undefined) {
 				return Option.none()
 			}
-			rest.push(...Arr.reverse(below(visit)))
+			// The visits go onto the stack one at a time: a spread into a call
+			// would pass one argument for each field, past the most arguments
+			// of a call.
+			Arr.forEach(Arr.reverse(below(visit)), (next) => {
+				rest.push(next)
+			})
 			const field =
 				visit.path.length === 0
 					? []
