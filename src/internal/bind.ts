@@ -306,15 +306,45 @@ const principalField = (
 const isIssue = (value: Catalog.Field | Issue): value is Issue =>
 	"issue" in value
 
-/** The issues of one operand of a test of a field. */
+/**
+ * The fields that a test reads, with one field for each distinct kind of
+ * value. A rule for very many kinds may have one field type in all of them,
+ * so each value of the test is checked one time for each distinct kind, not
+ * one time for each resource. The kinds are found by their text in a native
+ * `Map`, which belongs to this call.
+ */
+const distinctFields = (
+	context: Context,
+	field: string,
+): ReadonlyArray<Catalog.Field> =>
+	Array.from(
+		new Map(
+			Arr.map(
+				fieldsAt(context, field),
+				(found) => [JSON.stringify(found.kinds), found] as const,
+			),
+		).values(),
+	)
+
+/**
+ * Counts the work of the checks of the values of a test, as the work of the
+ * field patterns counts. Past the limit, the values are not checked, and
+ * `ruleIssues` gives one issue for the work.
+ */
+const spendChecks = (memo: Memo, values: number, fields: number): boolean => {
+	memo.work.steps += values * Math.max(fields, 1)
+	return memo.work.steps <= Limits.searchSteps
+}
+
+/** The issues of one operand of a test of a field, with its distinct fields. */
 const operandIssues = (
 	context: Context,
 	field: string,
+	fields: ReadonlyArray<Catalog.Field>,
 	ordered: boolean,
 	operand: Operand,
 	at: ReadonlyArray<PropertyKey>,
 ): ReadonlyArray<Issue> => {
-	const fields = fieldsAt(context, field)
 	if (operand._tag === "Literal") {
 		const value = operand.value
 		if (ordered && typeof value !== "string" && typeof value !== "number") {
@@ -512,8 +542,17 @@ const conditionIssues = (
 	}
 	seen.add(node)
 	const here = (issues: ReadonlyArray<Issue>) => under(context.memo, at, issues)
+	// A test looks its field up in each resource of the rule. A rule for very
+	// many kinds with very many tests is very much work, so it counts. Past
+	// the limit, `ruleIssues` gives one issue for it, and the policy does not
+	// load.
+	const room = (values: number) =>
+		spendChecks(context.memo, 1 + values, context.named.length)
 	switch (node._tag) {
 		case "Compare": {
+			if (!room(1)) {
+				return []
+			}
 			const exists = readIssues(context, node.field, ["field"])
 			return here(
 				exists.length > 0
@@ -521,6 +560,7 @@ const conditionIssues = (
 					: operandIssues(
 							context,
 							node.field,
+							distinctFields(context, node.field),
 							node.op !== "eq" && node.op !== "ne",
 							node.value,
 							["value"],
@@ -528,20 +568,28 @@ const conditionIssues = (
 			)
 		}
 		case "In": {
+			if (!room(0)) {
+				return []
+			}
 			const exists = readIssues(context, node.field, ["field"])
+			if (exists.length > 0) {
+				return here(exists)
+			}
+			const fields = distinctFields(context, node.field)
+			if (!spendChecks(context.memo, node.values.length, fields.length)) {
+				return []
+			}
 			return here(
-				exists.length > 0
-					? exists
-					: Arr.flatMap(node.values, (operand, index) =>
-							operandIssues(context, node.field, false, operand, [
-								"values",
-								index,
-							]),
-						),
+				Arr.flatMap(node.values, (operand, index) =>
+					operandIssues(context, node.field, fields, false, operand, [
+						"values",
+						index,
+					]),
+				),
 			)
 		}
 		case "Exists":
-			return here(readIssues(context, node.field, ["field"]))
+			return room(0) ? here(readIssues(context, node.field, ["field"])) : []
 		case "Under":
 			return here(underIssues(context, node.prefix, []))
 		case "And":
@@ -625,6 +673,20 @@ export const ruleIssues = (
 				: fieldIssue(context, field, ["fields", index]),
 		),
 	)
+	const whenIssues =
+		rule.when === undefined
+			? []
+			: Nodes.isNode(rule.when)
+				? conditionIssues(
+						context,
+						rule.when,
+						() => [...at(), "when"],
+						new Set(),
+					)
+				: here([notWhole(["when"])])
+	// The work is known only after every check of the rule. Past the limit, a
+	// check gives no issue, so this issue must come, or the policy would load
+	// with checks left out.
 	const work = memo.work.steps > Limits.searchSteps && !memo.work.noted
 	memo.work.noted ||= work
 	return [
@@ -664,26 +726,17 @@ export const ruleIssues = (
 				]),
 		),
 		...fieldIssues,
-		// The issue of the work of the patterns is not one of the most issues
-		// of the binding, so a policy past the limit always says why.
+		...whenIssues,
+		// The issue of the work is not one of the most issues of the binding,
+		// so a policy past the limit always says why.
 		...(work
 			? [
 					{
-						path: [...at(), "fields"],
-						issue: `The field patterns of the policy take more than ${String(Limits.searchSteps)} steps to check. The most is ${String(Limits.searchSteps)}.`,
+						path: at(),
+						issue: `The policy takes more than ${String(Limits.searchSteps)} steps to check: its field patterns, and the fields and values of its tests on each resource. The most is ${String(Limits.searchSteps)}.`,
 					},
 				]
 			: []),
-		...(rule.when === undefined
-			? []
-			: Nodes.isNode(rule.when)
-				? conditionIssues(
-						context,
-						rule.when,
-						() => [...at(), "when"],
-						new Set(),
-					)
-				: here([notWhole(["when"])])),
 	]
 }
 

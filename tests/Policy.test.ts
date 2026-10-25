@@ -2312,6 +2312,38 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 3000)
 	})
 
+	it("checks the values of a test one time for kinds with one field type", () => {
+		const kinds = Arr.makeBy(1000, (index) =>
+			Resource.make(`Kind${String(index)}`, {
+				actions: ["read"],
+				fields: { name: Schema.String },
+			}),
+		)
+		const Kinds = Domain.make({ principal: Caller, resources: kinds })
+		const start = Date.now()
+		const result = Schema.decodeUnknownResult(Policy.schema(Kinds))({
+			_tag: "Rules",
+			algorithm: "denyOverrides",
+			rules: [
+				{
+					_tag: "Allow",
+					actions: ["read"],
+					resources: Arr.map(kinds, (kind) => kind.kind),
+					when: {
+						_tag: "In",
+						field: "name",
+						values: Arr.makeBy(90_000, (index) => ({
+							_tag: "Literal",
+							value: `n${String(index)}`,
+						})),
+					},
+				},
+			],
+		})
+		assert.isTrue(Result.isSuccess(result))
+		assert.isBelow(Date.now() - start, 3000)
+	})
+
 	it("binds a very long wrong name in a short time", () => {
 		const Wide = Resource.make("Wide", {
 			actions: ["read"],
