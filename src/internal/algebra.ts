@@ -12,7 +12,6 @@
 import * as Arr from "effect/Array"
 import type * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
-import * as HashSet from "effect/HashSet"
 import * as Option from "effect/Option"
 import type * as Resource from "../Resource.ts"
 import * as Nodes from "./nodes.ts"
@@ -22,19 +21,81 @@ type Node = Nodes.Node
 
 const { always, never } = Nodes
 
-// Smart constructors
+// Keys of structure
+
+/** The text of an operand. The type is in it, so `"1"` is not `1`. */
+const operandText = (operand: Nodes.Operand): ReadonlyArray<string> =>
+	operand._tag === "Literal"
+		? [typeof operand.value, String(operand.value)]
+		: ["principal", operand.path]
+
+/** The parts of the text of a condition with no predicate. */
+const shapeOf = (node: Node): unknown => {
+	switch (node._tag) {
+		case "True":
+		case "False":
+			return [node._tag]
+		case "Compare":
+			return [node._tag, node.op, node.field, operandText(node.value)]
+		case "In":
+			return [node._tag, node.field, Arr.map(node.values, operandText)]
+		case "Exists":
+			return [node._tag, node.field]
+		case "Under":
+			return [node._tag, Arr.map(node.prefix, operandText)]
+		case "And":
+		case "Or":
+			return [node._tag, Arr.map(node.conditions, shapeOf)]
+		case "Not":
+			return [node._tag, shapeOf(node.condition)]
+		case "Predicate":
+			// A smart constructor and a search do not ask for the text of a
+			// predicate: it is equal only to itself.
+			throw new Error("A predicate has no text of structure")
+	}
+}
 
 /**
- * Keeps the first node of each structure, in order. A node with a predicate is
- * equal only to itself, as its test is a function.
+ * The text of the structure of a condition with no predicate. Two conditions
+ * with one text give the same answer for every value. It reads all of the
+ * condition, so a search counts its size in the budget.
  */
-const dedupe = (nodes: ReadonlyArray<Node>): ReadonlyArray<Node> =>
-	Arr.flatten(
-		Arr.mapAccum(nodes, HashSet.empty<Node>(), (seen, node) => [
-			HashSet.add(seen, node),
-			HashSet.has(seen, node) ? [] : [node],
-		])[1],
-	)
+export const structureText = (node: Node): string =>
+	JSON.stringify(shapeOf(node))
+
+/**
+ * The most nodes of a condition that a smart constructor reads for its key.
+ * A larger child is its own key, so the work of a constructor stays small.
+ */
+const keyNodes = 64
+
+/**
+ * The key of a child in a smart constructor: the text of its structure, or
+ * the node itself when it is large. The keys go into a native `Set`, not a
+ * `HashSet` of Effect. The hash of a string in Effect has no random seed, so
+ * a policy could hold very many strings with one hash, and each test of the
+ * set would read all of them. A native `Set` finds a node by the node itself,
+ * and it hashes a string with the random seed of the engine.
+ */
+const keyOf = (node: Node): string | Node =>
+	node.size > keyNodes ? node : structureText(node)
+
+/**
+ * Keeps the first node of each structure, in order. A large node is a copy
+ * only of itself.
+ */
+const dedupe = (nodes: ReadonlyArray<Node>): ReadonlyArray<Node> => {
+	// The set belongs to this call.
+	const seen = new Set<string | Node>()
+	return Arr.filter(nodes, (node) => {
+		const key = keyOf(node)
+		if (seen.has(key)) {
+			return false
+		}
+		seen.add(key)
+		return true
+	})
+}
 
 /**
  * Removes the children that the other children make useless. In an `Or`,
@@ -44,14 +105,17 @@ const absorb = (
 	inner: "And" | "Or",
 	nodes: ReadonlyArray<Node>,
 ): ReadonlyArray<Node> => {
-	const all = HashSet.fromIterable(nodes)
+	// A native `Set`, as in `dedupe`.
+	const all = new Set(Arr.map(nodes, keyOf))
 	return Arr.filter(
 		nodes,
 		(node) =>
 			node._tag !== inner ||
-			!Arr.some(node.conditions, (part) => HashSet.has(all, part)),
+			!Arr.some(node.conditions, (part) => all.has(keyOf(part))),
 	)
 }
+
+// Smart constructors
 
 /**
  * Gives the result of an `And` with a `False` child, or of an `Or` with a
@@ -490,10 +554,7 @@ export const fields = (node: Node): ReadonlyArray<string> => {
 				return []
 		}
 	}
-	return Arr.flatten(
-		Arr.mapAccum(all(node), HashSet.empty<string>(), (seen, field) => [
-			HashSet.add(seen, field),
-			HashSet.has(seen, field) ? [] : [field],
-		])[1],
-	)
+	// A native `Set`, as in `dedupe`: a field of a condition that is not bound
+	// to a domain may be any string.
+	return Array.from(new Set(all(node)))
 }

@@ -6,6 +6,7 @@ import {
 	Effect,
 	Equal,
 	Exit,
+	Hash,
 	Result,
 	Schema,
 	SchemaTransformation,
@@ -1383,6 +1384,58 @@ describe("Policy", () => {
 			}),
 		)
 		assert.isBelow(Date.now() - start, 1000)
+	})
+
+	describe("strings with one hash", () => {
+		// Effect hashes a string from its end, with `h = (h * 33) ^ code`, and
+		// with no random seed. For a string of two codes `a` and `b`, the hash
+		// after `b` gives the one `a` that makes the hash `target`, when the
+		// high bits agree. So these strings are different, with one hash.
+		const start = Math.imul(5381, 33)
+		const after = (b: number) => Math.imul(start ^ b, 33)
+		const high = after(0) >>> 16
+		const target = (high << 16) | 0x1234
+		const strings = Arr.flatMap(Arr.range(0, 0xffff), (b) =>
+			after(b) >>> 16 === high
+				? [String.fromCharCode((after(b) ^ target) & 0xffff, b)]
+				: [],
+		)
+
+		it("has very many strings with one hash", () => {
+			assert.isAbove(strings.length, 1900)
+			assert.strictEqual(new Set(Arr.map(strings, Hash.string)).size, 1)
+		})
+
+		it("decides and checks a policy with tests of them in a short time", () => {
+			const policy = Policy.define(App)(function* (_) {
+				yield* _.allow("read", Bot, {
+					when: ($) =>
+						$.or(...Arr.map(strings, (value) => $.eq("name", value))),
+				})
+				yield* _.deny("read", Bot, {
+					when: ($) => $.in("name", strings),
+				})
+			})
+			const begin = Date.now()
+			assert.strictEqual(
+				Policy.decideSync(policy, {
+					principal: alice,
+					action: "read",
+					resource: aliceBot,
+				})._tag,
+				"NotApplicable",
+			)
+			// The search may stop at its budget, with `Unknown`.
+			assert.include(
+				["None", "Unknown"],
+				Policy.coverage(policy, {
+					principal: alice,
+					action: "read",
+					kind: "Bot",
+				})._tag,
+			)
+			assert.isBelow(Date.now() - begin, 2000)
+		})
 	})
 
 	it("decides a shared tree in a short time", () => {
