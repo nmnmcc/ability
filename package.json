@@ -1,6 +1,6 @@
 {
 	"name": "@nmnmcc/ability",
-	"version": "2.2.6",
+	"version": "2.2.7",
 	"description": "Typed, composable authorization policies for Effect programs.",
 	"license": "Apache-2.0",
 	"type": "module",
