@@ -18,38 +18,54 @@ const prototypesOf = (value: object): ReadonlyArray<object> =>
 	)
 
 /**
+ * The fields that every `Error` may have from the engine or from its class:
+ * a stack that the engine makes, or a name from a getter of Effect. Their
+ * values are not data that a Schema makes, so a read takes such a field only
+ * when it is an own data field. The catalog takes these fields of a class as
+ * fields that may be missing: see `Catalog`.
+ */
+export const errorFields: ReadonlyArray<string> = [
+	"message",
+	"name",
+	"stack",
+	"cause",
+]
+
+/**
  * Reads one part of a value:
  * - an own data field gives its value, with `null` for `undefined`;
  * - a part of `null`, of a scalar, or a missing field gives `null`;
  * - a name that the value has only from `Object.prototype`, such as
  *   `constructor`, gives `null`;
- * - a name that the value has only from `Error.prototype`, as `message` of a
- *   `Schema.TaggedError` with an optional `message` and no message, gives
- *   `null`: the Schema says that the field is missing;
+ * - a field of {@link errorFields} of an `Error` that is not an own data
+ *   field, as a `stack` that the engine keeps in an accessor, or a `name`
+ *   from a getter of Effect, gives `null`;
  * - a name that the value has only as a method of a prototype, as `pipe` of
  *   a `Schema.Class` with an optional `pipe` and no value of it, gives
  *   `null`: a method is code, not data, and the Schema says that the field
  *   is missing.
  *
- * The `stack` of an error is read through the getter of the engine: see
- * {@link engineStack}. Any other field, such as a getter or other data from
- * the prototype of a class, is a defect. Its value is not data that the Schema
- * describes, and a read of it as `null` could let a value pass a deny rule.
+ * Any other field, such as a getter or other data from the prototype of a
+ * class, is a defect. Its value is not data that the Schema describes, and a
+ * read of it as `null` could let a value pass a deny rule.
  */
 export const readPart = (value: unknown, name: string): unknown => {
 	if (typeof value !== "object" || value === null) {
 		return null
 	}
 	const property = Object.getOwnPropertyDescriptor(value, name)
+	if (value instanceof Error && errorFields.includes(name)) {
+		return property !== undefined &&
+			"value" in property &&
+			property.value !== undefined
+			? property.value
+			: null
+	}
 	if (property === undefined) {
 		const owner = Arr.findFirst(prototypesOf(value), (prototype) =>
 			Object.hasOwn(prototype, name),
 		)
-		if (
-			Option.isNone(owner) ||
-			owner.value === Object.prototype ||
-			owner.value === Error.prototype
-		) {
+		if (Option.isNone(owner) || owner.value === Object.prototype) {
 			return null
 		}
 		const inherited = Object.getOwnPropertyDescriptor(owner.value, name)
@@ -63,36 +79,9 @@ export const readPart = (value: unknown, name: string): unknown => {
 		throw new Error(`The field "${name}" of the value is not plain data`)
 	}
 	if (!("value" in property)) {
-		const stack = engineStack(value, name, property)
-		if (stack !== undefined) {
-			return stack
-		}
 		throw new Error(`The field "${name}" of the value is not plain data`)
 	}
 	return property.value === undefined ? null : property.value
-}
-
-/**
- * Gives the `stack` of an error. Node.js keeps it as an own accessor, with a
- * getter of the engine that every error shares, so a `Schema.TaggedError`
- * with a `stack` field keeps its data there. The read takes it only when the
- * getter is the one of a new `Error`, so a getter of a class still is a
- * defect. It gives `undefined` for any other field.
- */
-const engineStack = (
-	value: object,
-	name: string,
-	property: PropertyDescriptor,
-): unknown => {
-	if (name !== "stack" || property.get === undefined) {
-		return undefined
-	}
-	const engine = Object.getOwnPropertyDescriptor(new Error(), "stack")
-	if (engine?.get !== property.get) {
-		return undefined
-	}
-	const stack: unknown = property.get.call(value)
-	return stack ?? null
 }
 
 /** Reads a field of a value by the names of its parts. */

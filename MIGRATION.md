@@ -11,6 +11,10 @@ Version 2.2 has a new limit. No code needs a change.
   very many field patterns may need a higher `searchSteps`.
 - `Authorizer.DeciderRequest` has a field of the type `string`, as a check takes
   a field of any length. A decider must take any field.
+- The `message`, `name`, `stack` and `cause` of an `Error` are read only when
+  they are own data fields. Since 2.2.4, a stack in the accessor of Node.js,
+  which 2.1.14 read, reads `null`, and a field of a class with one of these
+  names may be missing, as the coverage sees it.
 
 # From 2.0 to 2.1
 

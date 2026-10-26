@@ -4872,37 +4872,64 @@ describe("Policy", () => {
 		assert.strictEqual(decide(8), "NotApplicable")
 	})
 
-	it("reads the stack of a Schema error, as the residual does", () => {
-		class Info extends Schema.TaggedError<Info>(
-			"@nmnmcc/ability/tests/Policy.test/StackInfo",
-		)("Info", { stack: Schema.String }) {}
-		const Report = Resource.make("Report", {
+	it("reads the fields that every error may have only as own data, as the residual does", () => {
+		class Fault extends Schema.TaggedError<Fault>(
+			"@nmnmcc/ability/tests/Policy.test/Fault",
+		)("Fault", {
+			stack: Schema.optionalKey(Schema.Literal("ok")),
+			name: Schema.optionalKey(Schema.String),
+			message: Schema.optionalKey(Schema.String),
+		}) {}
+		const Report = Resource.make("FaultReport", {
 			actions: ["read"],
-			fields: { info: Info },
+			fields: { fault: Fault },
 		})
 		const Reports = Domain.make({ principal: Caller, resources: [Report] })
 		const policy = Policy.define(Reports)(function* (_) {
 			yield* _.deny("read", Report, {
-				when: ($) => $.eq("info.stack", "secret"),
+				when: ($) =>
+					$.or(
+						$.and($.exists("fault.stack"), $.ne("fault.stack", "ok")),
+						$.eq("fault.name", "ok"),
+						$.eq("fault.message", "secret"),
+					),
 			})
-			yield* _.allow("read", Report, { when: ($) => $.exists("info.stack") })
+			yield* _.allow("read", Report)
 		})
-		const kind = { principal: alice, action: "read", kind: "Report" } as const
+		const kind = {
+			principal: alice,
+			action: "read",
+			kind: "FaultReport",
+		} as const
 		const residual = Policy.residual(policy, kind)
-		// Node.js keeps the stack of an error as an accessor of the engine.
-		Arr.forEach(["secret", "open"], (stack) => {
-			const value = Report.make({ info: Info.make({ stack }) })
+		// The engine makes a stack, Effect has a getter of the name, and the
+		// message is an own field when it is given. A stack or a name that is
+		// not an own data field reads as missing.
+		const faults = [
+			Fault.make({}),
+			Fault.make({ stack: "ok" }),
+			Fault.make({ name: "ok" }),
+			Fault.make({ message: "secret" }),
+			Fault.make({ message: "open" }),
+		]
+		const decisions = Arr.map(faults, (fault) => {
+			const value = Report.make({ fault })
 			const decision = Policy.decideSync(policy, {
 				principal: alice,
 				action: "read",
 				resource: value,
 			})._tag
-			assert.strictEqual(decision, stack === "secret" ? "Deny" : "Allow")
 			assert.strictEqual(
 				Condition.evaluateSync(residual, { value }),
 				decision === "Allow",
 			)
+			return decision
 		})
+		assert.strictEqual(decisions[0], "Allow")
+		assert.strictEqual(decisions[3], "Deny")
+		assert.strictEqual(decisions[4], "Allow")
+		// The coverage does not take a stack or a name as known.
+		assert.notStrictEqual(Policy.coverage(policy, kind)._tag, "None")
 		// Another getter is still not data.
 		const made = Object.defineProperty({}, "stack", {
 			get: () => "secret",
