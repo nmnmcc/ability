@@ -205,6 +205,12 @@ const jsonKey = (
 	return { keyOf, textOf }
 }
 
+/** Tells if a name is the index of an item of a list. */
+const isIndex = (name: PropertyKey): boolean =>
+	typeof name === "string" &&
+	/^(?:0|[1-9]\d*)$/.test(name) &&
+	Number(name) < 2 ** 32 - 1
+
 /**
  * Tells if a value has at most `most` objects and items, with a part that it
  * uses in many places counted for each place, as its JSON form has it. The
@@ -228,11 +234,28 @@ const fitsNodes = (root: unknown, most: number): boolean => {
 		if (size !== undefined && count.nodes + size > most) {
 			return undefined
 		}
-		if (value instanceof Map) {
-			return [...value.keys(), ...value.values()]
+		// A codec may read any own field, also a hidden one, and also an own
+		// field of a value that keeps its data inside, as a date. A getter may
+		// give any value each time, so a value with one has no known size.
+		const list = Array.isArray(value)
+		const names = Arr.filter(
+			Reflect.ownKeys(value),
+			(name) => !(list && (name === "length" || isIndex(name))),
+		)
+		const fields = Arr.map(names, (name) =>
+			Object.getOwnPropertyDescriptor(value, name),
+		)
+		if (
+			Arr.some(fields, (field) => field !== undefined && !("value" in field))
+		) {
+			return undefined
 		}
-		if (value instanceof Set || Array.isArray(value)) {
-			return Array.from(value as Iterable<unknown>)
+		const own = Arr.map(fields, (field) => field?.value as unknown)
+		if (value instanceof Map) {
+			return [...value.keys(), ...value.values(), ...own]
+		}
+		if (value instanceof Set || list) {
+			return [...Array.from(value as Iterable<unknown>), ...own]
 		}
 		// These keep their data inside, and it is small. An `Option` with no
 		// value has no own fields.
@@ -242,13 +265,11 @@ const fitsNodes = (root: unknown, most: number): boolean => {
 			value instanceof RegExp ||
 			(Option.isOption(value) && Option.isNone(value))
 		) {
-			return []
+			return own
 		}
-		// A codec may read a hidden field too, so the walk reads each own
-		// data field. A value of a class with no own fields, as a `Redacted`,
-		// keeps its data where the walk can not see it, but its codec reads
-		// it. Such a value has no known size, so it is past the limit.
-		const names = Reflect.ownKeys(value)
+		// A value of a class with no own fields, as a `Redacted`, keeps its
+		// data where the walk can not see it, but its codec reads it. Such a
+		// value has no known size, so it is past the limit.
 		const prototype: unknown = Object.getPrototypeOf(value)
 		if (
 			names.length === 0 &&
@@ -257,12 +278,7 @@ const fitsNodes = (root: unknown, most: number): boolean => {
 		) {
 			return undefined
 		}
-		return Arr.flatMap(names, (name) => {
-			const property = Object.getOwnPropertyDescriptor(value, name)
-			return property !== undefined && "value" in property
-				? [property.value as unknown]
-				: []
-		})
+		return own
 	}
 	Arr.unfold(0, (step) => {
 		if (stack.length === 0 || count.nodes > most) {
