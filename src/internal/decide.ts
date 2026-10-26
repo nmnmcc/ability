@@ -19,6 +19,7 @@ import type * as Policy from "../Policy.ts"
 import type * as Resource from "../Resource.ts"
 import * as Catalog from "./catalog.ts"
 import * as DomainData from "./domain.ts"
+import * as Limits from "./limits.ts"
 import * as Place from "./place.ts"
 import * as PolicyNodes from "./policy-nodes.ts"
 import { nodeOf } from "./policy.ts"
@@ -30,6 +31,18 @@ type AnyRequest = Policy.AnyRequest
 type AnyRule = Policy.AnyRule
 type Explanation = Policy.Explanation
 type Step = Policy.Step
+
+/**
+ * The steps of `explain`. Each step has the full path of its rule, so a very
+ * deep tree with a rule at each level makes very long paths. The trace counts
+ * the parts of the paths, and it stops past `policyNodes` of the domain. The
+ * count belongs to one run.
+ */
+interface Trace {
+	readonly steps: Ref.Ref<Chunk.Chunk<Step>>
+	readonly parts: { count: number }
+	readonly most: number
+}
 
 interface DecideContext {
 	readonly action: string
@@ -45,7 +58,7 @@ interface DecideContext {
 	/** The tests of the field patterns on the field, for this decision. */
 	readonly fieldTest: RuleData.FieldTest | undefined
 	/** The rules that were tested, for {@link explain}. */
-	readonly trace: Ref.Ref<Chunk.Chunk<Step>> | undefined
+	readonly trace: Trace | undefined
 }
 
 /**
@@ -73,15 +86,26 @@ const ruleApplies = (
 	return trace === undefined
 		? test
 		: Effect.tap(test, (applies) =>
-				// A chunk adds a step with no copy of the steps before.
-				Ref.update(
-					trace,
-					Chunk.append({
-						path: Place.pathOf(at) as ReadonlyArray<number>,
-						rule: typed(value),
-						applies,
-					}),
-				),
+				Effect.suspend(() => {
+					const path = Place.pathOf(at) as ReadonlyArray<number>
+					trace.parts.count += path.length
+					if (trace.parts.count > trace.most) {
+						return Effect.die(
+							Limits.exceeded(
+								"The paths of the steps of an explanation",
+								"policyNodes",
+								"parts",
+								trace.parts.count,
+								trace.most,
+							),
+						)
+					}
+					// A chunk adds a step with no copy of the steps before.
+					return Ref.update(
+						trace.steps,
+						Chunk.append({ path, rule: typed(value), applies }),
+					)
+				}),
 			)
 }
 
@@ -286,7 +310,7 @@ export const fitsKind = (
 const makeContext = (
 	domain: Domain.Any,
 	request: AnyRequest,
-	trace: Ref.Ref<Chunk.Chunk<Step>> | undefined,
+	trace: Trace | undefined,
 ): DecideContext | undefined => {
 	const kind = ResourceData.kindOf(request.resource)
 	const descriptor =
@@ -354,13 +378,20 @@ export const explain = (
 	// Each run of the Effect needs its own trace, so the trace is made inside
 	// the Effect.
 	Effect.gen(function* () {
-		const trace = yield* Ref.make(Chunk.empty<Step>())
+		const trace: Trace = {
+			steps: yield* Ref.make(Chunk.empty<Step>()),
+			parts: { count: 0 },
+			most: policy.domain.limits.policyNodes,
+		}
 		const context = makeContext(policy.domain, request, trace)
 		if (context === undefined) {
 			return { decision: Decision.NotApplicable, steps: [] }
 		}
 		const decision = yield* decideNode(nodeOf(policy), context, undefined)
-		return { decision, steps: Chunk.toReadonlyArray(yield* Ref.get(trace)) }
+		return {
+			decision,
+			steps: Chunk.toReadonlyArray(yield* Ref.get(trace.steps)),
+		}
 	})
 
 /**

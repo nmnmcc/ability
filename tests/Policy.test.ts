@@ -5057,6 +5057,56 @@ describe("Policy", () => {
 		assert.isBelow(Date.now() - start, 500)
 	})
 
+	it("puts a limit on the parts of the paths of the steps of explain", () => {
+		const Small = Domain.make({
+			principal: Caller,
+			resources: [Bot],
+			limits: { policyNodes: 1000 },
+		})
+		// A chain of 100 levels with a rule that does not apply at each one. A
+		// step has the full path of its rule, so the paths of the steps have
+		// about 100 * 100 parts. A chain of 7000 levels filled a 128 MB heap.
+		const chain = Arr.reduce(
+			Arr.range(1, 100),
+			{
+				_tag: "Rules",
+				algorithm: "denyOverrides",
+				rules: [{ _tag: "Allow", actions: ["read"], resources: ["Bot"] }],
+			} as unknown,
+			(inner) => ({
+				_tag: "FirstOf",
+				policies: [
+					{
+						_tag: "Rules",
+						algorithm: "denyOverrides",
+						rules: [
+							{
+								_tag: "Allow",
+								actions: ["read"],
+								resources: ["Bot"],
+								when: { _tag: "False" },
+							},
+						],
+					},
+					inner,
+				],
+			}),
+		)
+		const policy = Schema.decodeUnknownSync(Policy.schema(Small))(chain)
+		const request = {
+			principal: alice,
+			action: "read",
+			resource: aliceBot,
+		} as const
+		assert.strictEqual(Policy.decideSync(policy, request)._tag, "Allow")
+		const exit = Effect.runSyncExit(Policy.explain(policy, request))
+		assert.isTrue(Exit.hasDies(exit))
+		assert.include(
+			String(Exit.isFailure(exit) ? exit.cause : ""),
+			"The most is 1000",
+		)
+	})
+
 	it("counts each star inside a part of a field pattern as a part", () => {
 		const Wide = Resource.make("StarWide", {
 			actions: ["read"],
