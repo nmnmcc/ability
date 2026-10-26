@@ -72,7 +72,10 @@ describe("Catalog", () => {
 		])
 		assert.isTrue(fieldOf(schema, "owner").kinds.null)
 		assert.isTrue(fieldOf(schema, "note").kinds.null)
-		assert.isFalse(fieldOf(schema, "name").kinds.null)
+		assert.isFalse(fieldOf(schema, "level").kinds.null)
+		// A struct takes an `Error` with its fields, and a read of a `name`
+		// that the `Error` has only from its prototype gives `null`.
+		assert.isTrue(fieldOf(schema, "name").kinds.null)
 	})
 
 	it("reads the data fields of a class, not its getters", () => {

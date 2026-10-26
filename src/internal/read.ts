@@ -21,8 +21,9 @@ const prototypesOf = (value: object): ReadonlyArray<object> =>
  * The fields that every `Error` may have from the engine or from its class:
  * a stack that the engine makes, or a name from a getter of Effect. Their
  * values are not data that a Schema makes, so a read takes such a field only
- * when it is an own data field. The catalog takes these fields of a class as
- * fields that may be missing: see `Catalog`.
+ * when it is an own data field. The catalog takes these fields of a struct
+ * or a class as fields that may be missing, as any of them may hold an
+ * `Error`: see `Catalog`.
  */
 export const errorFields: ReadonlyArray<string> = [
 	"message",

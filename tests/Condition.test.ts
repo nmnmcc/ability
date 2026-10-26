@@ -497,7 +497,10 @@ describe("Condition", () => {
 			assert.deepStrictEqual(example(_.not(_.exists("note"))), {
 				note: null,
 			})
-			assert.strictEqual(tagOf(_.not(_.exists("name"))), "Unsatisfiable")
+			assert.strictEqual(tagOf(_.not(_.exists("ratio"))), "Unsatisfiable")
+			// A struct takes an `Error` with its fields, and a `name` that the
+			// `Error` has only from its prototype reads as missing.
+			assert.strictEqual(tagOf(_.not(_.exists("name"))), "Satisfiable")
 		})
 
 		it("makes the fields below a missing struct missing", () => {

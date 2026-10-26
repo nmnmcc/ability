@@ -4872,6 +4872,37 @@ describe("Policy", () => {
 		assert.strictEqual(decide(8), "NotApplicable")
 	})
 
+	it("takes the error fields of a struct as fields that may be missing, as an Error fits the struct", () => {
+		const Row = Resource.make("ErrorRow", {
+			actions: ["read"],
+			fields: {
+				error: Schema.Struct({ name: Schema.String, message: Schema.String }),
+			},
+		})
+		const Rows = Domain.make({ principal: Caller, resources: [Row] })
+		const policy = Policy.define(Rows)(function* (_) {
+			yield* _.deny("read", Row, {
+				when: ($) => $.not($.exists("error.name")),
+			})
+			yield* _.allow("read", Row)
+		})
+		// An `Error` has `name` only from its prototype, and it fits the
+		// struct, as the Schema reads the name from the prototype.
+		const value = { _tag: "ErrorRow", error: new Error("secret") } as const
+		assert.isTrue(Schema.is(Row.schema)(value))
+		const kind = { principal: alice, action: "read", kind: "ErrorRow" } as const
+		const decision = Policy.decideSync(policy, {
+			principal: alice,
+			action: "read",
+			resource: value as never,
+		})._tag
+		assert.strictEqual(decision, "Deny")
+		assert.notStrictEqual(Policy.coverage(policy, kind)._tag, "All")
+		assert.isFalse(
+			Condition.evaluateSync(Policy.residual(policy, kind), { value }),
+		)
+	})
+
 	it("reads the fields that every error may have only as own data, as the residual does", () => {
 		class Fault extends Schema.TaggedError<Fault>(
 			"@nmnmcc/ability/tests/Policy.test/Fault",

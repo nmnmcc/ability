@@ -219,16 +219,17 @@ no getter. A loop over the keys may not see it, as the `message` of a
 or only as a method of its class, reads `null`, as a missing field does. The
 `message`, `name`, `stack` and `cause` of an `Error` are read only when they are
 own data fields, so a stack that the engine makes, or a name from a getter of
-Effect, reads `null`. A field of a class with one of these names may be missing,
-as the coverage sees it. A rule that names a getter of a class is a
-`PolicyError`. Use a predicate for a value that comes from code. A condition may
-not read a field, of a resource or of the principal, below a value that may not
-be plain data: a union with a struct or a class that does not have the field, a
-list, a date, or a value of `Schema.Unknown`. A decision may get a value made by
-hand, and such a value may have the field with any value, as a list. Such a rule
-is a `PolicyError` too. A string in a union is fine: the field reads `null` for
-it. A test reads only the fields that the simple form of its condition needs, as
-the residual does: in `x AND False`, it does not read `x`.
+Effect, reads `null`. A struct or a class may hold an `Error`, so a field with
+one of these names may be missing, as the coverage sees it. A rule that names a
+getter of a class is a `PolicyError`. Use a predicate for a value that comes
+from code. A condition may not read a field, of a resource or of the principal,
+below a value that may not be plain data: a union with a struct or a class that
+does not have the field, a list, a date, or a value of `Schema.Unknown`. A
+decision may get a value made by hand, and such a value may have the field with
+any value, as a list. Such a rule is a `PolicyError` too. A string in a union is
+fine: the field reads `null` for it. A test reads only the fields that the
+simple form of its condition needs, as the residual does: in `x AND False`, it
+does not read `x`.
 
 ## Conditions
 

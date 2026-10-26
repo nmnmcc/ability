@@ -506,12 +506,6 @@ const placeOf = (place: Place): Made => {
 		(struct) => struct.indexSignatures.length > 0,
 	)
 	const structProperties = Arr.map(structs, propertiesOf)
-	// A struct of a class, as a `Schema.TaggedError` has.
-	const classes = Arr.some(
-		place.schemas,
-		(schema) =>
-			schema._tag === "Declaration" && classStruct(schema) !== undefined,
-	)
 	const children = Arr.map(namesOf(structs), (name) => {
 		const properties = Arr.flatMap(structProperties, (named) => {
 			const property = named.get(name)
@@ -528,14 +522,16 @@ const placeOf = (place: Place): Made => {
 				alternatives(property.type),
 			),
 			// A field below a value that is not a struct reads `null`, and so
-			// does a field that may be missing. A class may be an `Error`, and
-			// a read of a field that every `Error` may have takes only an own
-			// data field: a stack or a name from the engine or from Effect reads
-			// `null`. See `readPart`.
+			// does a field that may be missing. A struct or a class may hold an
+			// `Error`, as a struct takes any object with its fields, also the
+			// ones from a prototype. A read of a field that every `Error` may
+			// have takes only an own data field: a name from `Error.prototype`,
+			// a stack from the engine or a name from Effect reads `null`. See
+			// `readPart`.
 			missing:
 				place.missing ||
 				values.length > 0 ||
-				(classes && errorFields.includes(name)) ||
+				errorFields.includes(name) ||
 				Arr.some(properties, (property) => SchemaAST.isOptional(property.type)),
 			top,
 			// A value that may be anything may be a list, or have a getter, so
