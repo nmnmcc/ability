@@ -147,46 +147,62 @@ const jsonCodecOf = (
 const jsonKey = (
 	schema: Schema.Top,
 	most: number,
-): ((principal: object) => PrincipalKey | undefined) => {
+): {
+	readonly keyOf: (principal: object) => PrincipalKey | undefined
+	/**
+	 * The text of the JSON form of a principal, with no test of the copy. A
+	 * key with this text is the key that a check of the principal used, also
+	 * when its copy now is another value, as `expired` from the time now:
+	 * `invalidate` takes away that key.
+	 */
+	readonly textOf: (principal: object) => string | undefined
+} => {
 	const codec = jsonCodecOf(schema)
 	// A principal with no JSON form is never kept.
 	if (codec === undefined) {
-		return () => undefined
+		return { keyOf: () => undefined, textOf: () => undefined }
 	}
 	const encode = Schema.encodeUnknownResult(codec)
 	const decode = Schema.decodeUnknownResult(codec)
-	const keyOf = (principal: object): PrincipalKey | undefined =>
+	// The JSON form has a shared part at each place, so a principal of few
+	// objects may have a very large form. A principal past the limit is not
+	// kept: a try can not stop a heap that fills up. A very deep principal may
+	// fill the stack of the encoder or of `Equal`. Such a principal is not
+	// kept either.
+	const guarded =
+		<A>(make: (principal: object) => A | undefined) =>
+		(principal: object): A | undefined => {
+			if (!fitsNodes(principal, most)) {
+				return undefined
+			}
+			try {
+				return make(principal)
+			} catch {
+				return undefined
+			}
+		}
+	// The encoded value may hold more than its text shows, as an object of a
+	// `Schema.Any` field does: `JSON.stringify` leaves out a map. So the copy
+	// comes from the text.
+	const textOf = guarded((principal) =>
 		Result.match(encode(principal), {
 			onFailure: () => undefined,
-			onSuccess: (json) => {
-				// The copy comes from the text. The encoded value may hold more
-				// than its text shows, as an object of a `Schema.Any` field does:
-				// `JSON.stringify` leaves out a map.
-				const text = JSON.stringify(json)
-				return Result.match(decode(JSON.parse(text)), {
+			onSuccess: (json) => JSON.stringify(json),
+		}),
+	)
+	const keyOf = guarded((principal) => {
+		const text = textOf(principal)
+		return text === undefined
+			? undefined
+			: Result.match(decode(JSON.parse(text)), {
 					onFailure: () => undefined,
 					onSuccess: (decoded) =>
 						Equal.equals(decoded, principal)
 							? new PrincipalKey(decoded as object, text)
 							: undefined,
 				})
-			},
-		})
-	return (principal) => {
-		// The JSON form has a shared part at each place, so a principal of few
-		// objects may have a very large form. A principal past the limit is
-		// not kept: a try can not stop a heap that fills up.
-		if (!fitsNodes(principal, most)) {
-			return undefined
-		}
-		// A very deep principal may fill the stack of the encoder or of
-		// `Equal`. Such a principal is not kept.
-		try {
-			return keyOf(principal)
-		} catch {
-			return undefined
-		}
-	}
+	})
+	return { keyOf, textOf }
 }
 
 /**
@@ -306,7 +322,8 @@ export const makeLayer = (
 	// it. The loader always gets the copy, with a cache or not, so a cache can
 	// not change an answer: a form may lose data that `Equal` does not see,
 	// as `-0` becomes `0`. A principal with no such form gives `undefined`.
-	const canonicalOf = jsonKey(domain.principal, domain.limits.principalNodes)
+	const json = jsonKey(domain.principal, domain.limits.principalNodes)
+	const canonicalOf = json.keyOf
 	const custom = options.cache === false ? undefined : options.cache?.key
 	// It gives `undefined` when the principal has no key. Such a principal does
 	// not use the cache.
@@ -494,8 +511,15 @@ export const makeLayer = (
 				if (principal === undefined) {
 					return Cache.invalidateAll(cache)
 				}
-				const key = keyOf(principal, canonicalOf(principal))
-				return key === undefined ? Effect.void : Cache.invalidate(cache, key)
+				// A key is equal to another key by its text alone, so the key of
+				// the text is the key that the check used. The copy may now be
+				// another value, as `expired` from the time now, so the key does
+				// not need it.
+				const text =
+					custom === undefined ? json.textOf(principal) : custom(principal)
+				return text === undefined
+					? Effect.void
+					: Cache.invalidate(cache, new PrincipalKey(principal, text))
 			}
 
 			return {

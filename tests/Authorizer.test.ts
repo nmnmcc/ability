@@ -703,8 +703,10 @@ describe("Authorizer", () => {
 							CurrentTimed,
 							expired,
 						).pipe(Effect.exit)
+						// The principal of the first check: its copy now is not equal to
+						// it, as `expired` is true, but its key is the same text.
 						const auth = yield* TimedAuth
-						yield* auth.invalidate(expired)
+						yield* auth.invalidate({ id: "s", until: 10, expired: false })
 						const loaded = yield* Effect.provideService(
 							TimedAuth.check({ action: "read", resource: aliceBot }),
 							CurrentTimed,
