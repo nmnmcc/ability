@@ -487,6 +487,24 @@ interface Made {
 	readonly keyPlace: Place | undefined
 }
 
+/** A method, as a value from a prototype is. */
+const method = (): undefined => undefined
+
+/**
+ * Tells if a Schema takes a value that an object may have from a prototype:
+ * a method, or `Object.prototype` as the `__proto__` of a plain object. A
+ * Schema that may need more than its shape to say, as one that throws, is
+ * taken as one that takes them.
+ */
+const takesInherited = (schema: SchemaAST.AST): boolean => {
+	try {
+		const is = Schema.is(Schema.make(schema))
+		return is(method) || is(Object.prototype)
+	} catch {
+		return true
+	}
+}
+
 /** Tells if kinds hold any value. */
 const hasKinds = (kinds: Kinds): boolean =>
 	kinds.null ||
@@ -570,10 +588,27 @@ const placeOf = (place: Place): Made => {
 		// object, as one of `Schema.Unknown` may, may have the name with any
 		// value too.
 		const top = place.top || objects || properties.length < structs.length
+		const schemas = Arr.flatMap(properties, (property) =>
+			alternatives(property.type),
+		)
+		// A value may not have the field as its own, but have it from a
+		// prototype, as `constructor` from `Object.prototype`, or a method of a
+		// class. The Schema takes such a value when the field may hold any
+		// object, as a field of `Schema.ObjectKeyword` or `Schema.Unknown`
+		// does, and a read gives `null` for it. A struct, a record, a list or
+		// a class does not take a function or `Object.prototype`, but a struct
+		// with no field that it needs takes the `__proto__` of a value.
+		const inherited =
+			name === "__proto__" ||
+			Arr.some(
+				schemas,
+				(schema) =>
+					!isStruct(structOf(schema)) &&
+					schema._tag !== "Arrays" &&
+					takesInherited(schema),
+			)
 		const below: Place = {
-			schemas: Arr.flatMap(properties, (property) =>
-				alternatives(property.type),
-			),
+			schemas,
 			// A field below a value that is not a struct reads `null`, and so
 			// does a field that may be missing. A struct or a class may hold an
 			// `Error`, as a struct takes any object with its fields, also the
@@ -585,6 +620,7 @@ const placeOf = (place: Place): Made => {
 				place.missing ||
 				values.length > 0 ||
 				errorFields.includes(name) ||
+				inherited ||
 				Arr.some(properties, (property) => SchemaAST.isOptional(property.type)),
 			top,
 			// A value that may be anything may be a list, or have a getter, so

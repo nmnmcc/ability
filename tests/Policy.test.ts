@@ -5403,9 +5403,10 @@ describe("Policy", () => {
 			)
 		})
 
-		it("reads a field named constructor as data", () => {
-			// The field is required, so a value always has it.
-			assert.strictEqual(
+		it("takes a field that a value may have from a prototype as a field that may be missing", () => {
+			// `{}` fits the Schema with the `constructor` of `Object.prototype`,
+			// but a read takes only its own fields, so the field reads `null`.
+			assert.notStrictEqual(
 				denyCoverage(
 					{ constructor: Schema.ObjectKeyword },
 					$.not($.exists("constructor")),
