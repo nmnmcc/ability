@@ -556,7 +556,14 @@ export const satisfiable = (
 	kindsOf: (field: string) => Catalog.Kinds,
 	budget: number = Limits.searchSteps,
 	fields: number = Limits.searchFields,
+	/** The Schema has a value: see `Catalog.inhabited`. */
+	inhabited: boolean = true,
 ): Satisfiability => {
+	// With no value of the Schema, no value makes the condition true. A
+	// search would give an example that the Schema does not take.
+	if (!inhabited) {
+		return satisfiability.Unsatisfiable()
+	}
 	if (node.opaque) {
 		return satisfiability.Unknown({ reason: "predicate" })
 	}

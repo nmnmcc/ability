@@ -1392,16 +1392,19 @@ export interface SatisfiableOptions {
 export const satisfiable = (
 	condition: Any,
 	options: SatisfiableOptions = {},
-): Satisfiability =>
-	Search.satisfiable(
+): Satisfiability => {
+	const catalog =
+		options.schema === undefined
+			? undefined
+			: Catalog.catalogOf(options.schema.ast)
+	return Search.satisfiable(
 		nodeOf(condition),
-		Search.kindsIn(
-			options.schema === undefined
-				? undefined
-				: Catalog.catalogOf(options.schema.ast),
-		),
+		Search.kindsIn(catalog),
 		options.budget,
+		undefined,
+		catalog?.inhabited ?? true,
 	)
+}
 
 /**
  * The JSON form of an operand.

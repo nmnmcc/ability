@@ -4872,6 +4872,19 @@ describe("Policy", () => {
 		assert.strictEqual(decide(8), "NotApplicable")
 	})
 
+	it("gives no coverage of a kind that has no value", () => {
+		const Empty = Resource.make("NoValue", {
+			actions: ["read"],
+			fields: { never: Schema.Never },
+		})
+		const Empties = Domain.make({ principal: Caller, resources: [Empty] })
+		const policy = Policy.define(Empties)(function* (_) {
+			yield* _.allow("read", Empty)
+		})
+		const kind = { principal: alice, action: "read", kind: "NoValue" } as const
+		assert.strictEqual(Policy.coverage(policy, kind)._tag, "None")
+	})
+
 	it("takes the error fields of a struct as fields that may be missing, as an Error fits the struct", () => {
 		const Row = Resource.make("ErrorRow", {
 			actions: ["read"],

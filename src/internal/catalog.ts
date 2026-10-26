@@ -160,6 +160,12 @@ export interface Branch {
 	readonly structs: boolean
 	readonly open: boolean
 	readonly plain: boolean
+	/**
+	 * The field may hold a value that needs no field below it: a scalar, a
+	 * list, a record, any object, or `null`. A field that may hold only
+	 * structs has a value only when each of their fields has one.
+	 */
+	readonly leaf: boolean
 	/** The ids of the places below, by name, in the order of the Schema. */
 	readonly children: ReadonlyArray<readonly [string, number]>
 	/**
@@ -184,6 +190,11 @@ export interface Catalog {
 	 */
 	readonly edges: number
 	readonly root: Branch
+	/**
+	 * The Schema has a value. A Schema with no value, as `Schema.Never`, or a
+	 * struct with a field of `Schema.Never`, makes every condition false.
+	 */
+	readonly inhabited: boolean
 }
 
 /**
@@ -476,6 +487,48 @@ interface Made {
 	readonly keyPlace: Place | undefined
 }
 
+/** Tells if kinds hold any value. */
+const hasKinds = (kinds: Kinds): boolean =>
+	kinds.null ||
+	kinds.boolean ||
+	kinds.string ||
+	kinds.number !== "none" ||
+	kinds.object ||
+	kinds.literals.length > 0
+
+/**
+ * Tells if the root of the places has a value. A place has one when it may
+ * hold a value with no field below it, or when it may hold structs and each
+ * field below it has one. A recursive Schema may need a field below to have
+ * a value first, so the walk goes over the places again until nothing
+ * changes, the places far from the root first, as the ids of a queue grow
+ * with the steps from the root. Each pass marks a place more, or it is the
+ * last, so there are at most as many passes as places. The marks belong to
+ * this call.
+ */
+const inhabitedOf = (branches: ReadonlyArray<Branch>): boolean => {
+	const marked: Array<boolean> = Arr.map(branches, (branch) => branch.leaf)
+	const backward = Arr.reverse(branches)
+	Arr.unfold(true, (changed) => {
+		if (!changed || marked[0] === true) {
+			return Option.none()
+		}
+		const more = Arr.reduce(backward, false, (found, branch) => {
+			if (
+				marked[branch.id] !== true &&
+				branch.structs &&
+				Arr.every(branch.children, ([, id]) => marked[id] === true)
+			) {
+				marked[branch.id] = true
+				return true
+			}
+			return found
+		})
+		return Option.some([more, more] as const)
+	})
+	return marked[0] === true
+}
+
 /** Works out the facts of a place, and the places below it. */
 const placeOf = (place: Place): Made => {
 	const structs = Arr.filter(Arr.map(place.schemas, structOf), isStruct)
@@ -566,6 +619,12 @@ const placeOf = (place: Place): Made => {
 			// another holds parts too.
 			open: records.length > 0 || structs.length > 0 || objects || place.top,
 			plain: place.plain,
+			leaf:
+				hasKinds(valueKinds) ||
+				records.length > 0 ||
+				objects ||
+				place.top ||
+				place.missing,
 			key:
 				signatures.length === 0
 					? undefined
@@ -787,6 +846,7 @@ export const catalogOf = (ast: SchemaAST.AST): Catalog => {
 	})
 	return {
 		branches,
+		inhabited: inhabitedOf(branches),
 		edges: Arr.reduce(
 			branches,
 			0,

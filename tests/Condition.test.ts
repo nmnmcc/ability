@@ -493,6 +493,35 @@ describe("Condition", () => {
 			)
 		})
 
+		it("finds no value for a Schema that has none", () => {
+			interface Loop {
+				readonly next: Loop
+			}
+			const Loop: Schema.Codec<Loop> = Schema.Struct({
+				next: Schema.suspend((): Schema.Codec<Loop> => Loop),
+			})
+			interface Chain {
+				readonly next: Chain | null
+			}
+			const Chain: Schema.Codec<Chain> = Schema.Struct({
+				next: Schema.NullOr(Schema.suspend((): Schema.Codec<Chain> => Chain)),
+			})
+			const tagWith = (schema: Schema.Top) =>
+				Condition.satisfiable(Condition.always, { schema })._tag
+			assert.strictEqual(tagWith(Schema.Never), "Unsatisfiable")
+			assert.strictEqual(
+				tagWith(Schema.Struct({ a: Schema.String, b: Schema.Never })),
+				"Unsatisfiable",
+			)
+			// A loop with no end has no value, and a chain that may end has one.
+			assert.strictEqual(tagWith(Loop), "Unsatisfiable")
+			assert.strictEqual(tagWith(Chain), "Satisfiable")
+			assert.strictEqual(
+				tagWith(Schema.Struct({ b: Schema.optionalKey(Schema.Never) })),
+				"Satisfiable",
+			)
+		})
+
 		it("lets an optional field be missing", () => {
 			assert.deepStrictEqual(example(_.not(_.exists("note"))), {
 				note: null,

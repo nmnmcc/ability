@@ -466,6 +466,7 @@ const search = (scoped: Scoped, ast: Ast): Condition.Satisfiability =>
 		Search.kindsIn(scoped.catalog, scoped.limits.fieldPathParts),
 		scoped.limits.searchSteps,
 		scoped.limits.searchFields,
+		scoped.catalog?.inhabited ?? true,
 	)
 
 /** The values in the scope that the policy does not allow. */
