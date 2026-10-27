@@ -6,17 +6,14 @@ person, an API token, or another service.
 
 The library is made with [Effect](https://effect.website) only:
 
-- Resources and principals are Schema classes. The types of rules, conditions
-  and checks all come from them.
+- Resources and principals use Schema. The types of rules, conditions and checks
+  all come from them.
 - A condition is plain data. You can test it on a value, make it smaller with
   the principal, change it into a database query, and keep it as JSON.
 - A policy is a tree. Lists of rules are its leaves, and you put policies
   together with `all`, `any`, `firstOf` and `ceiling`.
 - An `Authorizer` is an Effect service. A "no" goes into the error channel. When
   a policy can not be loaded, the check fails, so an error is never a "yes".
-
-Version 3.1 removes runtime size and search caps. See
-[MIGRATION.md](MIGRATION.md) to move from 2.x.
 
 ## Requirements
 
@@ -228,8 +225,7 @@ The builder in `when` has these functions:
 | `predicate(name, test)`  | The test function says yes. It may be an Effect.  |
 
 The types check paths from Schema fields. The same paths are used for
-conditions, principal references, rule fields and request fields. There is no
-separate API for deeper paths.
+conditions, principal references, rule fields and request fields.
 
 Make a condition outside a rule with a domain and a kind:
 
@@ -238,8 +234,8 @@ const $ = Condition.builder(Blog, "Post")
 const published = $.eq("published", true)
 ```
 
-The builder keeps the types of the Schema fields. It does not take free type
-arguments for the resource value or principal.
+The builder gets the resource and principal types from the domain and its Schema
+fields.
 
 A missing field of a resource has the value `null`. A field of the principal
 that is `null` or missing is different: a test with it is always false, also
@@ -381,8 +377,8 @@ optional scalar fields. It knows finite and integer number checks. It returns
 `Unknown` for object unions, recursive Schemas, dynamic records, custom
 declarations, transforms and checks it does not know. Optional or nullable
 nested objects also give `Unknown`, since their child fields are related.
-Ordinary decisions can still use supported fields of those resources, and a
-predicate can use their full values.
+Ordinary decisions can use supported fields of those resources, and a predicate
+can use their full values.
 
 `Some` means that values with each answer exist in the supported Schema. It does
 not mean that either value is in your database. To know that, run the residual
@@ -465,12 +461,11 @@ const AuthLive = Authorizer.layer(Auth, {
 The error type and the service type of every check come from the `principal`
 Effect.
 
-Authorizer has no cache options or `invalidate` method. When a business needs a
-cache, its loader owns an Effect `Cache` in a Layer. Choose the key from the
-data that selects the policy, set its expiry time, and remove entries after rule
-changes. `examples/authorizer.ts` shows a cache keyed by member id, with a 30
-second expiry and explicit invalidation. The principal used to decide is still
-the current value of the request.
+When a business needs a cache, its loader owns an Effect `Cache` in a Layer.
+Choose the key from the data that selects the policy, set its expiry time, and
+remove entries after rule changes. `examples/authorizer.ts` shows a cache keyed
+by member id, with a 30 second expiry and explicit invalidation. The principal
+used to decide is the current value of the request.
 
 Use it in a handler:
 
@@ -627,20 +622,20 @@ status codes: 403, 503, and 409.
 
 The application owns input size, depth, time and memory budgets. The library
 sets no caps on paths, policy or condition trees, meta, JSON text, Schema
-catalogs or analysis searches. The `Limits` module has been removed.
+catalogs or analysis searches.
 
 Path types and scalar union checks use tail recursion. The library sets no type
-depth cap; TypeScript still has its own limits. Runtime walks and JSON
-operations also remain subject to the JavaScript engine. No arbitrary-depth or
-fixed-cost guarantee is made.
+depth cap; TypeScript has its own limits. Runtime walks and JSON operations are
+subject to the JavaScript engine. No arbitrary-depth or fixed-cost guarantee is
+made.
 
 A coverage search may try many combinations of field values. Use it when the
 application can afford that work. `filter` and `residual` do no coverage search.
 
-Types reject wrong shapes, names, paths and value types. Runtime checks still
-reject wrong domains, invalid JSON, cycles in JSON data, and invalid nodes.
-Unknown Schemas and predicates can still give `Unknown`; they never grant
-access. The caller gives stable, checked principal and resource values.
+Types reject wrong shapes, names, paths and value types. Runtime checks reject
+wrong domains, invalid JSON, cycles in JSON data, and invalid nodes. Unknown
+Schemas and predicates can give `Unknown`; they never grant access. The caller
+gives stable, checked principal and resource values.
 
 ### Measured examples
 
