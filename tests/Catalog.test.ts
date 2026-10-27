@@ -1,56 +1,53 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Array as Arr, Option, Schema, type SchemaAST } from "effect"
-import { Domain, Resource } from "../src/index.ts"
+import { Array as Arr, Schema } from "effect"
 import * as Catalog from "../src/internal/catalog.ts"
-import { Caller } from "./fixtures.ts"
+import * as Limits from "../src/internal/limits.ts"
+import * as Nodes from "../src/internal/nodes.ts"
+import * as Search from "../src/internal/search.ts"
 import { readPart, readPath } from "../src/internal/read.ts"
 
 const catalogOf = (schema: Schema.Top) => Catalog.catalogOf(schema.ast)
-
 const texts = (schema: Schema.Top) =>
-	Arr.map(
-		schema.pipe(catalogOf, (catalog) => Catalog.fieldsOf(catalog)),
-		(field) => field.text,
-	)
-
+	Arr.map(catalogOf(schema).fields, (field) => field.text)
 const fieldOf = (schema: Schema.Top, path: string): Catalog.Field => {
 	const field = Catalog.lookup(catalogOf(schema), path)
 	assert.isDefined(field)
 	return field!
 }
 
-class Owner extends Schema.Class<Owner>("CatalogOwner")({
+class Owner extends Schema.Class<Owner, { readonly brand: unique symbol }>(
+	"CatalogOwner",
+)({
 	id: Schema.String,
 	email: Schema.optionalKey(Schema.String),
 }) {
 	get label() {
 		return this.id
 	}
+	labelText() {
+		return this.id
+	}
 }
-
-interface Link {
-	readonly value: string
-	readonly next: Link | null
-}
-const Link: Schema.Codec<Link> = Schema.Struct({
-	value: Schema.String,
-	next: Schema.NullOr(Schema.suspend((): Schema.Codec<Link> => Link)),
-})
 
 describe("Catalog", () => {
-	it("lists the fields of a struct, a field before the fields below it", () => {
-		assert.deepStrictEqual(
-			texts(
-				Schema.Struct({
-					id: Schema.String,
-					settings: Schema.Struct({ model: Schema.String, size: Schema.Int }),
-				}),
-			),
-			["id", "settings", "settings.model", "settings.size"],
-		)
+	it("lists fixed fields with each parent before its children", () => {
+		const schema = Schema.Struct({
+			id: Schema.String,
+			settings: Schema.Struct({ model: Schema.String, size: Schema.Int }),
+		})
+		assert.deepStrictEqual(texts(schema), [
+			"id",
+			"settings",
+			"settings.model",
+			"settings.size",
+		])
+		assert.isTrue(catalogOf(schema).supported)
+		assert.isFalse(fieldOf(schema, "settings").listed)
+		assert.isTrue(fieldOf(schema, "settings").open)
+		assert.isTrue(fieldOf(schema, "settings.size").listed)
 	})
 
-	it("knows the kinds of the values of each field", () => {
+	it("keeps the scalar kinds and the two known number checks", () => {
 		const schema = Schema.Struct({
 			name: Schema.String,
 			level: Schema.Int,
@@ -60,392 +57,220 @@ describe("Catalog", () => {
 			owner: Schema.NullOr(Schema.String),
 			note: Schema.optionalKey(Schema.String),
 		})
-		assert.deepStrictEqual(fieldOf(schema, "level").kinds, {
-			...Catalog.noKinds,
-			number: "integer",
-		})
+		assert.strictEqual(fieldOf(schema, "level").kinds.number, "integer")
 		assert.strictEqual(fieldOf(schema, "ratio").kinds.number, "finite")
-		assert.isTrue(fieldOf(schema, "flag").kinds.boolean)
 		assert.deepStrictEqual(fieldOf(schema, "state").kinds.literals, [
 			"open",
 			"closed",
 		])
+		assert.isTrue(fieldOf(schema, "flag").kinds.boolean)
 		assert.isTrue(fieldOf(schema, "owner").kinds.null)
 		assert.isTrue(fieldOf(schema, "note").kinds.null)
-		assert.isFalse(fieldOf(schema, "level").kinds.null)
-		// A struct takes an `Error` with its fields, and a read of a `name`
-		// that the `Error` has only from its prototype gives `null`.
-		assert.isTrue(fieldOf(schema, "name").kinds.null)
+		assert.isFalse(fieldOf(schema, "name").kinds.null)
+		assert.isTrue(catalogOf(schema).supported)
 	})
 
-	it("reads the data fields of a class, not its getters", () => {
+	it("uses safe integers for the catalog and search", () => {
+		const catalog = catalogOf(Schema.Struct({ value: Schema.Int }))
+		const kinds = Catalog.lookup(catalog, "value")!.kinds
+		Arr.forEach(
+			[
+				Number.MIN_SAFE_INTEGER - 1,
+				Number.MIN_SAFE_INTEGER,
+				Number.MAX_SAFE_INTEGER,
+				Number.MAX_SAFE_INTEGER + 1,
+				1.5,
+			],
+			(value) => {
+				const accepted = Schema.is(Schema.Int)(value)
+				assert.strictEqual(Catalog.accepts(kinds, value), accepted)
+				const condition = new Nodes.Compare({
+					op: "eq",
+					field: "value",
+					value: Nodes.literal(value),
+				})
+				assert.strictEqual(
+					Search.satisfiable(condition, catalog)._tag,
+					accepted ? "Satisfiable" : "Unsatisfiable",
+				)
+			},
+		)
+	})
+
+	it("reads only the data fields of a standard class", () => {
 		const schema = Schema.Struct({ owner: Owner })
 		assert.deepStrictEqual(texts(schema), ["owner", "owner.id", "owner.email"])
 		assert.isUndefined(Catalog.lookup(catalogOf(schema), "owner.label"))
-		assert.isTrue(fieldOf(schema, "owner.email").kinds.null)
+		assert.isUndefined(Catalog.lookup(catalogOf(schema), "owner.labelText"))
+		assert.isTrue(catalogOf(schema).supported)
 	})
 
-	it("puts the branches of a union together", () => {
+	it("keeps nullable and optional objects but makes no proof for them", () => {
 		const schema = Schema.Struct({
+			a: Schema.NullOr(Schema.Struct({ id: Schema.String })),
+			b: Schema.optionalKey(Schema.Struct({ id: Schema.String })),
+		})
+		assert.deepStrictEqual(texts(schema), ["a", "a.id", "b", "b.id"])
+		assert.isTrue(fieldOf(schema, "a.id").kinds.null)
+		assert.isTrue(fieldOf(schema, "b.id").kinds.null)
+		assert.isFalse(catalogOf(schema).supported)
+	})
+
+	it("keeps complex shapes as whole fields", () => {
+		const schema = Schema.Struct({
+			items: Schema.Array(Schema.String),
+			data: Schema.Record(Schema.String, Schema.String),
 			box: Schema.Union([
-				Schema.Struct({ kind: Schema.Literal("a"), size: Schema.Int }),
-				Schema.Struct({ kind: Schema.Literal("b"), label: Schema.String }),
+				Schema.Struct({ a: Schema.String }),
+				Schema.Struct({ b: Schema.String }),
 			]),
-			either: Schema.Union([
-				Schema.String,
-				Schema.Struct({ part: Schema.String }),
-			]),
+			custom: Schema.declare(
+				(value): value is string => typeof value === "string",
+			),
+			value: Schema.Unknown,
 		})
-		assert.deepStrictEqual(fieldOf(schema, "box.kind").kinds.literals, [
+		assert.deepStrictEqual(texts(schema), [
+			"items",
+			"data",
+			"box",
+			"custom",
+			"value",
+		])
+		assert.isFalse(catalogOf(schema).supported)
+		assert.isUndefined(Catalog.lookup(catalogOf(schema), "data.key"))
+		assert.isUndefined(Catalog.lookup(catalogOf(schema), "items.0"))
+	})
+
+	it("does not call a recursive Schema thunk", () => {
+		const schema = Schema.Struct({
+			link: Schema.suspend(() => {
+				throw new Error("Do not open this Schema")
+			}),
+		})
+		assert.deepStrictEqual(texts(schema), ["link"])
+		assert.isFalse(catalogOf(schema).supported)
+	})
+
+	it("does not run user checks and makes no proof for them", () => {
+		const schema = Schema.Struct({
+			value: Schema.String.check(
+				Schema.makeFilter(() => {
+					throw new Error("Do not run this check")
+				}),
+			),
+		})
+		assert.deepStrictEqual(texts(schema), ["value"])
+		assert.isFalse(catalogOf(schema).supported)
+	})
+
+	it("makes no proof for a scalar codec", () => {
+		const schema = Schema.Struct({ value: Schema.FiniteFromString })
+		assert.deepStrictEqual(texts(schema), ["value"])
+		assert.isFalse(catalogOf(schema).supported)
+		assert.isFalse(fieldOf(schema, "value").scalar)
+		assert.deepStrictEqual(
+			Search.satisfiable(Nodes.always, catalogOf(schema)),
+			{
+				_tag: "Unknown",
+				reason: "schema",
+			},
+		)
+	})
+
+	it("ends each path at five parts", () => {
+		const schema = Schema.Struct({
+			a: Schema.Struct({
+				b: Schema.Struct({
+					c: Schema.Struct({
+						d: Schema.Struct({ e: Schema.Struct({ f: Schema.String }) }),
+					}),
+				}),
+			}),
+		})
+		assert.deepStrictEqual(texts(schema), [
 			"a",
-			"b",
+			"a.b",
+			"a.b.c",
+			"a.b.c.d",
+			"a.b.c.d.e",
 		])
-		// A branch with no `size` may still have it as an extra field.
-		assert.deepStrictEqual(fieldOf(schema, "box.size").kinds, Catalog.anyKinds)
-		// Below a string, a part reads `null`.
-		assert.isTrue(fieldOf(schema, "either.part").kinds.null)
-		assert.isTrue(fieldOf(schema, "either").listed)
-		assert.isTrue(fieldOf(schema, "either").kinds.string)
+		assert.isTrue(fieldOf(schema, "a.b.c.d.e").listed)
+		assert.isUndefined(Catalog.lookup(catalogOf(schema), "a.b.c.d.e.f"))
+		assert.isFalse(catalogOf(schema).supported)
 	})
 
-	it("gives a part for the keys of a record", () => {
-		const schema = Schema.Struct({
-			tags: Schema.Record(Schema.String, Schema.String),
-			counts: Schema.Record(Schema.Finite, Schema.String),
-			entries: Schema.Record(
-				Schema.TemplateLiteral(["x", Schema.String]),
-				Schema.Struct({ secret: Schema.String }),
-			),
-		})
-		assert.deepStrictEqual(texts(schema), [
-			"tags",
-			"tags.*",
-			"counts",
-			"counts.*",
-			"entries",
-			"entries.*",
-			"entries.*.secret",
-		])
-		assert.isTrue(fieldOf(schema, "tags.owner").kinds.null)
-		assert.isTrue(fieldOf(schema, "tags").open)
-		assert.isTrue(fieldOf(schema, "tags").listed)
-		assert.isDefined(Catalog.lookup(catalogOf(schema), "counts.1"))
-		assert.isUndefined(Catalog.lookup(catalogOf(schema), "counts.x"))
-		assert.isDefined(Catalog.lookup(catalogOf(schema), "entries.x1.secret"))
-		assert.isUndefined(Catalog.lookup(catalogOf(schema), "entries.y1.secret"))
-	})
-
-	it("names a number key of a struct with its text", () => {
-		const schema = Schema.Struct({
-			data: Schema.Record(Schema.Literal(1), Schema.String),
-		})
-		assert.deepStrictEqual(texts(schema), ["data", "data.1"])
-		assert.isTrue(fieldOf(schema, "data.1").kinds.string)
-		assert.isTrue(fieldOf(schema, "data.1").listed)
-	})
-
-	it("marks the fields where a read may find data that is not plain", () => {
-		class Named extends Schema.Class<Named>("CatalogNamed")({
-			flag: Schema.String,
-		}) {}
-		const schema = Schema.Struct({
-			owner: Schema.Union([Owner, Schema.Struct({ label: Schema.String })]),
-			named: Schema.Union([Named, Schema.Struct({ other: Schema.String })]),
-			dated: Schema.Union([
-				Schema.Date,
-				Schema.Struct({ flag: Schema.String }),
-			]),
-			text: Schema.Union([
+	it("takes 1,000 fields and rejects one more", () => {
+		const fields = Object.fromEntries(
+			Arr.makeBy(Limits.catalogFields, (index) => [
+				`field${index}`,
 				Schema.String,
-				Schema.Struct({ flag: Schema.String }),
 			]),
-			any: Schema.Union([
-				Schema.Unknown,
-				Schema.Struct({ flag: Schema.String }),
-			]),
-		})
-		// The class `Owner` has a getter `label`, and no field of that name.
-		// The struct has no field `id`.
-		assert.isFalse(fieldOf(schema, "owner.label").plain)
-		assert.isFalse(fieldOf(schema, "owner.id").plain)
-		// A struct or a class without the field may have it with any value, as
-		// a list, or as a getter of a class.
-		assert.isFalse(fieldOf(schema, "named.flag").plain)
-		assert.isFalse(fieldOf(schema, "named.other").plain)
-		assert.isFalse(fieldOf(schema, "dated.flag").plain)
-		assert.isTrue(fieldOf(schema, "text.flag").plain)
-		// A read below a `bigint` or a `symbol` gives `null`, as below a string.
-		const primitives = Schema.Struct({
-			big: Schema.Union([
-				Schema.BigInt,
-				Schema.Struct({ owner: Schema.String }),
-			]),
-			sym: Schema.Union([
-				Schema.Symbol,
-				Schema.Struct({ owner: Schema.String }),
-			]),
-		})
-		assert.isTrue(fieldOf(primitives, "big.owner").plain)
-		assert.isTrue(fieldOf(primitives, "sym.owner").plain)
-		assert.isFalse(fieldOf(schema, "any.flag").plain)
-		assert.isTrue(fieldOf(schema, "dated").plain)
-	})
-
-	it("finds a field of a recursive Schema at any part, up to the limit", () => {
-		const schema = Schema.Struct({ root: Link })
-		const catalog = catalogOf(schema)
-		// `next` and `next.next` lead to one place.
-		assert.isTrue(catalog.branches.length < 10)
-		const deep = (links: number) =>
-			["root", ...Arr.makeBy(links, () => "next"), "value"].join(".")
-		assert.isDefined(Catalog.lookup(catalog, deep(998)))
-		assert.isUndefined(Catalog.lookup(catalog, deep(999)))
-		assert.isDefined(Catalog.lookup(catalog, deep(1998), 2000))
-		assert.isUndefined(Catalog.lookup(catalog, deep(3), 4))
-		// A struct at the last part is one field.
-		assert.isTrue(Catalog.lookup(catalog, "root", 1)!.listed)
-		assert.isFalse(Catalog.lookup(catalog, "root")!.listed)
-		// The list goes into each recursive place one time on each path. The
-		// place of `root.next.next` may be missing too, so it is not the place
-		// of `root.next`.
-		assert.deepStrictEqual(texts(schema), [
-			"root",
-			"root.value",
-			"root.next",
-			"root.next.value",
-			"root.next.next",
-			"root.next.next.value",
-			"root.next.next.next",
-		])
-	})
-
-	it("keeps a value with parts that it does not know as one field", () => {
-		const schema = Schema.Struct({
-			when: Schema.Date,
-			tags: Schema.Array(Schema.String),
-			data: Schema.Json,
-			empty: Schema.Struct({}),
-		})
-		assert.deepStrictEqual(texts(schema), ["when", "tags", "data", "empty"])
-		assert.deepStrictEqual(fieldOf(schema, "data").kinds, Catalog.anyKinds)
-		assert.deepStrictEqual(fieldOf(schema, "empty").kinds, Catalog.anyKinds)
-		assert.isTrue(fieldOf(schema, "tags").open)
-		assert.isTrue(fieldOf(schema, "tags").kinds.object)
-	})
-
-	it("does not take a field name with a dot or an empty name", () => {
-		assert.throws(
-			() => catalogOf(Schema.Struct({ "a.b": Schema.String })),
-			/may not have a dot/,
+		)
+		assert.strictEqual(
+			catalogOf(Schema.Struct(fields)).fields.length,
+			Limits.catalogFields,
 		)
 		assert.throws(
-			() => catalogOf(Schema.Struct({ "": Schema.String })),
-			/may not be empty/,
+			() => catalogOf(Schema.Struct({ ...fields, extra: Schema.String })),
+			/The most is 1000/,
 		)
 	})
 
-	it("stops the list of a Schema with very many shared parts at the limit", () => {
-		// Each level holds the level below two times, so 23 levels have about
-		// 2 ** 24 paths of fields.
-		const shared = Arr.reduce(
-			Arr.range(1, 23),
-			Schema.String as Schema.Top,
-			(child) => Schema.Struct({ a: child, b: child }),
-		)
-		const Tree = Resource.make("SharedTree", {
-			actions: ["read"],
-			fields: { root: shared as Schema.Struct.Fields[string] },
+	it("rejects names with a dot, a star, or no text", () => {
+		Arr.forEach(["a.b", "a*", ""], (name) => {
+			assert.throws(
+				() => catalogOf(Schema.Struct({ [name]: Schema.String })),
+				/field name/,
+			)
 		})
-		const start = Date.now()
-		assert.throws(
-			() =>
-				Domain.make({
-					principal: Caller,
-					resources: [Tree],
-					limits: { catalogFields: 100 },
-				}),
-			/has 101 fields. The most is 100./,
-		)
-		assert.isBelow(Date.now() - start, 1000)
 	})
 
-	it("makes the catalog of a union very many levels deep", () => {
-		const deep = Arr.reduce(
-			Arr.range(1, 5000),
-			Schema.String as Schema.Codec<string>,
-			(inner) => Schema.Union([Schema.String, inner]),
+	it("knows when a required field has no value", () => {
+		assert.isFalse(catalogOf(Schema.Struct({ value: Schema.Never })).inhabited)
+		assert.isTrue(
+			catalogOf(Schema.Struct({ value: Schema.optionalKey(Schema.Never) }))
+				.inhabited,
 		)
-		const Deep = Resource.make("DeepUnion", {
-			actions: ["read"],
-			fields: { name: deep },
-		})
-		assert.doesNotThrow(() =>
-			Domain.make({ principal: Caller, resources: [Deep] }),
-		)
-		assert.isTrue(fieldOf(Schema.Struct({ name: deep }), "name").kinds.string)
-	})
-
-	it("reads a number with very many checks", () => {
-		const checked = Arr.reduce(
-			Arr.range(1, 10_000),
-			Schema.isGreaterThan(0) as SchemaAST.Check<number>,
-			// Each check holds the group of the checks before it.
-			(inner, index) => Schema.isLessThan(index + 10).and(inner),
-		)
-		// The search for the check of whole numbers opens every group.
-		const schema = Schema.Struct({ n: Schema.Finite.check(checked) })
-		assert.strictEqual(fieldOf(schema, "n").kinds.number, "finite")
-	})
-
-	it("makes the catalog of a struct with very many fields", () => {
-		const Wide = Resource.make("VeryWide", {
-			actions: ["read"],
-			fields: Object.fromEntries(
-				Array.from({ length: 150_000 }, (_, index) => [
-					`f${String(index)}`,
-					Schema.String,
-				]),
-			),
-		})
-		const domain = Domain.make({
-			principal: Caller,
-			resources: [Wide],
-			limits: { catalogFields: 200_000 },
-		})
-		assert.isDefined(domain.resources)
-	}, 60_000)
-
-	it("stops a Schema with more fields than its domain takes", () => {
-		const wide = Resource.make("Wide", {
-			actions: ["read"],
-			fields: Object.fromEntries(
-				Array.from({ length: 1001 }, (_, index) => [
-					`f${String(index)}`,
-					Schema.String,
-				]),
-			),
-		})
-		assert.doesNotThrow(() =>
-			Domain.make({ principal: Caller, resources: [wide] }),
-		)
-		assert.throws(
-			() =>
-				Domain.make({
-					principal: Caller,
-					resources: [wide],
-					limits: { catalogFields: 1000 },
-				}),
-			/The Schema of the resource "Wide" has 1001 fields. The most is 1000./,
+		assert.isTrue(
+			catalogOf(Schema.Struct({ value: Schema.NullOr(Schema.Never) }))
+				.inhabited,
 		)
 	})
 })
 
-describe("read", () => {
-	it("reads own data fields, and null for a missing one", () => {
-		assert.strictEqual(readPart({ a: 1 }, "a"), 1)
-		assert.isNull(readPart({ a: undefined }, "a"))
-		assert.isNull(readPart({}, "a"))
-		assert.isNull(readPart("text", "length"))
-		assert.isNull(readPart(null, "a"))
-		assert.isNull(readPart({}, "constructor"))
-		assert.strictEqual(readPath({ a: { b: 2 } }, ["a", "b"]), 2)
-		assert.strictEqual(readPart(Owner.make({ id: "o" }), "id"), "o")
+describe("Own data reads", () => {
+	it("reads values and makes missing or undefined values null", () => {
+		assert.strictEqual(readPart({ value: 1 }, "value"), 1)
+		assert.strictEqual(readPart({ value: undefined }, "value"), null)
+		assert.strictEqual(readPart({}, "value"), null)
+		assert.strictEqual(readPath({ one: { two: 2 } }, ["one", "two"]), 2)
+		assert.strictEqual(readPath({}, ["one", "two"]), null)
 	})
 
-	it("reads a field that a loop does not see, but not a getter", () => {
-		assert.throws(
-			() => readPart(Owner.make({ id: "o" }), "label"),
-			/not plain data/,
-		)
-		const hidden = Object.defineProperty({}, "a", { value: 1 })
-		assert.strictEqual(readPart(hidden, "a"), 1)
-		const accessor = Object.defineProperty({}, "a", {
-			get: () => 1,
-			enumerable: true,
-		})
-		assert.throws(() => readPart(accessor, "a"), /not plain data/)
-	})
-})
-
-/** Gives each place of the catalog with a path of names for one value. */
-const placesOf = (
-	catalog: Catalog.Catalog,
-	branch: Catalog.Branch,
-	value: unknown,
-	names: ReadonlyArray<string>,
-): ReadonlyArray<readonly [Catalog.Branch, ReadonlyArray<string>]> => {
-	const here = names.length === 0 ? [] : [[branch, names] as const]
-	const below = readPath(value, names)
-	// Below a part that is not an object, a read gives `null`. The walk checks
-	// one more level there and stops, since a recursive Schema has no end.
-	if (typeof below !== "object" || below === null) {
-		return [
-			...here,
-			...Arr.map(
-				branch.children,
-				([name, id]) => [catalog.branches[id]!, [...names, name]] as const,
+	it("does not call getters or read prototypes", () => {
+		class Value {
+			get value() {
+				throw new Error("Do not run this getter")
+			}
+		}
+		assert.strictEqual(readPart(new Value(), "value"), null)
+		assert.strictEqual(
+			readPart(
+				{
+					get value() {
+						throw new Error("Do not run this getter")
+					},
+				},
+				"value",
 			),
-		]
-	}
-	const keys =
-		branch.key === undefined || typeof below !== "object" || below === null
-			? []
-			: Arr.filter(
-					[...Object.keys(below), "absent"],
-					(key) =>
-						!Option.isSome(
-							Arr.findFirst(branch.children, ([name]) => name === key),
-						),
-				)
-	return [
-		...here,
-		...Arr.flatMap(branch.children, ([name, id]) =>
-			placesOf(catalog, catalog.branches[id]!, value, [...names, name]),
-		),
-		...(branch.keyBranch === undefined
-			? []
-			: Arr.flatMap(keys, (key) =>
-					placesOf(catalog, catalog.branches[branch.keyBranch!]!, value, [
-						...names,
-						key,
-					]),
-				)),
-	]
-}
-
-/** Tests that each value that a read gives fits the kinds of its field. */
-const fitsCatalog = (ast: SchemaAST.AST, value: unknown): boolean => {
-	const catalog = Catalog.catalogOf(ast)
-	return Arr.every(
-		placesOf(catalog, catalog.root, value, []),
-		([branch, names]) => Catalog.accepts(branch.kinds, readPath(value, names)),
-	)
-}
-
-describe("Catalog properties", () => {
-	const Shape = Schema.Struct({
-		name: Schema.String,
-		level: Schema.Int,
-		ratio: Schema.Finite,
-		flag: Schema.Boolean,
-		state: Schema.Literals(["open", "closed"]),
-		owner: Schema.NullOr(Owner),
-		note: Schema.optionalKey(Schema.String),
-		box: Schema.Union([
-			Schema.Struct({ kind: Schema.Literal("a"), size: Schema.Int }),
-			Schema.Struct({ kind: Schema.Literal("b"), label: Schema.String }),
-		]),
-		either: Schema.Union([Schema.String, Schema.Struct({ part: Schema.Int })]),
-		tags: Schema.Record(Schema.String, Schema.String),
-		counts: Schema.Record(Schema.String, Schema.Struct({ n: Schema.Int })),
-		link: Link,
-		when: Schema.Date,
-		list: Schema.Array(Schema.String),
+			null,
+		)
+		assert.strictEqual(readPart({}, "constructor"), null)
 	})
 
-	it.prop(
-		"holds every value that a read of a Schema value gives",
-		{ value: Shape },
-		({ value }) => fitsCatalog(Shape.ast, value),
-	)
+	it("reads hidden own data fields without Error rules", () => {
+		assert.strictEqual(readPart(new Error("no"), "message"), "no")
+		assert.strictEqual(readPart(new Error("no"), "name"), null)
+		assert.strictEqual(readPart(Owner.make({ id: "one" }), "id"), "one")
+	})
 })

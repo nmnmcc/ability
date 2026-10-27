@@ -1,263 +1,172 @@
-# From 2.1 to 2.2
+# Move from 2.x to 3.0
 
-Version 2.2 has a new limit. No code needs a change.
+Version 3 has a smaller input contract. It rejects more mistakes in TypeScript
+and checks dynamic data at a few clear boundaries. This is a major version.
+There is no compatibility layer for the removed APIs.
 
-- `principalNodes` puts a limit on the objects and items of a principal that the
-  Authorizer makes the JSON form of, for its cache key, with a shared part for
-  each place. It is 100000 by default. A principal past it is not kept in the
-  cache, and the loader gets it as it is.
-- A field pattern counts its parts times `fieldPathParts` in `searchSteps`, and
-  a field name of a rule counts one step for each of its kinds. A policy with
-  very many field patterns may need a higher `searchSteps`.
-- `Authorizer.DeciderRequest` has a field of the type `string`, as a check takes
-  a field of any length. A decider must take any field.
-- The `message`, `name`, `stack` and `cause` of an `Error` are read only when
-  they are own data fields. Since 2.2.4, a stack in the accessor of Node.js,
-  which 2.1.14 read, reads `null`. Since 2.2.6, a field of a struct or a class
-  with one of these names may be missing, as the coverage sees it, since a
-  struct takes an `Error` too.
+The four rule algorithms, policy combinators, predicates, concrete decisions,
+residuals, field permissions and HttpApi integration remain. A failure to load a
+policy still grants no access.
 
-# From 2.0 to 2.1
+## Builders belong to a domain
 
-Version 2.1 has higher limits, and a domain may set its own. No code needs a
-change.
+Use `Policy.define(domain)` or `Policy.builder(domain)` for rules. The free
+`Policy.rule` constructor is gone.
 
-- A domain may set its limits: `Domain.make({ ..., limits: { ... } })`. Each one
-  is a whole number from 1 up to its ceiling in `Limits.ceilings`. The defaults
-  are in `Limits.defaults`, and the README has a table of them.
-- The defaults are higher. A field path and a field pattern may have 1000 parts,
-  a condition and a policy tree 1000000 nodes, and a decoder reads 10000000
-  objects and items.
-- There is no limit of levels. A walk runs on the stack for an input with few
-  levels, and in the run loop of an Effect for a deeper one, so no input fills
-  the stack. `Limits.conditionDepth` and `Limits.policyDepth` are `Infinity`,
-  and they will go in 3.0.
-- The limits of nodes count each value of an `In` or `Under` test as a node. A
-  policy with very large `In` tests may need a higher `conditionNodes` or
-  `policyNodes`.
-- `JSON.stringify` of the JSON form of a very deep policy, with many thousands
-  of levels, may fail. The engine writes JSON text with a walk of its own.
-- A condition reads an own field that a loop over the keys does not see, as the
-  `message` of a `Schema.TaggedError`. Before 2.1.8, such a read was a defect,
-  but the residual and the coverage took the field as data.
-- The cache key of the Authorizer is only the JSON text of the principal, and
-  the loader gets the value that the Schema decodes from the text. Before 2.1.7,
-  a key compared the decoded values too. Data that a Schema makes when it
-  decodes, as `expired` from the time now, now stays with the policy until the
-  entry ends. Use `timeToLive`, `invalidate` or `cache: { key }` for such data.
-- The types check each field path that you write, part by part, up to about 1000
-  parts: in a condition, in the fields of a rule, and in the field of a request.
-  `FieldPath`, `FieldSelector` and `FieldName` still list the paths down to 5
-  parts. A struct at part 5 is no longer one field of a request, since a path
-  may go below it.
-
-# From 1.x to 2.0
-
-Version 2.0 makes the library smaller and stricter. Most programs need only the
-changes in the first part. The second part lists the changes in behavior. Read
-it before you deploy, mainly if you keep policies as JSON.
-
-## Changes to the code
-
-### The `Rule` and `Principal` modules are gone
-
-The types and the builder of rules are in `Policy` now.
-
-| 1.x                        | 2.0                        |
-| -------------------------- | -------------------------- |
-| `Rule.builder(domain)`     | `Policy.builder(domain)`   |
-| `Rule.make(data)`          | `Policy.rule(data)`        |
-| `Rule.Rule<E, R, O, D, I>` | `Policy.Rule<D, I, X>`     |
-| `Rule.Builder<D>`          | `Policy.Builder<D>`        |
-| `Rule.DataFor<D, K>`       | `Policy.DataFor<D, K>`     |
-| `Principal.Class<User>(…)` | `Schema.Class<User>(…)`    |
-| `Policy.rules(domain, xs)` | `Policy.define(domain)(…)` |
-| `Policy.empty(domain)`     | `Policy.define(domain)(…)` |
-
-`Policy.rule` takes no condition with a predicate: a predicate reads the values
-of the kinds of its rule, and only the builder keeps that in the types. Make a
-rule with a predicate with `Policy.builder`.
-
-A principal is any Schema of objects. A list of rules goes into a policy through
-`Policy.define`:
+The condition builder needs a domain and a resource kind:
 
 ```ts
-const policy = Policy.define(App)(function* () {
-	yield* rules
-})
+const $ = Condition.builder(App, "Post")
+const own = $.eq("authorId", $.principal("id"))
 ```
 
-### Two type fields in place of four
+Do not supply free resource or principal type arguments. The builder type is
+`Condition.Builder<typeof App, "Post">`.
 
-A condition, a rule and a policy keep two type fields now:
+The domain keeps the principal Schema type. A resource keeps the types of its
+Schema fields. Field paths come from those fields, not from the full instance
+type. Getters, methods, array indices and dynamic record keys are not paths. Use
+a predicate to work with such values. Predicates still get the full class value,
+with its methods, and keep their Effect error and service types.
 
-| 1.x                     | 2.0               |
-| ----------------------- | ----------------- |
-| `Condition<E, R, O, I>` | `Condition<I, X>` |
-| `Policy<D, E, R, O>`    | `Policy<D, X>`    |
-| `Coverage<E, R, O, I>`  | `Coverage<I, X>`  |
+Paths have at most five parts. `DeepTarget`, `DeepRequest` and the deeper path
+overloads are gone. Give a deeply nested or complex value one stable field, or
+use a predicate for its contents.
 
-The `Residuals` type is gone, with `Policy.residuals`. Use `Policy.residual`,
-which gives a `Condition<I, X>`.
+## Field permissions use paths
 
-`I` is what a condition reads, as before. `X` is `Condition.Opaque<E, R>` when
-there is a predicate, with its error type `E` and its service type `R`, and
-`never` for plain data. `Condition.ErrorOf<X>` and `Condition.ServicesOf<X>`
-give `E` and `R`. Most code names no type fields, and needs no change.
-
-The types `Checked`, `Variance`, `Marks`, `AndCondition`, `OrCondition`,
-`NotCondition`, `PredicateCondition`, `PredicateRun` and `TypedNode` are gone.
-They kept the types of each child of a node. A node is a class now, so a spread
-of a node is not a node, and the types of its children are not needed.
-
-### Data first
-
-These functions take the policy or the condition first, and the request or the
-input second. The forms with the request first are gone:
-
-`Policy.decide`, `decideSync`, `explain`, `permittedFields`, `residual`,
-`coverage`, and `Condition.evaluate`, `evaluateSync`, `partial`, `satisfiable`.
-
-`Policy.ceiling`, `Policy.provideContext`, `Condition.provideContext` and
-`Condition.fold` keep both forms, for `pipe`.
+Give a real path, a parent path or `"*"`:
 
 ```ts
-// 1.x
-policy.pipe(Policy.decide(request))
-// 2.0
-Policy.decide(policy, request)
+_.allow("update", Post, { fields: ["settings"] })
+_.deny("update", Post, { fields: ["settings.secret"] })
 ```
 
-### The Authorizer takes the principal in the service
+`settings` includes `settings.model` and its other children. The deny on
+`settings.secret` also stops a request to change the whole `settings` value.
+`fields: []` grants no fields.
+
+Patterns such as `secret*`, `settings.*` and `**.secret` are gone. Replace a
+parent pattern with its parent path. Replace a pattern across separate fields
+with an explicit list of real paths. An unknown path is an error.
+
+## Codecs read and write JSON text
+
+`Policy.schema(domain)` now has encoded type `string`:
 
 ```ts
-// 1.x
-class Auth extends Authorizer.Service<Auth, { requires: Identity }>()(
-	"app/Auth",
-	App,
-) {}
-const AuthLive = Authorizer.layer(Auth, { principal: Identity, policy })
-
-// 2.0
-class Auth extends Authorizer.Service<Auth>()("app/Auth", {
-	domain: App,
-	principal: Identity,
-}) {}
-const AuthLive = Authorizer.layer(Auth, { policy })
+const codec = Policy.schema(App)
+const text = Schema.encodeSync(codec)(policy)
+const loaded = Schema.decodeSync(codec)(text)
 ```
 
-The error type and the service type of every check come from the `principal`
-Effect. The `Config` type is gone.
+Remove `JSON.stringify` around an encoded policy. Remove `JSON.parse` before the
+decode call. For an old object held in memory, turn it into text once at the
+migration boundary and pass that text to the Codec. It must meet the new field
+and size limits.
 
-### A list in HttpApi gives its query
-
-`HttpApi.lists` gives a requirement with a `filter` function. The handler gets
-the list query from it, with the same scope as the middleware:
+The condition Codec also needs the domain and kind:
 
 ```ts
-const postsOfUser = HttpApi.lists(Auth, "read", "Post", {
-	within: (params) => ($) => $.eq("authorId", params.user ?? ""),
-})
-// In the handler, with the authorizer from `yield* Auth`:
-const where = Effect.flatMap(Auth, (auth) => postsOfUser.filter(auth))
+const codec = Condition.schema(App, "Post")
+const text = Schema.encodeSync(codec)(condition)
+const loaded = Schema.decodeSync(codec)(text)
 ```
 
-### Other removed functions
+Decoding binds the condition to the domain before returning it. Public object
+encoding types are gone. Use the Codec as the storage format boundary. Unknown
+tags, missing conditions, wrong fields and invalid JSON are Schema errors.
+Non-finite numbers are rejected when encoding. They do not become `null`.
+Predicates still can not enter a Codec or a synchronous decision.
 
-| 1.x                                            | 2.0                                   |
-| ---------------------------------------------- | ------------------------------------- |
-| `Condition.simplifier()`                       | `Condition.simplify`                  |
-| `Policy.scopeHasValue`, `scopeIsEmpty`         | `Policy.coverage`                     |
-| `Resource.hasValue`, `hasNoValue`              | gone: the search reads the shape      |
-| `Resource.isPlainField`, `domainOf`            | gone: the search reads the shape      |
-| `Resource.fieldPaths`, `descriptor.fieldPaths` | `Policy.permittedFields`              |
-| `Rule.matchesField`, `matchesInside`           | gone                                  |
-| `Policy.residuals`                             | `Policy.residual`                     |
-| `Policy.fitsKind`, `isPolicy`                  | gone                                  |
-| `Resource.descriptor`, `kindOf`, `isResource`  | gone: a value has its `_tag`          |
-| `Domain.descriptorOf`, `isDomain`              | gone                                  |
-| `Condition.toJsonValue`                        | `Schema.encodeSync(Condition.schema)` |
-| `Condition.isAst`, `hasPredicate`              | gone                                  |
+## Meta is JSON data
 
-## Changes in behavior
+`Domain.make` no longer takes `meta`. There is no Meta type parameter. A rule
+takes `Schema.Json`, with at most 16 levels. Functions, class instances,
+`undefined`, Effect values and custom codecs are not meta.
 
-### A rule is checked when it goes into a policy
-
-`Policy.define` checks every rule against the domain, and throws a `PolicyError`
-with each problem. A problem has its path, and a name that a name with a mistake
-may mean:
-
-```text
-A rule does not fit the domain: The field "titel" is not a field of every
-resource of the rule. Did you mean "title"?
-```
-
-The Schema of a policy gives the same problems at their JSON paths.
-
-### A condition reads only data fields
-
-A condition reads an own field with a value and no getter. A getter or a field
-from the prototype of a class is a defect when a check runs, and a rule that
-names one is a `PolicyError`. Use a predicate for a value that comes from code.
-
-### Field patterns
-
-- `*` stands for any text inside one part of a name, as in `secret*`.
-- `**` stands for any number of parts, and it must be a whole part. A pattern
-  such as `data.**value` is an error now. Write `data.**.value`.
-- A name covers the fields below it: `settings` covers `settings.model`.
-- A pattern that matches no field of the resources of its rule is an error.
-- A part with a star matches any key of a record. A name matches a key when the
-  Schema of the keys takes it.
-
-### Limits
-
-Each limit is in the new `Limits` module. A condition may have at most 100000
-nodes and 500 levels, and a policy tree at most 256 levels and 100000 nodes. A
-shared part counts for each place. The builder and the combinators throw an
-error past a limit, so no policy can make a check slow. A field path may have at
-most 5 parts. The decoders read at most 1000000 objects and array items.
-
-### Coverage reads the shape of the Schema
-
-`Policy.coverage` and a check on a kind read the shape of the Schema: its
-fields, literals, `null`, and integer and finite numbers. They do not read other
-checks, such as a minimum length. So:
-
-- `All` and `None` hold for every value of the Schema, as before.
-- `Some` means that, by the shape, a value may get either answer.
-- `Unknown` comes only from a predicate or from the budget. The reason
-  `"schema"` is gone.
-
-Records, classes and unions now get a real answer, where 1.x gave `Unknown`. So
-some checks on a kind that always failed in 1.x may now pass. Each such "yes" is
-right for every value of the Schema.
-
-### Shared parts
-
-A part that a policy uses in many places is decided again for each place. So its
-predicates run each time, and `Policy.explain` lists its rules each time.
-
-### The cache of the Authorizer
-
-The cache key is the JSON text of the principal, from the Schema of the
-principal. A principal is kept only when the value that the Schema decodes from
-that text is equal to it. The loader always gets that decoded copy, also with no
-cache, so it must decide by the data of the principal, not by the identity of
-its objects. The Schema must decode one text to one value each time. Give
-`cache: { key }` to make the key in another way.
-
-## Before you deploy
-
-Policies that 1.x took may not load in 2.0: a pattern with `**` inside a part, a
-field path with more than 5 parts, a field that is a getter, or a pattern that
-matches no field. In an `Authorizer`, such a policy fails with
-`PolicyUnavailable`, so no check passes. Decode every stored policy with the
-Schema of 2.0 first:
+Check the business shape before making the rule:
 
 ```ts
-const check = Schema.decodeUnknownExit(Policy.schema(App))
-const broken = storedPolicies.filter((stored) =>
-	Exit.isFailure(check(stored.json)),
-)
+const GrantMeta = Schema.Struct({ grantedBy: Schema.String })
+const meta = Schema.decodeSync(GrantMeta)({ grantedBy: "admin" })
+_.allow("read", Post, { meta })
 ```
+
+The policy Codec checks the JSON contract. Code that reads a business meta shape
+from a loaded policy must check that shape itself.
+
+## The loader owns its cache
+
+`Authorizer.layer` has no `cache` option. Services have no `invalidate` method.
+The loader gets the original principal, without a copy or a JSON round trip. For
+example, `-0` stays `-0`.
+
+Put an Effect `Cache` in a business Layer when one is needed. The loader uses
+that cache. Choose the key, the expiry time and the changes that remove an
+entry. The key must include the data used to select or build the policy.
+`examples/authorizer.ts` shows a member-id key, a 30 second expiry and explicit
+invalidation after a rule change.
+
+The principal used by a decision is the current principal of the request. One
+operation still uses one principal and policy snapshot. `guard` uses it for both
+its read and action checks. A load failure is `PolicyUnavailable`.
+
+## Stable data and conservative analysis
+
+The caller gives stable principal and resource values that it has already
+checked. Plain conditions read own data fields only. They do not walk
+prototypes, call getters or use special Error fields. Missing fields and
+`undefined` keep the missing-value behavior of 2.x.
+
+Catalogs support fixed Struct and standard Schema.Class fields. Scalars, scalar
+unions, null and optional scalar fields have normal analysis. Complex parts are
+opaque: field permissions may name the whole part, and predicates may use its
+value, but plain conditions do not read its inner fields.
+
+Coverage returns `Unknown` with reason `"schema"` for object unions, recursive
+Schemas, dynamic records, custom declarations, transforms or checks it does not
+know. Optional or nullable nested objects also give `Unknown`. This avoids a
+proof that ignores relations between fields.
+
+`Condition.satisfiable` requires an explicit Schema:
+
+```ts
+Condition.satisfiable(condition, { schema: Post })
+```
+
+It no longer accepts a budget. Coverage and satisfiability use fixed search
+limits. `Unknown` never passes a kind check or calls a fallback decider. HttpApi
+lists with `nonEmpty: true` also reject `Unknown`.
+
+`Authorizer.filter` gives the scoped residual directly. It does no coverage
+search. Do not rely on every always-true or always-false result being reduced to
+a `True` or `False` node. The residual still agrees with concrete decisions,
+including predicate order and failures.
+
+## Fixed limits
+
+`Domain.limits` and `Limits.ceilings` are gone. The Limits module exports fixed
+values and the limit error. There is no arbitrary-depth promise.
+
+| Item                         | Limit                             |
+| ---------------------------- | --------------------------------- |
+| Policy depth                 | 32                                |
+| Condition and residual depth | 64                                |
+| Field path                   | 5 parts                           |
+| Meta depth                   | 16                                |
+| Policy or condition size     | 10000 structural units            |
+| Catalog size                 | 1000 fields per Schema            |
+| JSON text                    | 1000000 UTF-16 code units         |
+| JSON containers              | 256 levels and 100000 items       |
+| Analysis                     | 16 fields and 100000 search steps |
+
+Rules, condition nodes, operands, list items and meta values count towards size.
+Shared parts count each time they appear. Constructors reject inputs past the
+fixed limits. External JSON fails in the Schema error channel. Search limits
+give `Unknown`.
+
+Types handle names, paths, shapes and value relationships. Dynamic total size,
+JSON contents, finite numbers and the identity of two domains with the same
+shape still need runtime checks. An application should test its stored policies
+against the new Codec before it deploys v3.

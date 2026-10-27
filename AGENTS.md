@@ -50,7 +50,18 @@ material. Do not change it unless the user asks.
   with changing state.
 - All types come from the `Domain`. A rule may only use the actions of its
   resource, and a condition may only use the fields of its resource and of the
-  principal. Keep these checks in the types.
+  principal. Keep these checks in the types. Every builder is bound to a domain.
+- Read paths come from Schema `fields`, not the type of a class instance. Paths
+  have at most five parts. Getters, methods, array items and dynamic record keys
+  are not read paths. A predicate may use the full class value.
+- Field permissions take a real path, a parent path or `"*"`. Do not add field
+  patterns or a second API for deeper paths.
+- A policy or condition Codec reads and writes JSON text only. Bind decoded
+  nodes to the domain before returning them. Rule `meta` is bounded JSON data;
+  the domain has no meta Codec.
+- The caller gives stable, checked principal and resource values. Read only own
+  data fields. Do not copy or encode a principal to load its policy. A business
+  layer owns any cache, its keys, its expiry and its invalidation.
 - `Resource.Class` works like `Schema.TaggedClass`. Every resource value has a
   `_tag`. Do not find a resource from a constructor name.
 - `Policy.define()` is pure and synchronous. A rule must work with generators,
@@ -82,23 +93,14 @@ material. Do not change it unless the user asks.
     `Data.taggedEnum` for small plain values, and `Schema` classes for errors
     and for data that comes from outside.
   - A node of a condition is a class in `src/internal/nodes.ts`. Only its
-    constructor makes one, also for JSON. The constructor checks the data and
-    ceilings of the limits, and it keeps the size, the weight (the nodes and the
-    values of `In` and `Under` tests), the depth and the predicate mark of the
-    node in private fields. So a walk over a condition needs no memo, and a
-    plain object or a spread of a node is not a node. A node does not know its
-    domain: the binding, the decoders and the analysis check the limits of the
-    domain.
+    constructor makes one, also for JSON. The constructor checks the fixed
+    limits. It keeps the size, depth and predicate mark in private fields. Size
+    includes nodes, operands and list items. Copy arrays and JSON meta at this
+    boundary; reuse valid child nodes. A plain object or a spread is not a node.
   - Do not make prototypes by hand. Do not write `Equal.symbol`, `Hash.symbol`
     or `NodeInspectSymbol` methods, and do not use `Object.create`. Effect data
-    types give equality, hashing and `pipe`. When a value needs an equality that
-    is not structural, such as a cache key that keeps more data than it
-    compares, implement the public `Equal.Equal` interface on a small class, and
-    say why in a comment. The nodes of a condition and of a policy tree are the
-    other case: a tree has no limit of levels, and the walk of `Data.Class`
-    calls itself for each level. So a node keeps its hash, and its equality is a
-    walk of the trampoline, both in `src/internal/structure.ts`. A rule is a
-    case too, since its `meta` may have very many levels.
+    types give equality, hashing and `pipe`. The fixed depth limits keep those
+    walks small. Do not add a custom tree hash or equality runner.
   - Do not mark values with a `TypeId`. A guard tests the class with
     `instanceof`.
   - Use the tools that Effect gives to its users, such as `Function.dual`,
@@ -109,18 +111,24 @@ material. Do not change it unless the user asks.
   must live longer belongs to a value, such as a layer. A memo that lives for
   one walk is a `Map`, not a `WeakMap`: its keys stay alive until the walk ends,
   and a `WeakMap` is slower.
-- A walk over an input with levels must not fill the stack, since there is no
-  limit of levels. Write it one time with the steps of a runner of
-  `src/internal/trampoline.ts`: `Trampoline.run` with the depth of a node, or
-  `Trampoline.adaptive` for an input of an unknown depth, as JSON. Make each
-  call for a child through `R.suspend`. Keep a path as a `Place` of
-  `src/internal/place.ts`, which shares the path of its parent, and make the
-  full path only for an issue.
+- Use bounded recursion for trees and Effect for effectful work. Check depth
+  before going to a child of an external input. Do not add a generic runner or
+  promise to support arbitrary depth.
+- The fixed limits are: policy depth 32; condition and residual depth 64; paths
+  five parts; meta depth 16; 10000 structural units per policy or condition;
+  1000 catalog fields per Schema; JSON text 1000000 UTF-16 code units, depth 256
+  and 100000 items; analysis 16 fields and 100000 steps. Shared parts count each
+  time they appear. A domain may not raise a limit.
+- Catalogs describe fixed fields only. Complex Schema parts are opaque: their
+  fields are not read by plain conditions. Coverage returns `Unknown` with
+  reason `"schema"` when it can not prove a result for a Schema. Unknown never
+  grants a kind check or calls a fallback decider. A filter gives a residual
+  without a coverage search.
 - Change as little state as you can. Use `const` and values that do not change.
   Make a new value in place of a change to an old one. A memo `Map` inside one
   call is the usual exception.
 - Pick the set or map that is right for its keys, and say why in a comment:
-  - Keys that come from a policy, as patterns, values or the text of a node, go
+  - Keys that come from a policy, as paths, values or the text of a node, go
     into a native `Map` or `Set`. The hash of a string in Effect has no random
     seed, so a policy could hold very many keys with one hash.
   - A native `Map` or `Set` finds an object by the object itself. `Equal`
@@ -171,7 +179,7 @@ devenv shell -- node examples/stored-policies.ts
 devenv shell -- node examples/predicates.ts
 devenv shell -- node examples/algorithms.ts
 devenv shell -- node examples/http-api.ts
-git diff --check
+devenv shell -- git diff --check
 ```
 
 - Run `pnpm typecheck` after a change to types or to the public API. An error

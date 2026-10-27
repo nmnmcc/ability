@@ -12,8 +12,7 @@
  * needs no memo.
  *
  * The facts are private fields, so `Equal` and `Hash` do not read them: two
- * nodes with the same data are equal. A node keeps its hash too: see
- * `Structure`.
+ * nodes with the same data are equal.
  */
 // A predicate gives an Effect with an error type and a service type that the
 // nodes do not know, so they are `unknown` here.
@@ -21,13 +20,9 @@
 import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
 import type * as Effect from "effect/Effect"
-import * as Equal from "effect/Equal"
-import * as Hash from "effect/Hash"
 import { hasProperty } from "effect/Predicate"
 import * as Schema from "effect/Schema"
 import * as Limits from "./limits.ts"
-import * as Structure from "./structure.ts"
-import * as Trampoline from "./trampoline.ts"
 
 /** A value that a condition can compare. */
 export type Scalar = string | number | boolean | null
@@ -58,20 +53,32 @@ export interface Literal {
 	readonly value: Scalar
 }
 
-/** A field of the principal. */
-export interface PrincipalRef {
-	readonly _tag: "Principal"
-	readonly path: string
+/** A field of the principal, with the domain that made the reference. */
+export class PrincipalRef extends Data.Class<{ readonly path: string }> {
+	readonly _tag = "Principal"
+	readonly #domain: object | undefined
+
+	constructor(path: string, domain?: object) {
+		super({ path })
+		this.#domain = domain
+	}
+
+	static domainOf(ref: PrincipalRef): object | undefined {
+		return ref.#domain
+	}
 }
 
 export type Operand = Literal | PrincipalRef
 
-const operands = Data.taggedEnum<Operand>()
+const operands = Data.taggedEnum<Literal>()
 
 export const literal = (value: Scalar): Literal => operands.Literal({ value })
 
-export const principalRef = (path: string): PrincipalRef =>
-	operands.Principal({ path })
+export const principalRef = (path: string, domain?: object): PrincipalRef =>
+	new PrincipalRef(path, domain)
+
+export const principalDomainOf = (ref: PrincipalRef): object | undefined =>
+	PrincipalRef.domainOf(ref)
 
 /** Tests if a value is a scalar. Any number is one, also `NaN`. */
 export const isScalar = (value: unknown): value is Scalar =>
@@ -88,9 +95,7 @@ const checkPath = (path: unknown): string => {
 	if (typeof path !== "string") {
 		throw new Error("A field path must be a string")
 	}
-	// A node does not know its domain, so it checks the ceiling. The binding
-	// to a domain checks the limit of the domain.
-	const most = Limits.ceilings.fieldPathParts
+	const most = Limits.fieldPathParts
 	const parts = path.split(".", most + 1).length
 	if (parts > most) {
 		throw Limits.exceeded(
@@ -115,7 +120,12 @@ const checkOperand = (operand: unknown): Operand => {
 			return literal(operand.value)
 		}
 		if (operand._tag === "Principal" && hasProperty(operand, "path")) {
-			return principalRef(checkPath(operand.path))
+			return principalRef(
+				checkPath(operand.path),
+				operand instanceof PrincipalRef
+					? principalDomainOf(operand)
+					: undefined,
+			)
 		}
 	}
 	throw new Error(
@@ -127,7 +137,8 @@ const checkOperands = (values: unknown): ReadonlyArray<Operand> => {
 	if (!Array.isArray(values)) {
 		throw new Error("A list of operands must be an array")
 	}
-	return Object.freeze(Arr.map(Array.from(values), checkOperand))
+	checkWeight({ ...leaf, weight: 1 + values.length })
+	return Object.freeze(Arr.map(values, checkOperand))
 }
 
 interface Facts {
@@ -148,15 +159,13 @@ const valuesFacts = (values: ReadonlyArray<Operand>): Facts =>
 	checkWeight({ ...leaf, weight: 1 + values.length })
 
 const checkWeight = (facts: Facts): Facts => {
-	// A node does not know its domain, so it checks the ceiling. The binding
-	// to a domain, and a decoder, check their limits.
-	if (facts.weight > Limits.ceilings.conditionNodes) {
+	if (facts.weight > Limits.conditionNodes) {
 		throw Limits.exceeded(
 			"A condition",
 			"conditionNodes",
 			"nodes and values",
 			facts.weight,
-			Limits.ceilings.conditionNodes,
+			Limits.conditionNodes,
 		)
 	}
 	return facts
@@ -169,6 +178,15 @@ const factsOf = (children: ReadonlyArray<Node>): Facts => {
 	checkWeight({ ...leaf, weight })
 	const depth =
 		1 + Arr.reduce(children, 0, (top, child) => Math.max(top, child.depth))
+	if (depth > Limits.conditionDepth) {
+		throw Limits.exceeded(
+			"A condition",
+			"conditionDepth",
+			"levels",
+			depth,
+			Limits.conditionDepth,
+		)
+	}
 	return {
 		size,
 		weight,
@@ -177,35 +195,44 @@ const factsOf = (children: ReadonlyArray<Node>): Facts => {
 	}
 }
 
+/** The domain that made a condition. This is not part of structural equality. */
+export interface Origin {
+	readonly domain: object
+	readonly kind: string
+}
+
+const combinedOrigin = (children: ReadonlyArray<Node>): Origin | undefined =>
+	Arr.reduce(children, undefined as Origin | undefined, (current, child) => {
+		const origin = originOf(child)
+		if (current === undefined) return origin
+		if (origin === undefined) return current
+		if (current.domain !== origin.domain)
+			throw new Error("Conditions must come from the same domain")
+		return current.kind === origin.kind
+			? current
+			: { domain: current.domain, kind: "*" }
+	})
+
 /** The base of every node. It keeps the facts. */
 abstract class Base extends Data.Class {
 	/**
-	 * The JSON form of the node, for `JSON.stringify`. A number that JSON can
-	 * not hold, as `Infinity`, becomes an object that no decoder takes, in
-	 * place of `null`, which would change the test.
+	 * The JSON form of the node. Values that JSON can not hold give an error.
 	 */
 	toJSON(): unknown {
 		return toJson(this as unknown as Node)
 	}
 
 	readonly #facts: Facts
-	readonly #hash: number
+	readonly #origin: Origin | undefined
 
-	constructor(tag: string, props: object, facts: Facts) {
+	static originOf(node: Base): Origin | undefined {
+		return node.#origin
+	}
+
+	constructor(props: object, facts: Facts, origin: Origin | undefined) {
 		super(props as never)
 		this.#facts = facts
-		this.#hash = Structure.hashOf(kind, tag, props)
-	}
-
-	// A condition has no limit of levels, so the hash and the equality are
-	// the ones of `Structure`, which do not fill the stack. They read the
-	// same data as the ones of `Data.Class`.
-	[Hash.symbol](): number {
-		return this.#hash
-	}
-
-	[Equal.symbol](that: unknown): boolean {
-		return Structure.equals(kind, this, that)
+		this.#origin = origin
 	}
 
 	/** The number of nodes, with a shared child counted for each place. */
@@ -233,23 +260,19 @@ abstract class Base extends Data.Class {
 	}
 }
 
-const kind: Structure.Kind = {
-	isNode: (u): u is Base => u instanceof Base,
-}
-
 /** Always true. */
 export class True extends Base {
 	readonly _tag = "True"
-	constructor() {
-		super("True", {}, leaf)
+	constructor(origin?: Origin) {
+		super({}, leaf, origin)
 	}
 }
 
 /** Always false. */
 export class False extends Base {
 	readonly _tag = "False"
-	constructor() {
-		super("False", {}, leaf)
+	constructor(origin?: Origin) {
+		super({}, leaf, origin)
 	}
 }
 
@@ -259,22 +282,25 @@ export class Compare extends Base {
 	declare readonly op: CompareOperator
 	declare readonly field: string
 	declare readonly value: Operand
-	constructor(props: {
-		readonly op: CompareOperator
-		readonly field: string
-		readonly value: Operand
-	}) {
+	constructor(
+		props: {
+			readonly op: CompareOperator
+			readonly field: string
+			readonly value: Operand
+		},
+		origin?: Origin,
+	) {
 		if (!isCompareOperator(props.op)) {
 			throw new Error(`"${String(props.op)}" is not a compare operator`)
 		}
 		super(
-			"Compare",
 			{
 				op: props.op,
 				field: checkPath(props.field),
 				value: checkOperand(props.value),
 			},
-			leaf,
+			{ ...leaf, weight: 2 },
+			origin,
 		)
 	}
 }
@@ -284,12 +310,19 @@ export class In extends Base {
 	readonly _tag = "In"
 	declare readonly field: string
 	declare readonly values: ReadonlyArray<Operand>
-	constructor(props: {
-		readonly field: string
-		readonly values: ReadonlyArray<Operand>
-	}) {
+	constructor(
+		props: {
+			readonly field: string
+			readonly values: ReadonlyArray<Operand>
+		},
+		origin?: Origin,
+	) {
 		const values = checkOperands(props.values)
-		super("In", { field: checkPath(props.field), values }, valuesFacts(values))
+		super(
+			{ field: checkPath(props.field), values },
+			valuesFacts(values),
+			origin,
+		)
 	}
 }
 
@@ -297,8 +330,8 @@ export class In extends Base {
 export class Exists extends Base {
 	readonly _tag = "Exists"
 	declare readonly field: string
-	constructor(props: { readonly field: string }) {
-		super("Exists", { field: checkPath(props.field) }, leaf)
+	constructor(props: { readonly field: string }, origin?: Origin) {
+		super({ field: checkPath(props.field) }, leaf, origin)
 	}
 }
 
@@ -306,9 +339,12 @@ export class Exists extends Base {
 export class Under extends Base {
 	readonly _tag = "Under"
 	declare readonly prefix: ReadonlyArray<Operand>
-	constructor(props: { readonly prefix: ReadonlyArray<Operand> }) {
+	constructor(
+		props: { readonly prefix: ReadonlyArray<Operand> },
+		origin?: Origin,
+	) {
 		const prefix = checkOperands(props.prefix)
-		super("Under", { prefix }, valuesFacts(prefix))
+		super({ prefix }, valuesFacts(prefix), origin)
 	}
 }
 
@@ -316,6 +352,7 @@ const checkChildren = (conditions: unknown): ReadonlyArray<Node> => {
 	if (!Array.isArray(conditions)) {
 		throw new Error("The children of a node must be an array")
 	}
+	checkWeight({ ...leaf, weight: 1 + conditions.length })
 	const children = Array.from(conditions as ReadonlyArray<unknown>)
 	if (!Arr.every(children, isNode)) {
 		throw notNode()
@@ -326,29 +363,37 @@ const checkChildren = (conditions: unknown): ReadonlyArray<Node> => {
 export class And extends Base {
 	readonly _tag = "And"
 	declare readonly conditions: ReadonlyArray<Node>
-	constructor(conditions: ReadonlyArray<Node>) {
+	constructor(conditions: ReadonlyArray<Node>, origin?: Origin) {
 		const children = checkChildren(conditions)
-		super("And", { conditions: children }, factsOf(children))
+		super(
+			{ conditions: children },
+			factsOf(children),
+			origin ?? combinedOrigin(children),
+		)
 	}
 }
 
 export class Or extends Base {
 	readonly _tag = "Or"
 	declare readonly conditions: ReadonlyArray<Node>
-	constructor(conditions: ReadonlyArray<Node>) {
+	constructor(conditions: ReadonlyArray<Node>, origin?: Origin) {
 		const children = checkChildren(conditions)
-		super("Or", { conditions: children }, factsOf(children))
+		super(
+			{ conditions: children },
+			factsOf(children),
+			origin ?? combinedOrigin(children),
+		)
 	}
 }
 
 export class Not extends Base {
 	readonly _tag = "Not"
 	declare readonly condition: Node
-	constructor(condition: Node) {
+	constructor(condition: Node, origin?: Origin) {
 		if (!isNode(condition)) {
 			throw notNode()
 		}
-		super("Not", { condition }, factsOf([condition]))
+		super({ condition }, factsOf([condition]), origin ?? originOf(condition))
 	}
 }
 
@@ -370,14 +415,17 @@ export class Predicate extends Base {
 		value: never,
 		principal: never,
 	) => Effect.Effect<boolean, unknown, unknown>
-	constructor(props: { readonly name: string; readonly run: Run }) {
+	constructor(
+		props: { readonly name: string; readonly run: Run },
+		origin?: Origin,
+	) {
 		if (typeof props.name !== "string" || typeof props.run !== "function") {
 			throw new Error("A predicate needs a name and a test")
 		}
 		super(
-			"Predicate",
 			{ name: props.name, run: props.run },
 			{ size: 1, weight: 1, depth: 1, opaque: true },
+			origin,
 		)
 	}
 }
@@ -389,74 +437,96 @@ export const runOf = (node: Predicate): Run => node.run as Run
 export type Node =
 	True | False | Compare | In | Exists | Under | And | Or | Not | Predicate
 
-const operandJson = (operand: Operand): unknown =>
-	operand._tag === "Literal"
-		? {
-				_tag: "Literal",
-				// JSON has no `Infinity`, `-Infinity` or `NaN`. Such a number
-				// becomes an object that the decoder does not take.
-				value:
-					typeof operand.value === "number" && !Number.isFinite(operand.value)
-						? { nonFinite: String(operand.value) }
-						: operand.value,
-			}
-		: { _tag: "Principal", path: operand.path }
+/** Gives the origin without exposing a mutable mark on a node. */
+export const originOf = (node: Node): Origin | undefined => Base.originOf(node)
 
-/**
- * Gives the JSON form of a condition with no predicate. The walk takes the
- * steps of a trampoline, so a deep condition does not fill the stack.
- */
-export const toJson = (root: Node): unknown =>
-	Trampoline.run(root.depth, (R) => {
-		const go = (node: Node): Trampoline.Step<unknown> => {
-			switch (node._tag) {
-				case "True":
-				case "False":
-					return R.succeed({ _tag: node._tag })
-				case "Compare":
-					return R.succeed({
-						_tag: "Compare",
-						op: node.op,
-						field: node.field,
-						value: operandJson(node.value),
-					})
-				case "In":
-					return R.succeed({
-						_tag: "In",
-						field: node.field,
-						values: Arr.map(node.values, operandJson),
-					})
-				case "Exists":
-					return R.succeed({ _tag: "Exists", field: node.field })
-				case "Under":
-					return R.succeed({
-						_tag: "Under",
-						prefix: Arr.map(node.prefix, operandJson),
-					})
-				case "And":
-				case "Or": {
-					const tag = node._tag
-					return R.map(
-						R.forEach(node.conditions, (child) => R.suspend(() => go(child))),
-						(conditions) => ({ _tag: tag, conditions }),
-					)
-				}
-				case "Not":
-					return R.map(
-						R.suspend(() => go(node.condition)),
-						(condition) => ({
-							_tag: "Not",
-							condition,
-						}),
-					)
-				case "Predicate":
-					throw new Error(
-						`The predicate "${node.name}" can not become JSON. A condition with a predicate has no JSON form.`,
-					)
+/** Adds a domain boundary to a node, or checks the boundary it already has. */
+export const bind = (node: Node, domain: object, kind: string): Node => {
+	const current = originOf(node)
+	if (current !== undefined) {
+		if (current.domain !== domain)
+			throw new Error("A condition belongs to another domain")
+		return node
+	}
+	const origin = { domain, kind }
+	switch (node._tag) {
+		case "True":
+			return new True(origin)
+		case "False":
+			return new False(origin)
+		case "Compare":
+			return new Compare(node, origin)
+		case "In":
+			return new In(node, origin)
+		case "Exists":
+			return new Exists(node, origin)
+		case "Under":
+			return new Under(node, origin)
+		case "And":
+			return new And(node.conditions, origin)
+		case "Or":
+			return new Or(node.conditions, origin)
+		case "Not":
+			return new Not(node.condition, origin)
+		case "Predicate":
+			return new Predicate({ name: node.name, run: runOf(node) }, origin)
+	}
+}
+
+/** Keeps a domain boundary when a walk makes a new root. */
+export const inherit = (node: Node, source: Node): Node => {
+	const origin = originOf(source)
+	return origin === undefined ? node : bind(node, origin.domain, origin.kind)
+}
+
+/** Keeps the common domain when a smart constructor reduces its children. */
+export const inheritAll = (node: Node, children: ReadonlyArray<Node>): Node => {
+	const origin = combinedOrigin(children)
+	return origin === undefined ? node : bind(node, origin.domain, origin.kind)
+}
+
+const operandJson = (operand: Operand): unknown => {
+	if (operand._tag === "Principal") {
+		return { _tag: "Principal", path: operand.path }
+	}
+	if (typeof operand.value === "number" && !Number.isFinite(operand.value)) {
+		throw new Error("A JSON number must be finite")
+	}
+	return { _tag: "Literal", value: operand.value }
+}
+
+/** Gives the JSON form of a bounded condition with no predicate. */
+export const toJson = (node: Node): unknown => {
+	switch (node._tag) {
+		case "True":
+		case "False":
+			return { _tag: node._tag }
+		case "Compare":
+			return {
+				_tag: "Compare",
+				op: node.op,
+				field: node.field,
+				value: operandJson(node.value),
 			}
-		}
-		return go(root)
-	})
+		case "In":
+			return {
+				_tag: "In",
+				field: node.field,
+				values: Arr.map(node.values, operandJson),
+			}
+		case "Exists":
+			return { _tag: "Exists", field: node.field }
+		case "Under":
+			return { _tag: "Under", prefix: Arr.map(node.prefix, operandJson) }
+		case "And":
+		case "Or":
+			return { _tag: node._tag, conditions: Arr.map(node.conditions, toJson) }
+		case "Not":
+			return { _tag: "Not", condition: toJson(node.condition) }
+		case "Predicate":
+			throw new Error(`The predicate "${node.name}" has no JSON form`)
+	}
+}
 
 /** Tests if a value is a node. Only a constructor of a node makes one. */
 export const isNode = (u: unknown): u is Node => u instanceof Base

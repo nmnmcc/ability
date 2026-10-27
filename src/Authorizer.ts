@@ -14,8 +14,8 @@
  * ```
  *
  * Then give a layer with {@link layer}. It says how to load the policy of a
- * principal. The policy of each principal is loaded once and kept in a cache
- * for a short time.
+ * principal. The loader runs for each operation. Put a cache in the loader
+ * when the application needs one.
  *
  * Then use the service in a handler:
  *
@@ -35,7 +35,6 @@
  * @since 0.3.0
  */
 import type * as Context from "effect/Context"
-import type * as Duration from "effect/Duration"
 import type * as Effect from "effect/Effect"
 import type * as Layer from "effect/Layer"
 import type * as Condition from "./Condition.ts"
@@ -108,26 +107,13 @@ export type Pending = Internal.Pending
 export type Target<D> = Policy.Target<D> | Policy.KindTarget<D>
 
 /**
- * A {@link Target} with a field of any length, which a check checks with
- * `Policy.CheckField`.
- *
- * @stability stable
- * @category models
- * @since 2.1.0
- */
-export type DeepTarget<D> = Policy.DeepTarget<D> | Policy.DeepKindTarget<D>
-
-/**
- * A request to the decider. A check takes a field of any length, so the
- * field of a request to the decider may be any string, as in
- * {@link DeepTarget}.
+ * A request to the decider. Its fields have the same paths as a check.
  *
  * @stability stable
  * @category models
  * @since 0.3.0
  */
-export type DeciderRequest<D> =
-	Policy.DeepRequest<D> | Policy.DeepKindRequest<D>
+export type DeciderRequest<D> = Policy.Request<D> | Policy.KindRequest<D>
 
 /**
  * The options of a guard.
@@ -177,12 +163,12 @@ export interface Authorizer<D extends Domain.Any, E, R> {
 		R
 	>
 	/** Gives the decision of the policy. It does not ask the decider. */
-	readonly decide: <const T extends Policy.DeepTarget<D>>(
-		target: Policy.Checked<D, T>,
+	readonly decide: <const T extends Policy.Target<D>>(
+		target: T,
 	) => Effect.Effect<Decision.Decision, PolicyUnavailable | E, R>
 	/** Succeeds when the principal may do the act, and fails when it may not. */
-	readonly check: <const T extends DeepTarget<D>>(
-		target: Policy.Checked<D, T>,
+	readonly check: <const T extends Target<D>>(
+		target: T,
 	) => Effect.Effect<void, Forbidden | Pending | PolicyUnavailable | E, R>
 	/**
 	 * Checks the read action first, and fails with the error of `hide` when the
@@ -190,18 +176,18 @@ export interface Authorizer<D extends Domain.Any, E, R> {
 	 * answer "not found" to a principal that may not know that a resource
 	 * exists.
 	 */
-	readonly guard: <const T extends Policy.DeepTarget<D>, E2>(
-		target: Policy.Checked<D, T>,
+	readonly guard: <const T extends Policy.Target<D>, E2>(
+		target: T,
 		options: GuardOptions<D, E2, T["resource"]["_tag"]>,
 	) => Effect.Effect<void, E2 | Forbidden | Pending | PolicyUnavailable | E, R>
 	/**
 	 * Gives the condition on resource values that the principal may act on,
 	 * inside the scope of the target when it has one. Change it into a query
-	 * with `Condition.fold`. It is `False` when the principal may act on no
-	 * value, so the list is empty: it is not an error.
+	 * with `Condition.fold`. It does no coverage search, so an empty result
+	 * need not have the `False` tag.
 	 */
-	readonly filter: <const T extends Policy.DeepKindTarget<D>>(
-		target: Policy.Checked<D, T>,
+	readonly filter: <const T extends Policy.KindTarget<D>>(
+		target: T,
 	) => Effect.Effect<
 		Condition.Condition<
 			Policy.ResidualReads<D, T["kind"]>,
@@ -213,10 +199,10 @@ export interface Authorizer<D extends Domain.Any, E, R> {
 	/**
 	 * Tells if the principal may act on all, none or some of the values in
 	 * the scope of the target. See `Policy.coverage`. Use it to show a button
-	 * only when the answer is not `None`.
+	 * only when the answer is `All` or `Some`.
 	 */
-	readonly coverage: <const T extends Policy.DeepKindTarget<D>>(
-		target: Policy.Checked<D, T>,
+	readonly coverage: <const T extends Policy.KindTarget<D>>(
+		target: T,
 	) => Effect.Effect<
 		Policy.Coverage<Policy.ResidualReads<D, T["kind"]>, Condition.Opaque<E>>,
 		PolicyUnavailable | E,
@@ -226,11 +212,6 @@ export interface Authorizer<D extends Domain.Any, E, R> {
 	readonly permittedFields: (
 		target: Policy.FieldlessTarget<D>,
 	) => Effect.Effect<ReadonlyArray<string>, PolicyUnavailable | E, R>
-	/**
-	 * Removes the cached policy of a principal, or of every principal. Call it
-	 * after a change to the rules or roles of a principal.
-	 */
-	readonly invalidate: (principal?: Domain.Principal<D>) => Effect.Effect<void>
 }
 
 /**
@@ -251,26 +232,26 @@ export interface ServiceClass<
 	readonly domain: D
 	/** The Effect that gives the principal of the current request. */
 	readonly principal: Effect.Effect<Domain.Principal<D>, E, R>
-	readonly decide: <const T extends Policy.DeepTarget<D>>(
-		target: Policy.Checked<D, T>,
+	readonly decide: <const T extends Policy.Target<D>>(
+		target: T,
 	) => Effect.Effect<Decision.Decision, PolicyUnavailable | E, R | Self>
-	readonly check: <const T extends DeepTarget<D>>(
-		target: Policy.Checked<D, T>,
+	readonly check: <const T extends Target<D>>(
+		target: T,
 	) => Effect.Effect<
 		void,
 		Forbidden | Pending | PolicyUnavailable | E,
 		R | Self
 	>
-	readonly guard: <const T extends Policy.DeepTarget<D>, E2>(
-		target: Policy.Checked<D, T>,
+	readonly guard: <const T extends Policy.Target<D>, E2>(
+		target: T,
 		options: GuardOptions<D, E2, T["resource"]["_tag"]>,
 	) => Effect.Effect<
 		void,
 		E2 | Forbidden | Pending | PolicyUnavailable | E,
 		R | Self
 	>
-	readonly filter: <const T extends Policy.DeepKindTarget<D>>(
-		target: Policy.Checked<D, T>,
+	readonly filter: <const T extends Policy.KindTarget<D>>(
+		target: T,
 	) => Effect.Effect<
 		Condition.Condition<
 			Policy.ResidualReads<D, T["kind"]>,
@@ -279,8 +260,8 @@ export interface ServiceClass<
 		PolicyUnavailable | E,
 		R | Self
 	>
-	readonly coverage: <const T extends Policy.DeepKindTarget<D>>(
-		target: Policy.Checked<D, T>,
+	readonly coverage: <const T extends Policy.KindTarget<D>>(
+		target: T,
 	) => Effect.Effect<
 		Policy.Coverage<Policy.ResidualReads<D, T["kind"]>, Condition.Opaque<E>>,
 		PolicyUnavailable | E,
@@ -335,7 +316,8 @@ export interface Options<D extends Domain.Any, E, R, EL, RL, RP> {
 	/**
 	 * Loads the policy of a principal. A failure becomes
 	 * {@link PolicyUnavailable}. The services of the predicates of the policy
-	 * are taken when the layer is built.
+	 * are taken when the layer is built. The loader gets the same principal
+	 * object as the current request, with no copy or JSON change.
 	 */
 	readonly policy: (
 		principal: Domain.Principal<D>,
@@ -347,30 +329,6 @@ export interface Options<D extends Domain.Any, E, R, EL, RL, RP> {
 	readonly decider?: (
 		request: DeciderRequest<D>,
 	) => Effect.Effect<Decision.Decision, Pending | E, R>
-	/**
-	 * How the policies are kept. The default keeps 1000 policies for 30 seconds.
-	 * Give `false` to load the policy for each check.
-	 *
-	 * The key of a principal is the text of its JSON form, from the Schema of
-	 * the principal of the domain. The loader gets the value that the Schema
-	 * decodes from that text, also with no cache, so what the loader sees comes
-	 * from the key. So the loader must decide by the data of the principal, not
-	 * by the identity of its objects. A principal is kept only when that copy
-	 * is `Equal` to it. A principal with no JSON form is not kept, and the
-	 * loader gets it as it is.
-	 *
-	 * The Schema must decode one text to one value each time. Data that it
-	 * makes when it decodes, as `expired` from the time now, stays with the
-	 * policy until the entry ends, as data that the loader reads does. Give
-	 * `key` to make the key in another way.
-	 */
-	readonly cache?:
-		| {
-				readonly capacity?: number
-				readonly timeToLive?: Duration.Input
-				readonly key?: (principal: Domain.Principal<D>) => string | undefined
-		  }
-		| false
 }
 
 /**

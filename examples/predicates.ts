@@ -15,7 +15,10 @@
 import { Context, Effect, Schema } from "effect"
 import { Domain, Policy, Resource } from "../src/index.ts"
 
-class Employee extends Schema.Class<Employee>("Employee")({
+class Employee extends Schema.Class<
+	Employee,
+	{ readonly brand: unique symbol }
+>("Employee")({
 	id: Schema.String,
 	floor: Schema.Finite,
 }) {}
@@ -27,14 +30,18 @@ class Room extends Resource.Class<Room>()("Room", {
 		floor: Schema.Finite,
 		seats: Schema.Finite,
 	},
-}) {}
+}) {
+	canSeatGroup() {
+		return this.seats > 0
+	}
+}
 
 const Office = Domain.make({ principal: Employee, resources: [Room] })
 
-class CalendarDown extends Schema.TaggedError<CalendarDown>()(
-	"CalendarDown",
-	{},
-) {}
+class CalendarDown extends Schema.TaggedError<
+	CalendarDown,
+	{ readonly brand: unique symbol }
+>()("CalendarDown", {}) {}
 
 class Calendar extends Context.Service<
 	Calendar,
@@ -52,7 +59,8 @@ const policy = Policy.define(Office)(function* (_) {
 				$.predicate("room is free", (room) =>
 					Effect.gen(function* () {
 						const calendar = yield* Calendar
-						return yield* calendar.isFree(room.id)
+						// A predicate gets the full class value, with its methods.
+						return room.canSeatGroup() && (yield* calendar.isFree(room.id))
 					}),
 				),
 			),

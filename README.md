@@ -15,7 +15,7 @@ The library is made with [Effect](https://effect.website) only:
 - An `Authorizer` is an Effect service. A "no" goes into the error channel. When
   a policy can not be loaded, the check fails, so an error is never a "yes".
 
-Version 2.0 changed the API. See [MIGRATION.md](MIGRATION.md) to move from 1.x.
+Version 3 narrows the API. See [MIGRATION.md](MIGRATION.md) to move from 2.x.
 
 ## Requirements
 
@@ -64,7 +64,9 @@ the same time:
 import { Effect, Schema } from "effect"
 import { Decision, Domain, Policy, Resource } from "@nmnmcc/ability"
 
-class User extends Schema.Class<User>("User")({
+class User extends Schema.Class<User, { readonly brand: unique symbol }>(
+	"User",
+)({
 	id: Schema.String,
 }) {}
 
@@ -182,56 +184,34 @@ _.allow("read", "*", {
   and the resource may be lists.
 - The action `"*"` means every action. The resource `"*"` means every resource.
 - `when` is the condition. It gets a builder with the types of the resource.
-- `fields` makes the rule about some fields only. A field name covers the fields
-  below it too, so `settings` covers `settings.model`. In a pattern, `*` stands
-  for any text inside one part of a name, as in `secret*`. `**` stands for any
-  number of parts, also none, and it must be a whole part: `**.secret` covers
-  `secret` and `settings.secret`. A pattern that matches no field of the
-  resources of the rule is an error, so a mistake in a name shows at once.
-- `reason`, `id` and `meta` are kept with the rule. `meta` is extra data, such
-  as the scope of a grant. Give its Schema to `Domain.make({ meta })`. Two rules
-  are equal only when their `meta` is equal. The test of equality walks plain
-  objects and lists of a `meta` with any number of levels. It gives any other
-  value, as a class, an `Option` or a `HashMap`, to `Equal`, which may fill the
-  stack for a value with very many levels.
+- `fields` makes the rule about some fields only. Give real field paths or `"*"`
+  for all fields. A parent includes its children: `settings` includes
+  `settings.model`. Other stars, as in `settings.*` or `secret*`, are not valid.
+  An empty list grants no fields. A deny on a child also stops a request for its
+  whole parent.
+- `reason`, `id` and `meta` are kept with the rule. `meta` is JSON data with at
+  most 16 levels. Check a business Schema before passing it as meta. The domain
+  has no meta Schema.
 
 An allow rule with fields covers a request for the whole value: "may update some
-fields" is a yes. This is true only for a kind that has one of these fields. A
-deny rule with fields does not stop a request for the whole value.
+fields" is a yes. A deny rule with fields does not stop a request for the whole
+value. Ask for a field when the operation needs that field.
 
-To know if a kind has a field that a pattern fits, the library reads the shape
-of the Schema of the kind: its fields and the keys of its records. A name in a
-pattern fits a key of a record when the Schema of the keys takes it. A part with
-a star fits any key.
+`Policy.define` checks every rule against the domain when it makes the policy. A
+mistake is a `PolicyError` with the path of the first problem. This check is
+needed for data from JavaScript or JSON. TypeScript rejects wrong names and
+value types in ordinary code.
 
-`Policy.define` checks every rule against the domain when the policy is made. A
-rule with a mistake is a `PolicyError`, with each problem and its path. For a
-name with a mistake, it gives the name that you may mean:
+Give the library stable principal and resource values that your application has
+already checked. A plain condition reads own data fields only. It does not call
+getters or walk the prototype chain. Missing fields and `undefined` read as
+`null`. Use a predicate for a value that comes from code.
 
-```text
-A rule does not fit the domain: The field "titel" is not a field of every
-resource of the rule. Did you mean "title"?
-```
-
-A condition reads only the data fields of a value: an own field with a value and
-no getter. A loop over the keys may not see it, as the `message` of a
-`Schema.TaggedError`. A field that the value has only from `Object.prototype`,
-or only as a method of its class, reads `null`, as a missing field does. The
-`message`, `name`, `stack` and `cause` of an `Error` are read only when they are
-own data fields, so a stack that the engine makes, or a name from a getter of
-Effect, reads `null`. A struct or a class may hold an `Error`, so a field with
-one of these names may be missing, as the coverage sees it. So may a field whose
-Schema takes a method or `Object.prototype`, as a field `constructor` of
-`Schema.ObjectKeyword`: `{}` fits it with the `constructor` of its prototype. A
-rule that names a getter of a class is a `PolicyError`. Use a predicate for a
-value that comes from code. A condition may not read a field, of a resource or
-of the principal, below a value that may not be plain data: a union with a
-struct or a class that does not have the field, a list, a date, or a value of
-`Schema.Unknown`. A decision may get a value made by hand, and such a value may
-have the field with any value, as a list. Such a rule is a `PolicyError` too. A
-string in a union is fine: the field reads `null` for it. A test reads only the
-fields that the simple form of its condition needs, as the residual does: in
-`x AND False`, it does not read `x`.
+Field paths come from the `fields` of a Struct or a standard Schema class. The
+type of a class may have getters and methods; those are not plain fields.
+Arrays, dynamic records, recursive types, object unions and custom Schema parts
+are opaque. Opaque means the library does not read their inner fields. A rule
+may grant the whole opaque field. A predicate may use its full value.
 
 ## Conditions
 
@@ -248,10 +228,19 @@ The builder in `when` has these functions:
 | `principal(field)`       | Not a test. It gives a field of the principal.    |
 | `predicate(name, test)`  | The test function says yes. It may be an Effect.  |
 
-The types check each field path that you write, part by part, up to about 1000
-parts, as `link.next.next.value` of a list of links. A path that is not a field
-is a type error, and the error names the paths that may come next. The same
-check is in the fields of a rule and in the field of a request.
+The types check field paths with at most five parts. The same bounded paths are
+used for conditions, principal references, rule fields and request fields. There
+is no separate API for deeper paths.
+
+Make a condition outside a rule with a domain and a kind:
+
+```ts
+const $ = Condition.builder(Blog, "Post")
+const published = $.eq("published", true)
+```
+
+The builder keeps the types of the Schema fields. It does not take free type
+arguments for the resource value or principal.
 
 A missing field of a resource has the value `null`. A field of the principal
 that is `null` or missing is different: a test with it is always false, also
@@ -268,10 +257,9 @@ So a predicate for a Document can not go into a rule for a Comment. Make
 conditions with the builder: a node made by hand, or a spread of a node, is not
 a condition, in the types or when the code runs.
 
-A condition of a domain may have at most `conditionNodes` nodes, 1000000 by
-default, with each value of an `In` test, and a shared part counted for each
-place. A larger condition is a `PolicyError`, so no condition can make a check
-slow. A condition may have any number of levels: no walk fills the stack. See
+A condition has at most 64 levels and 10000 structural units. The count includes
+its nodes, operands and list items. Shared parts count each time they appear. A
+constructor rejects a larger condition before a decision uses it. See
 [Limits](#limits).
 
 ## Policies
@@ -303,13 +291,10 @@ Put policies together:
 | `Policy.firstOf([a, b])`      | The first policy that allows or denies.                          |
 | `Policy.ceiling(policy, cap)` | A deny from `cap` always wins. An allow from `cap` does nothing. |
 
-A policy tree of a domain may have at most `policyNodes` nodes, 1000000 by
-default, with its rules and the nodes and values of their conditions, and a
-shared part counted for each place. A combinator throws an error for a larger
-tree, and the policy Schema does not decode one. The decoder reads at most
-`jsonNodes` objects and array items, so no input can take a very long time. A
-field path may have at most `fieldPathParts` parts, 1000 by default. A tree may
-have any number of levels. See [Limits](#limits).
+A policy tree has at most 32 levels and 10000 structural units, including its
+rules, conditions, operands, list items and meta values. Shared parts count each
+time they appear. A combinator rejects a larger tree. The JSON Codec has the
+same limits. See [Limits](#limits).
 
 A shared part of a tree is decided again for each place, so its predicates run
 each time, and `Policy.explain` lists its rules each time.
@@ -349,9 +334,9 @@ When a rule that the request may use has a predicate, the residual is one
 predicate with the name `"policy"`. It runs the whole policy for each value, so
 it gives the same answers and the same failures as `Policy.decide`.
 
-A deep policy tree may give a very large residual. When it would have more than
-`residualNodes` nodes of its domain, 100000 by default, `Policy.residual` throws
-an error, and a check in an `Authorizer` fails.
+A residual has the same depth and size limits as a condition. When a policy
+would make a larger residual, `Policy.residual` throws an error. An `Authorizer`
+check never treats that error as a yes.
 
 ### Scopes
 
@@ -362,11 +347,11 @@ data: it may not have a predicate.
 There are three questions about a scope. Each one is a question about two sets:
 the values in the scope, and the values that the policy allows.
 
-| Question                               | Sets                | Function                        |
-| -------------------------------------- | ------------------- | ------------------------------- |
-| May the principal act on every value?  | scope ⊆ allowed     | `Policy.coverage` is `All`      |
-| Which values may the principal act on? | scope ∩ allowed     | `Policy.residual`               |
-| May the principal act on some value?   | scope ∩ allowed ≠ ∅ | `Policy.coverage` is not `None` |
+| Question                               | Sets                | Function                             |
+| -------------------------------------- | ------------------- | ------------------------------------ |
+| May the principal act on every value?  | scope ⊆ allowed     | `Policy.coverage` is `All`           |
+| Which values may the principal act on? | scope ∩ allowed     | `Policy.residual`                    |
+| May the principal act on some value?   | scope ∩ allowed ≠ ∅ | `Policy.coverage` is `All` or `Some` |
 
 ```ts
 const ownPosts = {
@@ -392,22 +377,25 @@ list query for the scope:
   so a scope with a mistake never gives a "yes".
 - `Some`: the policy allows some values and not others. It gives an example of
   each, `allowed` and `refused`.
-- `Unknown`: the policy has a predicate, or the search went past its budget.
+- `Unknown`: a predicate, an unsupported Schema or a search limit stops the
+  proof. The reason for an unsupported Schema is `"schema"`. This answer grants
+  no access.
 
-`Condition.satisfiable` does the search. Each test in a condition compares one
-field with fixed values, so these values cut the values of the field into a few
-parts, and every value in one part gives the same answer. The search tries one
-value from each part, one field at a time.
+`Condition.satisfiable(condition, { schema: ResourceSchema })` requires a
+Schema. It uses the same fixed search limits as coverage: 16 fields and 100000
+steps. There are no per-call budgets.
 
-The search reads the shape of the Schema of the resource: the fields, their
-literals, `null` for a nullable or optional field, and finite or integer
-numbers. It does not read other checks, such as a minimum length. A check only
-keeps values out, so the shape holds every real value and more. So `All` and
-`None` are right for every value of the Schema. `Some` means that, by the shape,
-a value may get either answer. A check may still stop one of the examples.
+The analysis supports fixed fields, scalars, scalar unions, and nullable or
+optional scalar fields. It knows finite and integer number checks. It returns
+`Unknown` for object unions, recursive Schemas, dynamic records, custom
+declarations, transforms and checks it does not know. Optional or nullable
+nested objects also give `Unknown`, since their child fields are related.
+Ordinary decisions can still use supported fields of those resources, and a
+predicate can use their full values.
 
-"Some" means that some value of the Schema is allowed. It does not mean that
-such a value is in your database. To know that, run the condition as a query.
+`Some` means that values with each answer exist in the supported Schema. It does
+not mean that either value is in your database. To know that, run the residual
+as a query. Do not treat `Unknown` as evidence of an allowed value.
 
 ## Queries
 
@@ -447,18 +435,28 @@ A policy with no predicates can become JSON:
 ```ts
 const PolicySchema = Policy.schema(Blog)
 
-const json = Schema.encodeSync(PolicySchema)(policy)
-const again = Schema.decodeUnknownSync(PolicySchema)(json)
+const text = Schema.encodeSync(PolicySchema)(policy)
+const again = Schema.decodeSync(PolicySchema)(text)
+
+const ConditionSchema = Condition.schema(Blog, "Post")
+const conditionText = Schema.encodeSync(ConditionSchema)(published)
+const condition = Schema.decodeSync(ConditionSchema)(conditionText)
 ```
 
-Decoding checks every kind, action, field and principal field against the
-domain, and `meta` against the `meta` Schema of the domain. So a policy from a
-database can not name a field that does not exist.
+The encoded value is a string. Do not call `JSON.stringify` on it or
+`JSON.parse` before decoding it. The Codec is the storage boundary; an object is
+not an encoded policy or condition.
+
+The Codec checks text length, JSON depth and size, node shape, and the domain.
+Unknown tags, missing conditions and wrong fields fail in the Schema error
+channel. Encoding also checks JSON values, so a non-finite number can not
+silently become `null`. The condition Codec binds its result to the domain and
+resource too. Predicates can not enter either Codec.
 
 ## Authorizer
 
-An authorizer is an Effect service. It gets the principal of the current
-request, loads its policy, and keeps the policy in a cache.
+An authorizer is an Effect service. It gets the principal of the current request
+and loads its policy. The loader gets the original principal value.
 
 ```ts
 class Identity extends Context.Service<Identity, User>()("app/Identity") {}
@@ -470,25 +468,18 @@ class Auth extends Authorizer.Service<Auth>()("app/Auth", {
 
 const AuthLive = Authorizer.layer(Auth, {
 	policy: (user) => loadPolicyOf(user),
-	cache: { capacity: 1000, timeToLive: "30 seconds" },
 })
 ```
 
 The error type and the service type of every check come from the `principal`
 Effect.
 
-The cache key of a principal is the text of its JSON form, from the Schema of
-the principal of the domain. The loader gets the value that the Schema decodes
-from that text, also with no cache, so what the loader sees comes from the key.
-So the loader must decide by the data of the principal, not by the identity of
-its objects. A principal is kept only when that decoded copy is equal to it, as
-two classes of a union may have one JSON form.
-
-The Schema must decode one text to one value each time. Data that it makes when
-it decodes, as `expired` from the time now, stays with the policy until the
-entry ends, as data that the loader reads does. Use `timeToLive` or `invalidate`
-for such data. Give `cache: { key }` to make the key in another way, or
-`cache: false` to load the policy for each check.
+Authorizer has no cache options or `invalidate` method. When a business needs a
+cache, its loader owns an Effect `Cache` in a Layer. Choose the key from the
+data that selects the policy, set its expiry time, and remove entries after rule
+changes. `examples/authorizer.ts` shows a cache keyed by member id, with a 30
+second expiry and explicit invalidation. The principal used to decide is still
+the current value of the request.
 
 Use it in a handler:
 
@@ -510,7 +501,7 @@ const handler = Effect.gen(function* () {
 		within: ($) => $.eq("authorId", $.principal("id")),
 	})
 	const covered = yield* Auth.coverage({ action: "delete", kind: "Post" })
-	const showDeleteButton = covered._tag !== "None"
+	const showDeleteButton = covered._tag === "All" || covered._tag === "Some"
 })
 ```
 
@@ -522,15 +513,18 @@ const handler = Effect.gen(function* () {
 | `coverage`        | Tells if the principal may act on all, none or some values in a scope.        |
 | `decide`          | Gives the decision. It does not fail on a "no".                               |
 | `permittedFields` | Gives the fields that the principal may use.                                  |
-| `invalidate`      | Removes a cached policy, after a change to the rules of a principal.          |
 
 A check on a kind (`{ action, kind }`) passes only when the policy allows the
 act on every value of the kind. With `within`, it passes only when the policy
 allows the act on every value in the scope, and the scope is not empty. The
-decider is asked only when no value in the scope is denied.
+decider is asked only when the analysis proves that no value in the scope is
+denied. `Unknown` fails the check and does not call the decider.
 
-`filter` gives `False` when the principal may act on no value. Then the list is
-empty, and that is not an error.
+`filter` gives the scoped residual without a coverage search. It does not
+promise to reduce every always-true or always-false condition to `True` or
+`False`. A query that gives an empty list is not an error. One operation uses
+one principal and policy snapshot; `guard` uses that same snapshot for both of
+its checks.
 
 The errors of a check:
 
@@ -640,40 +634,30 @@ status codes: 403, 503, and 409.
 
 ## Limits
 
-Each limit keeps a decoder, a walk or a search small, so no input can take a
-very long time or very much memory. An input past a limit is an error, as in "A
-condition has 1000001 nodes and values. The most is 1000000.". In an
-`Authorizer`, such an error is never a "yes". The `Limits` module gives each
-default, and `Limits.ceilings` gives the most that a domain may set.
+The limits are fixed. The `Limits` module exports their values and the limit
+error. A domain can not raise them. The library supports bounded data; it does
+not promise to handle arbitrary depth.
 
-A walk does not fill the stack at any depth: it runs on the stack for an input
-with few levels, and in the run loop of an Effect for a deeper one. The levels
-of an input are at most its nodes, so there is no limit of levels. Note that
-`JSON.stringify` of the JSON form of a very deep policy, with many thousands of
-levels, may fail: the engine writes JSON text with a walk of its own.
+| Item                         | Limit                             |
+| ---------------------------- | --------------------------------- |
+| Policy depth                 | 32                                |
+| Condition and residual depth | 64                                |
+| Field path                   | 5 parts                           |
+| Meta depth                   | 16                                |
+| Policy or condition size     | 10000 structural units            |
+| Catalog size                 | 1000 fields per Schema            |
+| JSON text                    | 1000000 UTF-16 code units         |
+| JSON containers              | 256 levels and 100000 items       |
+| Analysis                     | 16 fields and 100000 search steps |
 
-A domain may set its own limits:
+Structural units include rules, condition nodes, operands, list items and meta
+values. Shared parts count each time they appear. Constructors reject an input
+past a limit. JSON limits fail in the Schema error channel. Analysis limits give
+`Unknown`. None of these outcomes grants access.
 
-```ts
-const Deep = Domain.make({
-	principal: User,
-	resources: [Post],
-	limits: { fieldPathParts: 2000, searchSteps: 5_000_000 },
-})
-```
-
-| Limit            | Default  | Ceiling    | What it limits                                                                                                                                                                                                                                              |
-| ---------------- | -------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `fieldPathParts` | 1000     | 10000      | The parts of a field path, as in `settings.model`.                                                                                                                                                                                                          |
-| `patternParts`   | 1000     | 10000      | The parts of a field pattern, with each star inside a part.                                                                                                                                                                                                 |
-| `conditionNodes` | 1000000  | 100000000  | The nodes of a condition, with each value of an `In` test, and a shared part for each place.                                                                                                                                                                |
-| `residualNodes`  | 100000   | 100000000  | The nodes of a residual condition.                                                                                                                                                                                                                          |
-| `policyNodes`    | 1000000  | 100000000  | The nodes of a policy tree, with its rules and the nodes and values of their conditions, and the parts of the paths of the steps of `explain`.                                                                                                              |
-| `jsonNodes`      | 10000000 | 1000000000 | The objects and items that a decoder reads.                                                                                                                                                                                                                 |
-| `catalogFields`  | 100000   | 10000000   | The fields in the list of the fields of the Schema of a resource or of the principal.                                                                                                                                                                       |
-| `searchSteps`    | 1000000  | 1000000000 | The steps of one search, as in `Policy.coverage`, and of the checks of the field patterns of a policy. A pattern counts its parts times `fieldPathParts`, its work on the longest field of a request. A tree of policies counts the steps of all its parts. |
-| `searchFields`   | 1000     | 100000     | The fields that one search may test.                                                                                                                                                                                                                        |
-| `principalNodes` | 100000   | 100000000  | The objects and items of a principal that the Authorizer makes the JSON form of, for its cache key, with a shared part for each place. A principal past it is not kept, and the loader gets it as it is.                                                    |
+Types reject wrong shapes, names, paths and value types. Runtime checks remain
+for external JSON, dynamic sizes, finite number values and domain identity. Your
+application checks principal and resource data before giving it to the library.
 
 ## Examples
 
@@ -687,9 +671,9 @@ node examples/basic.ts
 | Example                       | What it shows                                                                                    |
 | ----------------------------- | ------------------------------------------------------------------------------------------------ |
 | `examples/basic.ts`           | A blog: a domain, a policy, field rules and a decision with a reason.                            |
-| `examples/authorizer.ts`      | Team documents: an authorizer service with a cache, `guard`, `filter`, coverage and a decider.   |
+| `examples/authorizer.ts`      | Team documents: a business cache, `guard`, `filter`, coverage and a decider.                     |
 | `examples/multi-tenant.ts`    | A task tracker for many teams: roles, API tokens, a platform limit, scopes and SQL list queries. |
-| `examples/field-access.ts`    | A staff list: rules for some fields, field patterns and `permittedFields`.                       |
+| `examples/field-access.ts`    | A staff list: parent and child field rules, and `permittedFields`.                               |
 | `examples/stored-policies.ts` | A help desk: policies kept as JSON, `meta` on rules, checks when a policy loads, and `explain`.  |
 | `examples/predicates.ts`      | Meeting rooms: a predicate that asks an Effect service, its error type, and `provideContext`.    |
 | `examples/algorithms.ts`      | File sharing: the four combining algorithms, `any`, `firstOf` and `ceiling`.                     |

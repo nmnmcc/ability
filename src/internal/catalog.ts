@@ -1,25 +1,7 @@
-/**
- * The catalog of the fields of a Schema. One walk over the Schema makes it,
- * and every question about the fields of a resource or of the principal reads
- * it: which names a rule may use, which values a field may hold, which fields
- * a pattern fits, and which fields a list of permitted fields shows.
- *
- * The catalog describes the shape of the values, not the checks of the
- * Schema. A check, such as a minimum length, only keeps some values out, so a
- * catalog that leaves the checks out holds every real value and more. An
- * answer that holds for all of these values, as `All` and `None` of a
- * coverage do, then holds for the real values too.
- */
+/** A fixed directory of the data fields of a Schema. */
 import * as Arr from "effect/Array"
-import * as HashMap from "effect/HashMap"
-import * as HashSet from "effect/HashSet"
-import * as Option from "effect/Option"
-import { hasProperty } from "effect/Predicate"
-import * as Schema from "effect/Schema"
-import * as SchemaAST from "effect/SchemaAST"
+import type * as SchemaAST from "effect/SchemaAST"
 import * as Limits from "./limits.ts"
-import { errorFields } from "./read.ts"
-import * as Trampoline from "./trampoline.ts"
 
 /** The kinds of values that a field may hold. */
 export interface Kinds {
@@ -82,7 +64,7 @@ export const fitsNumber = (number: Kinds["number"], value: number): boolean => {
 		case "none":
 			return false
 		case "integer":
-			return Number.isInteger(value)
+			return Number.isSafeInteger(value)
 		case "finite":
 			return Number.isFinite(value)
 		case "any":
@@ -110,402 +92,34 @@ export const accepts = (kinds: Kinds, value: unknown): boolean => {
 	}
 }
 
-/** A part of a field path that stands for any key of a record. */
-export interface Key {
-	readonly _tag: "Key"
-	/** The Schemas of the keys. A key must fit one of them. */
-	readonly parameters: ReadonlyArray<SchemaAST.AST>
-}
-
-/** One part of a field path: a name, or any key of a record. */
-export type Segment = string | Key
-
-/** One field of a catalog. */
+/** One named data field. Complex values stay whole. */
 export interface Field {
-	readonly path: ReadonlyArray<Segment>
-	/** The path with dots, and `*` for a key of a record. */
+	readonly path: ReadonlyArray<string>
 	readonly text: string
 	readonly kinds: Kinds
-	/**
-	 * The field holds a value that a list of fields shows as one field: a
-	 * scalar, a record, an array, or a struct at the last part a path may have.
-	 */
+	/** A field that can appear in a list of granted fields. */
 	readonly listed: boolean
-	/** The field may hold parts that the Schema does not name, as a record may. */
-	readonly open: boolean
-	/**
-	 * A read of the field finds only plain data. It is `false` when a value
-	 * above the field may be an object that does not have it as a data field:
-	 * a class without the field, which may have a getter of that name, a
-	 * value such as a date or a list, or any object, as of `Schema.Unknown`.
-	 * A struct of a union without the field makes it not plain too, since a
-	 * value made by hand may have it with any value.
-	 */
-	readonly plain: boolean
-}
-
-/**
- * A place in the graph of a catalog. A path of a field leads to a place, and
- * many paths may lead to one place, as in a recursive Schema: `next` and
- * `next.next` of a list of links are one place. A place keeps the ids of the
- * places below it, so the graph has no loop of objects.
- */
-export interface Branch {
-	readonly id: number
-	/** The kinds of the values of the field at this place. */
-	readonly kinds: Kinds
-	/** The field holds a scalar, a record or a list: see `Field.listed`. */
-	readonly values: boolean
-	/** The field may hold a struct. */
-	readonly structs: boolean
+	/** The value has parts, so a denial below it blocks its whole value. */
 	readonly open: boolean
 	readonly plain: boolean
-	/**
-	 * The field may hold a value that needs no field below it: a scalar, a
-	 * list, a record, any object, or `null`. A field that may hold only
-	 * structs has a value only when each of their fields has one.
-	 */
-	readonly leaf: boolean
-	/** The ids of the places below, by name, in the order of the Schema. */
-	readonly children: ReadonlyArray<readonly [string, number]>
-	/**
-	 * The places below, by name. A lookup gets each name from `split`, as a
-	 * new string, and a `HashMap` finds a new string about 20% faster than a
-	 * native `Map`. The names come from the Schema, so a name from a policy
-	 * can not make a long list of names with one hash here.
-	 */
-	readonly names: HashMap.HashMap<string, number>
-	/** The place for the keys of a record, when the value may be a record. */
-	readonly key: Key | undefined
-	readonly keyBranch: number | undefined
+	/** Ordinary comparisons read only known scalar values. */
+	readonly scalar: boolean
 }
 
-/** The catalog of the fields of a Schema. */
+/** The fields and proof support of one Schema. */
 export interface Catalog {
-	/** The places, by id. The root is the place with the id 0. */
-	readonly branches: ReadonlyArray<Branch>
-	/**
-	 * The number of steps from a place to a place below it. A search of the
-	 * catalog, as for a field pattern, reads each one, so this is its work.
-	 */
-	readonly edges: number
-	readonly root: Branch
-	/**
-	 * The Schema has a value. A Schema with no value, as `Schema.Never`, or a
-	 * struct with a field of `Schema.Never`, makes every condition false.
-	 */
+	readonly fields: ReadonlyArray<Field>
+	readonly supported: boolean
 	readonly inhabited: boolean
 }
 
-/**
- * Tests if a key of an object fits the Schemas of the keys of a record. A key
- * of an object is a string, also a key that a number Schema takes: `{ 1: "a" }`
- * has the key `"1"`. So a key that is the text of a number is tried as that
- * number too.
- */
-export const keyFits = (key: Key, name: string): boolean =>
-	Arr.some(key.parameters, (parameter) => {
-		const is = Schema.is(Schema.make(parameter))
-		return (
-			is(name) ||
-			(name !== "" && String(Number(name)) === name && is(Number(name)))
-		)
-	})
-
-/**
- * Gives the struct of a `Schema.Class`. A class is a declaration with one
- * struct as its type parameter, and Effect marks it with a `"~constructor"`
- * annotation, also through more codec steps, as in
- * `Schema.fromJsonString(User)`. Other declarations, such as `Schema.Option`
- * or `Schema.ReadonlyMap`, have no such mark, and the fields of their type
- * parameter are not fields of the value.
- */
-const classStruct = (
-	ast: SchemaAST.Declaration,
-): SchemaAST.Objects | undefined => {
-	const [inner] = ast.typeParameters
-	return ast.annotations?.["~constructor"] !== undefined &&
-		ast.typeParameters.length === 1 &&
-		inner?._tag === "Objects"
-		? inner
-		: undefined
+interface Shape {
+	readonly kinds: Kinds
+	readonly struct?: SchemaAST.Objects
+	readonly supported: boolean
+	readonly inhabited: boolean
 }
 
-/**
- * Gives the Schemas that a value at one place may fit: it opens unions and
- * `Schema.suspend`, and gives each Schema one time, in the order that it
- * first comes. A class stays a class: see {@link structOf}.
- *
- * A union may hold one union in many places, as `Schema.Union([s, s])` many
- * levels down does, so the walk opens each union and each suspend node one
- * time: a second visit gives nothing new. So a suspend node that gives
- * itself again ends too. The nodes that it has met, and the Schemas that it
- * has found, are in native sets, because the walk must find a node by the
- * node itself: `Equal` compares Schema nodes by structure, and a recursive
- * Schema has no end. The sets and the list belong to one walk. A union may
- * hold a union very many levels down, so it is a walk of the trampoline for
- * an input of an unknown depth.
- */
-const alternatives = (ast: SchemaAST.AST): ReadonlyArray<SchemaAST.AST> => {
-	const met = new Set<SchemaAST.AST>()
-	const found: Array<SchemaAST.AST> = []
-	Trampoline.adaptive<SchemaAST.AST, undefined>((R, child) => (node, depth) => {
-		if (met.has(node)) {
-			return R.succeed(undefined)
-		}
-		met.add(node)
-		switch (node._tag) {
-			case "Union":
-				return R.map(
-					R.forEach(node.types, (type) => child(type, depth + 1)),
-					() => undefined,
-				)
-			case "Suspend":
-				return child(node.thunk(), depth + 1)
-			default:
-				found.push(node)
-				return R.succeed(undefined)
-		}
-	})(ast)
-	return found
-}
-
-/** The struct of a Schema: a struct, or the struct of a class. */
-const structOf = (ast: SchemaAST.AST): SchemaAST.Objects | undefined =>
-	ast._tag === "Objects"
-		? ast
-		: ast._tag === "Declaration"
-			? classStruct(ast)
-			: undefined
-
-const hasCheck = (
-	checks: ReadonlyArray<SchemaAST.Check<never>>,
-	id: string,
-): boolean => hasCheckIn({ checks, id })
-
-/**
- * The walk of {@link hasCheck}. A group of checks may hold a group, very many
- * levels down, as `.and(...)` many times makes, so it is a walk of the
- * trampoline for an input of an unknown depth.
- */
-const hasCheckIn = Trampoline.adaptive<
-	{
-		readonly checks: ReadonlyArray<SchemaAST.Check<never>>
-		readonly id: string
-	},
-	boolean
->(
-	(R, child) =>
-		({ checks, id }, depth) =>
-			R.some(checks, (check) =>
-				check.annotations?.representation?.id === id
-					? R.succeed(true)
-					: check._tag === "FilterGroup"
-						? child({ checks: check.checks, id }, depth + 1)
-						: R.succeed(false),
-			),
-)
-
-/** A struct with named fields, or with the keys of a record. */
-const isStruct = (
-	ast: SchemaAST.Objects | undefined,
-): ast is SchemaAST.Objects =>
-	ast !== undefined &&
-	(ast.propertySignatures.length > 0 || ast.indexSignatures.length > 0)
-
-/** Tests if a Schema holds only values that are not objects, as `bigint`. */
-const isPrimitive = (ast: SchemaAST.AST): boolean =>
-	ast._tag === "BigInt" ||
-	ast._tag === "Symbol" ||
-	ast._tag === "UniqueSymbol" ||
-	(ast._tag === "Literal" && typeof ast.literal === "bigint")
-
-/** The kinds of the values of a Schema that is not a struct. */
-const kindsOf = (ast: SchemaAST.AST): Kinds => {
-	switch (ast._tag) {
-		case "Null":
-		case "Undefined":
-			return nullKinds
-		case "Never":
-			return noKinds
-		case "String":
-		case "TemplateLiteral":
-			return { ...noKinds, string: true }
-		case "Boolean":
-			return { ...noKinds, boolean: true }
-		case "Number": {
-			// The two checks that a search uses. Effect names a number with
-			// them, as `Schema.Int` and `Schema.Finite`; other checks are left
-			// out, as all checks are.
-			const checks = ast.checks ?? []
-			return {
-				...noKinds,
-				number: hasCheck(checks, "effect/schema/isInt")
-					? "integer"
-					: hasCheck(checks, "effect/schema/isFinite")
-						? "finite"
-						: "any",
-			}
-		}
-		case "Literal":
-			return typeof ast.literal === "bigint"
-				? objectKinds
-				: { ...noKinds, literals: [ast.literal] }
-		case "Enum":
-			return { ...noKinds, literals: Arr.map(ast.enums, ([, value]) => value) }
-		case "Arrays":
-		case "ObjectKeyword":
-		case "BigInt":
-		case "Symbol":
-		case "UniqueSymbol":
-			return objectKinds
-		case "Declaration":
-			// A declaration of Effect in `objectDeclarations` holds an object,
-			// such as a `Date`. Another declaration may hold any value, as
-			// `Schema.Json` or one from `Schema.declare` may.
-			return HashSet.has(objectDeclarations, declarationId(ast))
-				? objectKinds
-				: anyKinds
-		default:
-			// `Schema.Unknown`, `Schema.Void`, and `Struct({})`, which takes a
-			// string too: these may hold any value.
-			return anyKinds
-	}
-}
-
-/**
- * The ids of the declarations of Effect that hold only objects. Effect puts
- * the id in the `representation` annotation. A declaration that is not in
- * this list may hold a scalar, as `Schema.Json` may, so its kinds are any
- * value.
- */
-const objectDeclarations = HashSet.make(
-	"effect/schema/Date",
-	"effect/schema/URL",
-	"effect/schema/Uint8Array",
-	"effect/schema/Duration",
-	"effect/schema/DateTimeUtc",
-	"effect/schema/DateTimeZoned",
-	"effect/schema/BigDecimal",
-	"effect/schema/Redacted",
-	"effect/schema/Cause",
-	"effect/schema/Chunk",
-	"effect/schema/HashMap",
-	"effect/schema/HashSet",
-	"effect/schema/ReadonlyMap",
-	"effect/schema/ReadonlySet",
-	"effect/schema/Option",
-	"effect/schema/Result",
-	"effect/schema/Exit",
-	"effect/schema/File",
-	"effect/schema/FormData",
-	"effect/schema/RegExp",
-	"effect/schema/URLSearchParams",
-)
-
-const declarationId = (ast: SchemaAST.Declaration): string | undefined => {
-	const representation: unknown = ast.annotations?.["representation"]
-	return hasProperty(representation, "id") &&
-		typeof representation.id === "string"
-		? representation.id
-		: undefined
-}
-
-/** The things that the walk of a catalog knows at one place. */
-interface Place {
-	readonly schemas: ReadonlyArray<SchemaAST.AST>
-	/** The value may be missing. */
-	readonly missing: boolean
-	/** The value may be anything, as an extra field of a struct may be. */
-	readonly top: boolean
-	/** A read here finds only plain data: see {@link Field.plain}. */
-	readonly plain: boolean
-}
-
-const textOf = (path: ReadonlyArray<Segment>): string =>
-	Arr.map(path, (segment) =>
-		typeof segment === "string" ? segment : "*",
-	).join(".")
-
-/**
- * The name of a property as a part of a path. A key of an object is a string,
- * so a number key, as from `Schema.Record(Schema.Literal(1), ...)`, has the
- * name `"1"`. A symbol key is not a field.
- */
-const nameOf = (signature: SchemaAST.PropertySignature): string | undefined =>
-	typeof signature.name === "symbol" ? undefined : String(signature.name)
-
-/**
- * The properties of a struct by name. A walk makes it one time for each
- * struct of a place, so a struct with very many fields does not take a
- * search for each name. It is a native `Map`, as `Branch.names` is.
- */
-const propertiesOf = (
-	struct: SchemaAST.Objects,
-): ReadonlyMap<string, SchemaAST.PropertySignature> =>
-	new Map(
-		Arr.flatMap(struct.propertySignatures, (signature) => {
-			const name = nameOf(signature)
-			return name === undefined ? [] : [[name, signature] as const]
-		}),
-	)
-
-/** The names of the fields of the structs, in the order that they first come. */
-const namesOf = (
-	structs: ReadonlyArray<SchemaAST.Objects>,
-): ReadonlyArray<string> =>
-	// A native `Set` keeps the first copy of each name, in order, about ten
-	// times as fast as `Arr.dedupe`.
-	Array.from(
-		new Set(
-			Arr.flatMap(structs, (struct) =>
-				Arr.flatMap(struct.propertySignatures, (signature) => {
-					const name = nameOf(signature)
-					if (name === undefined) {
-						return []
-					}
-					// A dot in a path is the step into a nested field. A field name with
-					// a dot would make two fields have one path, so it is a defect.
-					if (name.includes(".")) {
-						throw new Error(`A field name may not have a dot: "${name}"`)
-					}
-					// An empty name would make an empty part in a path, such as
-					// `.secret`.
-					if (name === "") {
-						throw new Error("A field name may not be empty")
-					}
-					return [name]
-				}),
-			),
-		),
-	)
-
-/** A place of the walk, and the places below it, before they have ids. */
-interface Made {
-	readonly branch: Omit<Branch, "id" | "children" | "names" | "keyBranch">
-	readonly children: ReadonlyArray<readonly [string, Place]>
-	readonly keyPlace: Place | undefined
-}
-
-/** A method, as a value from a prototype is. */
-const method = (): undefined => undefined
-
-/**
- * Tells if a Schema takes a value that an object may have from a prototype:
- * a method, or `Object.prototype` as the `__proto__` of a plain object. A
- * Schema that may need more than its shape to say, as one that throws, is
- * taken as one that takes them.
- */
-const takesInherited = (schema: SchemaAST.AST): boolean => {
-	try {
-		const is = Schema.is(Schema.make(schema))
-		return is(method) || is(Object.prototype)
-	} catch {
-		return true
-	}
-}
-
-/** Tells if kinds hold any value. */
 const hasKinds = (kinds: Kinds): boolean =>
 	kinds.null ||
 	kinds.boolean ||
@@ -514,425 +128,199 @@ const hasKinds = (kinds: Kinds): boolean =>
 	kinds.object ||
 	kinds.literals.length > 0
 
-/**
- * Tells if the root of the places has a value. A place has one when it may
- * hold a value with no field below it, or when it may hold structs and each
- * field below it has one. A recursive Schema may need a field below to have
- * a value first, so the walk goes over the places again until nothing
- * changes, the places far from the root first, as the ids of a queue grow
- * with the steps from the root. Each pass marks a place more, or it is the
- * last, so there are at most as many passes as places. The marks belong to
- * this call.
- */
-const inhabitedOf = (branches: ReadonlyArray<Branch>): boolean => {
-	const marked: Array<boolean> = Arr.map(branches, (branch) => branch.leaf)
-	const backward = Arr.reverse(branches)
-	Arr.unfold(true, (changed) => {
-		if (!changed || marked[0] === true) {
-			return Option.none()
-		}
-		const more = Arr.reduce(backward, false, (found, branch) => {
-			if (
-				marked[branch.id] !== true &&
-				branch.structs &&
-				Arr.every(branch.children, ([, id]) => marked[id] === true)
-			) {
-				marked[branch.id] = true
-				return true
-			}
-			return found
-		})
-		return Option.some([more, more] as const)
-	})
-	return marked[0] === true
-}
-
-/** Works out the facts of a place, and the places below it. */
-const placeOf = (place: Place): Made => {
-	const structs = Arr.filter(Arr.map(place.schemas, structOf), isStruct)
-	const values = Arr.filter(
-		place.schemas,
-		(schema) => !isStruct(structOf(schema)),
-	)
-	const valueKinds = Arr.reduce(values, noKinds, (kinds, schema) =>
-		joinKinds(kinds, kindsOf(structOf(schema) ?? schema)),
-	)
-	// A value of a branch may be an object, with parts that the Schema does
-	// not name. A `bigint` or a `symbol` is not a scalar that a test takes,
-	// so its kinds say `object`, but it has no parts: a read below it gives
-	// `null`, as below a string.
-	const objects = Arr.some(
-		values,
-		(schema) =>
-			!isPrimitive(schema) && kindsOf(structOf(schema) ?? schema).object,
-	)
-	const kinds = place.top
-		? anyKinds
-		: joinKinds(
-				joinKinds(valueKinds, structs.length > 0 ? objectKinds : noKinds),
-				place.missing ? nullKinds : noKinds,
-			)
-	const records = Arr.filter(
-		structs,
-		(struct) => struct.indexSignatures.length > 0,
-	)
-	const structProperties = Arr.map(structs, propertiesOf)
-	const children = Arr.map(namesOf(structs), (name) => {
-		const properties = Arr.flatMap(structProperties, (named) => {
-			const property = named.get(name)
-			return property === undefined ? [] : [property]
-		})
-		// A struct without the name may still have it as an extra field, with
-		// any value: only a decode or a `make` takes extra fields away, and a
-		// decision may get a value made by hand. A value that may be any
-		// object, as one of `Schema.Unknown` may, may have the name with any
-		// value too.
-		const top = place.top || objects || properties.length < structs.length
-		const schemas = Arr.flatMap(properties, (property) =>
-			alternatives(property.type),
-		)
-		// A value may not have the field as its own, but have it from a
-		// prototype, as `constructor` from `Object.prototype`, or a method of a
-		// class. The Schema takes such a value when the field may hold any
-		// object, as a field of `Schema.ObjectKeyword` or `Schema.Unknown`
-		// does, and a read gives `null` for it. A struct, a record, a list or
-		// a class does not take a function or `Object.prototype`, but a struct
-		// with no field that it needs takes the `__proto__` of a value.
-		const inherited =
-			name === "__proto__" ||
-			Arr.some(
-				schemas,
-				(schema) =>
-					!isStruct(structOf(schema)) &&
-					schema._tag !== "Arrays" &&
-					takesInherited(schema),
-			)
-		const below: Place = {
-			schemas,
-			// A field below a value that is not a struct reads `null`, and so
-			// does a field that may be missing. A struct or a class may hold an
-			// `Error`, as a struct takes any object with its fields, also the
-			// ones from a prototype. A read of a field that every `Error` may
-			// have takes only an own data field: a name from `Error.prototype`,
-			// a stack from the engine or a name from Effect reads `null`. See
-			// `readPart`.
-			missing:
-				place.missing ||
-				values.length > 0 ||
-				errorFields.includes(name) ||
-				inherited ||
-				Arr.some(properties, (property) => SchemaAST.isOptional(property.type)),
-			top,
-			// A value that may be anything may be a list, or have a getter, so
-			// a read below it may not find plain data.
-			plain: place.plain && !top,
-		}
-		return [name, below] as const
-	})
-	const signatures = Arr.flatMap(records, (struct) => struct.indexSignatures)
-	// One place holds the values of every key. A key that fits the keys of one
-	// record of a union but not the keys of another is an extra key of the
-	// other, with any value, as the extra field of a struct is. So when the
-	// records have other Schemas of keys, a value at a key may be anything.
-	const keysOf = (struct: SchemaAST.Objects) =>
-		Arr.map(struct.indexSignatures, (signature) => signature.parameter)
-	const firstKeys = records.length === 0 ? [] : keysOf(records[0]!)
-	const sameKeys = Arr.every(records, (struct) => {
-		const keys = keysOf(struct)
-		return (
-			keys.length === firstKeys.length &&
-			Arr.every(keys, (key) => firstKeys.includes(key))
-		)
-	})
-	const keyTop =
-		place.top || objects || records.length < structs.length || !sameKeys
+/** Only these two checks have a model in the value search. */
+const checksOf = (
+	ast: SchemaAST.AST,
+): {
+	readonly supported: boolean
+	readonly number: Kinds["number"]
+} => {
+	const checks = ast.checks ?? []
+	const ids = Arr.map(checks, (check) => check.annotations?.representation?.id)
 	return {
-		branch: {
-			kinds,
-			values: values.length > 0 || records.length > 0,
-			structs: structs.length > 0,
-			// A field that is a scalar in one branch of a union and a struct in
-			// another holds parts too.
-			open: records.length > 0 || structs.length > 0 || objects || place.top,
-			plain: place.plain,
-			leaf:
-				hasKinds(valueKinds) ||
-				records.length > 0 ||
-				objects ||
-				place.top ||
-				place.missing,
-			key:
-				signatures.length === 0
-					? undefined
-					: {
-							_tag: "Key",
-							parameters: Arr.map(
-								signatures,
-								(signature) => signature.parameter,
-							),
-						},
-		},
-		children,
-		keyPlace:
-			signatures.length === 0
-				? undefined
-				: {
-						schemas: Arr.flatMap(signatures, (signature) =>
-							alternatives(signature.type),
-						),
-						// A record may not have a given key.
-						missing: true,
-						top: keyTop,
-						plain: place.plain && !keyTop,
-					},
+		supported: Arr.every(
+			ids,
+			(id) =>
+				ast._tag === "Number" &&
+				(id === "effect/schema/isInt" || id === "effect/schema/isFinite"),
+		),
+		number: ids.includes("effect/schema/isInt")
+			? "integer"
+			: ids.includes("effect/schema/isFinite")
+				? "finite"
+				: "any",
 	}
 }
 
-/**
- * Makes the places of a Schema. Each place comes one time: two paths with the
- * same Schemas and the same marks lead to one place. The walk keeps a queue
- * of the places that it has found, and it makes them in order, so a deep
- * Schema does not fill the stack.
- */
-const branchesOf = (root: Place): ReadonlyArray<Branch> => {
-	// The id of each Schema node, and of each place, for this walk. The ids
-	// are in native maps, because the walk must find a Schema node by the node
-	// itself: `Equal` compares Schema nodes by structure, and a recursive
-	// Schema has no end. The maps and the queue belong to this walk.
-	const astIds = new Map<SchemaAST.AST, number>()
-	const placeIds = new Map<string, number>()
-	const queue: Array<Place> = []
-	const idOf = (place: Place): number => {
-		const ids = Arr.map(place.schemas, (schema) => {
-			const known = astIds.get(schema)
-			if (known !== undefined) {
-				return known
-			}
-			astIds.set(schema, astIds.size)
-			return astIds.size - 1
-		})
-		const key = `${Array.from(new Set(ids))
-			.sort((a, b) => a - b)
-			.join(
-				",",
-			)}|${String(place.missing)}|${String(place.top)}|${String(place.plain)}`
-		const known = placeIds.get(key)
-		if (known !== undefined) {
-			return known
-		}
-		if (queue.length >= Limits.ceilings.catalogFields) {
-			throw Limits.exceeded(
-				"A Schema",
-				"catalogFields",
-				"places",
-				queue.length + 1,
-				Limits.ceilings.catalogFields,
-			)
-		}
-		placeIds.set(key, queue.length)
-		queue.push(place)
-		return queue.length - 1
+/** A standard class has one struct and its own single construction step. */
+const classStruct = (
+	ast: SchemaAST.Declaration,
+): SchemaAST.Objects | undefined => {
+	const [inner] = ast.typeParameters
+	return ast.annotations?.["~constructor"] !== undefined &&
+		ast.typeParameters.length === 1 &&
+		inner?._tag === "Objects" &&
+		ast.encoding?.length === 1 &&
+		ast.encoding[0]?.to === inner
+		? inner
+		: undefined
+}
+
+/** Schema unions are bounded too. A larger shape stays opaque. */
+const shapeOf = (ast: SchemaAST.AST, depth = 0): Shape => {
+	if (depth > Limits.fieldPathParts) {
+		return { kinds: anyKinds, supported: false, inhabited: true }
 	}
-	idOf(root)
-	return Arr.unfold(0, (id) => {
-		const place = queue[id]
-		if (place === undefined) {
-			return Option.none()
-		}
-		const made = placeOf(place)
-		const children = Arr.map(
-			made.children,
-			([name, below]) => [name, idOf(below)] as const,
-		)
-		const branch: Branch = {
-			...made.branch,
-			id,
-			children,
-			names: HashMap.fromIterable(children),
-			keyBranch: made.keyPlace === undefined ? undefined : idOf(made.keyPlace),
-		}
-		return Option.some([branch, id + 1] as const)
+	if (
+		ast.encoding !== undefined &&
+		!(ast._tag === "Declaration" && classStruct(ast) !== undefined)
+	) {
+		return { kinds: anyKinds, supported: false, inhabited: true }
+	}
+	const checks = checksOf(ast)
+	const supported = checks.supported && ast.encoding === undefined
+	const scalar = (kinds: Kinds): Shape => ({
+		kinds,
+		supported,
+		inhabited: hasKinds(kinds),
 	})
+	switch (ast._tag) {
+		case "Null":
+		case "Undefined":
+			return scalar(nullKinds)
+		case "Never":
+			return scalar(noKinds)
+		case "String":
+			return scalar({ ...noKinds, string: true })
+		case "Boolean":
+			return scalar({ ...noKinds, boolean: true })
+		case "Number":
+			return scalar({ ...noKinds, number: checks.number })
+		case "Literal":
+			return typeof ast.literal === "bigint"
+				? { kinds: objectKinds, supported: false, inhabited: true }
+				: scalar({ ...noKinds, literals: [ast.literal] })
+		case "Enum":
+			return scalar({
+				...noKinds,
+				literals: Arr.map(ast.enums, ([, value]) => value),
+			})
+		case "Objects":
+			return ast.indexSignatures.length === 0 && ast.encoding === undefined
+				? { kinds: objectKinds, struct: ast, supported, inhabited: true }
+				: { kinds: objectKinds, supported: false, inhabited: true }
+		case "Declaration": {
+			const struct = classStruct(ast)
+			return struct === undefined
+				? { kinds: anyKinds, supported: false, inhabited: true }
+				: {
+						...shapeOf(struct, depth + 1),
+						supported: checks.supported && checksOf(struct).supported,
+					}
+		}
+		case "Union": {
+			if (ast.types.length > Limits.catalogFields) {
+				return { kinds: anyKinds, supported: false, inhabited: true }
+			}
+			const parts = Arr.map(ast.types, (member) => shapeOf(member, depth + 1))
+			const kinds = Arr.reduce(parts, noKinds, (all, part) =>
+				joinKinds(all, part.kinds),
+			)
+			const objects = Arr.filter(parts, (part) => part.kinds.object)
+			const nullableStruct =
+				objects.length === 1 &&
+				objects[0]?.struct !== undefined &&
+				Arr.every(
+					parts,
+					(part) =>
+						part === objects[0] || !hasKinds({ ...part.kinds, null: false }),
+				)
+			return {
+				kinds,
+				...(nullableStruct ? { struct: objects[0]!.struct! } : {}),
+				supported:
+					supported &&
+					objects.length === 0 &&
+					Arr.every(parts, (part) => part.supported),
+				inhabited: Arr.some(parts, (part) => part.inhabited),
+			}
+		}
+		default:
+			return { kinds: anyKinds, supported: false, inhabited: true }
+	}
 }
 
-/** The field at a place, for a path. */
-const fieldAt = (
-	branch: Branch,
-	path: ReadonlyArray<Segment>,
-	parts: number,
-): Field => ({
-	path,
-	text: textOf(path),
-	kinds: branch.kinds,
-	// A struct at the last part that a path may have is one field, since a
-	// path does not go below it.
-	listed: branch.values || (path.length === parts && branch.structs),
-	open: branch.open,
-	plain: branch.plain,
-})
-
-/**
- * The fields that a list shows, a field before the fields below it, down to
- * `parts` parts. A path goes into a place that is on it already one time
- * only, so the list of a recursive Schema is finite. The walk keeps a stack
- * of the places to visit, so a deep Schema does not fill the stack. A Schema
- * that shares one part in many places may have very many fields, so the
- * walk counts the fields that it makes, and it stops at the first one past
- * `most`. The stack and the count belong to this walk.
- */
-const listOf = (
-	branches: ReadonlyArray<Branch>,
-	parts: number,
-	most: number,
-	thing: string,
-): ReadonlyArray<Field> => {
-	const count = { fields: 0 }
-	interface Visit {
-		readonly branch: Branch
-		readonly path: ReadonlyArray<Segment>
-		/** The ids of the places on the path, as a set of Effect that shares its parts. */
-		readonly above: HashSet.HashSet<number>
-	}
-	const below = (visit: Visit): ReadonlyArray<Visit> => {
-		const { branch, path } = visit
-		if (
-			path.length === parts ||
-			(path.length > 0 && HashSet.has(visit.above, branch.id))
-		) {
-			return []
+/** Builds a directory once. Recursive and open shapes are never expanded. */
+export const catalogOf = (ast: SchemaAST.AST): Catalog => {
+	const fields: Array<Field> = []
+	const state = { supported: true }
+	const visit = (
+		node: SchemaAST.AST,
+		path: ReadonlyArray<string>,
+		missing: boolean,
+	): boolean => {
+		const shape = shapeOf(node)
+		const optional = missing || node.context?.isOptional === true
+		const kinds = optional ? joinKinds(shape.kinds, nullKinds) : shape.kinds
+		state.supported &&= shape.supported
+		const struct = shape.struct
+		if (struct !== undefined && (optional || kinds.null)) {
+			state.supported = false
 		}
-		const above = HashSet.add(visit.above, branch.id)
-		const named = Arr.map(branch.children, ([name, id]) => ({
-			branch: branches[id]!,
-			path: [...path, name],
-			above,
-		}))
-		return branch.key === undefined || branch.keyBranch === undefined
-			? named
-			: [
-					...named,
-					{
-						branch: branches[branch.keyBranch]!,
-						path: [...path, branch.key],
-						above,
-					},
-				]
-	}
-	const stack: Array<Visit> = [
-		{ branch: branches[0]!, path: [], above: HashSet.empty() },
-	]
-	return Arr.flatten(
-		Arr.unfold(stack, (rest) => {
-			const visit = rest.pop()
-			if (visit === undefined) {
-				return Option.none()
-			}
-			// The visits go onto the stack one at a time: a spread into a call
-			// would pass one argument for each field, past the most arguments
-			// of a call.
-			Arr.forEach(Arr.reverse(below(visit)), (next) => {
-				rest.push(next)
-			})
-			const field =
-				visit.path.length === 0
-					? []
-					: [fieldAt(visit.branch, visit.path, parts)]
-			count.fields += field.length
-			if (count.fields > most) {
+		const children = struct?.propertySignatures ?? []
+		const expand = struct !== undefined && path.length < Limits.fieldPathParts
+		if (path.length > 0) {
+			if (fields.length >= Limits.catalogFields) {
 				throw Limits.exceeded(
-					thing,
+					"A Schema",
 					"catalogFields",
 					"fields",
-					count.fields,
-					most,
+					fields.length + 1,
+					Limits.catalogFields,
 				)
 			}
-			return Option.some([field, rest] as const)
-		}),
-	)
-}
-
-/**
- * The fields that a list shows, a field before the fields below it, for
- * paths of at most `parts` parts. For a recursive Schema, the list goes into
- * each recursive place one time on each path, so it is finite. A list with
- * more than `most` fields is an error, as for a domain with these limits.
- * Each call makes the list again: a domain checks its size one time, and a
- * list of permitted fields reads it.
- */
-export const fieldsOf = (
-	catalog: Catalog,
-	parts: number = Limits.fieldPathParts,
-	most: number = Limits.ceilings.catalogFields,
-	thing: string = "A Schema",
-): ReadonlyArray<Field> => listOf(catalog.branches, parts, most, thing)
-
-/**
- * Makes the catalog of a Schema. It throws when a field name has a dot or is
- * empty, and when the Schema has more places than the ceiling of
- * `catalogFields`. A domain checks the size of the list of the fields with
- * its own limit: see {@link fieldsOf}.
- */
-export const catalogOf = (ast: SchemaAST.AST): Catalog => {
-	const branches = branchesOf({
-		schemas: alternatives(ast),
-		missing: false,
-		top: false,
-		plain: true,
-	})
-	return {
-		branches,
-		inhabited: inhabitedOf(branches),
-		edges: Arr.reduce(
-			branches,
-			0,
-			(total, branch) =>
-				total +
-				branch.children.length +
-				(branch.keyBranch === undefined ? 0 : 1),
-		),
-		root: branches[0]!,
+			fields.push({
+				path,
+				text: path.join("."),
+				kinds,
+				listed: !expand || children.length === 0,
+				open: kinds.object,
+				plain: true,
+				scalar: !shape.kinds.object,
+			})
+		}
+		if (!expand) {
+			if (struct !== undefined && children.length > 0) state.supported = false
+			return shape.inhabited || optional
+		}
+		const inhabited = Arr.reduce(children, true, (all, child) => {
+			if (typeof child.name === "symbol") {
+				state.supported = false
+				return all
+			}
+			const name = String(child.name)
+			if (name === "" || name.includes(".") || name.includes("*")) {
+				throw new Error(
+					`A field name must be nonempty and have no dot or star: "${name}"`,
+				)
+			}
+			const childInhabited = visit(
+				child.type,
+				[...path, name],
+				optional || kinds.null,
+			)
+			return all && childInhabited
+		})
+		return inhabited || optional || kinds.null
 	}
+	const inhabited = visit(ast, [], false)
+	return { fields, supported: state.supported, inhabited }
 }
 
-/**
- * Gives the field of a catalog at a path with dots, if the catalog has it.
- * A path has at most `parts` parts. The lookup follows one place for each
- * part, in a loop.
- */
-export const lookup = (
-	catalog: Catalog,
-	path: string,
-	parts: number = Limits.fieldPathParts,
-): Field | undefined => {
-	const names = path.split(".", parts + 1)
-	if (names.length > parts) {
-		return undefined
-	}
-	// The segments of the path go into one list, in order: a step that made
-	// a new list with the segments above would copy the path at each part.
-	// The list belongs to this lookup.
-	const segments: Array<Segment> = []
-	const found = Arr.reduce(
-		names,
-		catalog.root as Branch | undefined,
-		(branch, name) => {
-			if (branch === undefined) {
-				return undefined
-			}
-			const named = HashMap.get(branch.names, name)
-			if (Option.isSome(named)) {
-				segments.push(name)
-				return catalog.branches[named.value]!
-			}
-			const key = branch.key
-			const keyBranch = branch.keyBranch
-			if (key !== undefined && keyBranch !== undefined && keyFits(key, name)) {
-				segments.push(key)
-				return catalog.branches[keyBranch]!
-			}
-			return undefined
-		},
-	)
-	return found === undefined ? undefined : fieldAt(found, segments, parts)
-}
+/** Finds one exact path. The directory has at most 1,000 fields. */
+export const lookup = (catalog: Catalog, text: string): Field | undefined =>
+	catalog.fields.find((field) => field.text === text)
+
+/** Lists a field before the fields below it. */
+export const fieldsOf = (catalog: Catalog): ReadonlyArray<Field> =>
+	catalog.fields

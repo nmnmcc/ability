@@ -7,6 +7,7 @@
  *   action on it.
  * - A list endpoint takes a scope from the path parameters. The middleware
  *   does not check each note: the handler gets its query with `Auth.filter`.
+ *   Here `nonEmpty` asks for proof that some value is allowed. Unknown fails.
  * - The errors have HTTP status codes: 403 for `Forbidden`, 503 for
  *   `PolicyUnavailable`, and 409 for `Pending`.
  *
@@ -42,7 +43,9 @@ import {
 	Resource,
 } from "../src/index.ts"
 
-class User extends Schema.Class<User>("User")({ id: Schema.String }) {}
+class User extends Schema.Class<User, { readonly brand: unique symbol }>(
+	"User",
+)({ id: Schema.String }) {}
 
 class Note extends Resource.Class<Note>()("Note", {
 	actions: ["read", "update"],
@@ -56,6 +59,10 @@ class Note extends Resource.Class<Note>()("Note", {
 
 const Notes = Domain.make({ principal: User, resources: [Note] })
 
+/**
+ * The caller belongs to the request, so each check reads it.
+ * @effect-leakable-service
+ */
 class Identity extends Context.Service<Identity, User>()(
 	"@nmnmcc/ability/examples/http-api/Identity",
 ) {}
@@ -68,7 +75,10 @@ class Auth extends Authorizer.Service<Auth>()(
 	},
 ) {}
 
-class NoteNotFound extends Schema.TaggedError<NoteNotFound>()("NoteNotFound", {
+class NoteNotFound extends Schema.TaggedError<
+	NoteNotFound,
+	{ readonly brand: unique symbol }
+>()("NoteNotFound", {
 	id: Schema.String,
 }) {}
 
@@ -102,6 +112,7 @@ class Authentication extends HttpApiMiddleware.Service<
 // both use it.
 const notesOfAuthor = AbilityHttpApi.lists(Auth, "read", "Note", {
 	within: (params) => ($) => $.eq("authorId", params["user"] ?? ""),
+	nonEmpty: true,
 })
 
 const Api = HttpApi.make("notes").add(

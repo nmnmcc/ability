@@ -1,7 +1,9 @@
 import { Effect, Schema } from "effect"
-import { Decision, Domain, Policy, Resource } from "../src/index.ts"
+import { Condition, Decision, Domain, Policy, Resource } from "../src/index.ts"
 
-class User extends Schema.Class<User>("User")({
+class User extends Schema.Class<User, { readonly brand: unique symbol }>(
+	"User",
+)({
 	id: Schema.String,
 }) {}
 
@@ -18,6 +20,10 @@ class Post extends Resource.Class<Post>()("Post", {
 
 const Blog = Domain.make({ principal: User, resources: [Post] })
 
+// A condition made outside a rule still gets its field types from the domain.
+const $ = Condition.builder(Blog, "Post")
+const published = $.eq("published", true)
+
 const policy = Policy.define(Blog)(function* (_) {
 	yield* _.allow("read", Post)
 
@@ -28,7 +34,7 @@ const policy = Policy.define(Blog)(function* (_) {
 	})
 
 	yield* _.deny("delete", Post, {
-		when: ($) => $.eq("published", true),
+		when: () => published,
 		reason: "No one may delete a published post",
 	})
 })

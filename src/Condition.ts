@@ -26,31 +26,18 @@
 // the language service check for `unknown` in an Effect is off here.
 // @effect-diagnostics anyUnknownInErrorContext:off
 import * as Arr from "effect/Array"
-import type * as BigDecimal from "effect/BigDecimal"
-import type * as Cause from "effect/Cause"
-import type * as Chunk from "effect/Chunk"
-import type * as DateTime from "effect/DateTime"
-import type * as Duration from "effect/Duration"
-import type * as Exit from "effect/Exit"
-import type * as HashMap from "effect/HashMap"
-import type * as HashSet from "effect/HashSet"
-import type * as Option from "effect/Option"
-import type * as Redacted from "effect/Redacted"
 import type * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import { dual } from "effect/Function"
-import { hasProperty } from "effect/Predicate"
 import * as Schema from "effect/Schema"
-import * as SchemaIssue from "effect/SchemaIssue"
-import * as SchemaTransformation from "effect/SchemaTransformation"
-import * as Result from "effect/Result"
 import * as Algebra from "./internal/algebra.ts"
 import * as Catalog from "./internal/catalog.ts"
-import * as Json from "./internal/json.ts"
 import * as Nodes from "./internal/nodes.ts"
 import * as Search from "./internal/search.ts"
-import * as Trampoline from "./internal/trampoline.ts"
 import * as Resource from "./Resource.ts"
+import type * as Domain from "./Domain.ts"
+import * as Codec from "./internal/condition-codec.ts"
+import * as BuilderData from "./internal/condition-builder.ts"
 
 /**
  * A value that a condition can compare.
@@ -325,440 +312,139 @@ export type OpaqueOf<C> = C extends { readonly "~Opaque": () => infer X }
 	? X
 	: never
 
-type Leaf = string | number | boolean | bigint | symbol | null | undefined
-/**
- * Values of a class that keeps its data inside. A path does not go into them,
- * as in the field paths of a resource, so a field with such a value is one
- * field. A condition can test only if it exists.
- */
-type Whole =
-	| ReadonlyMap<unknown, unknown>
-	| ReadonlySet<unknown>
-	| HashMap.HashMap<unknown, unknown>
-	| HashSet.HashSet<unknown>
-	| Date
-	| URL
-	| Uint8Array
-	| Option.Option<unknown>
-	| BigDecimal.BigDecimal
-	| Duration.Duration
-	| DateTime.DateTime
-	| Redacted.Redacted<unknown>
-	| Chunk.Chunk<unknown>
-	| Cause.Cause<unknown>
-	| Result.Result<unknown, unknown>
-	| Exit.Exit<unknown, unknown>
-	| File
-	| FormData
-	| RegExp
-	| URLSearchParams
-type PreviousDepth = [never, 0, 1, 2, 3]
-type FieldPathInternal<
-	T,
-	Depth extends number,
-	Arrays extends boolean,
-	Parents extends boolean = false,
-> = [Depth] extends [never]
+/** The next smaller path depth. A path has at most five parts. */
+type PreviousDepth = [never, 0, 1, 2, 3, 4]
+
+/** Optional keys keep their field Schema in `schema`. */
+type Unwrap<S> = S extends { readonly schema: infer Inner } ? Inner : S
+
+/** Only a nullable or optional union may expose a fixed object shape. */
+type FixedSchema<S> =
+	Unwrap<S> extends infer U
+		? U extends { readonly members: readonly [infer A, infer B] }
+			? A extends { readonly Type: null | undefined }
+				? Unwrap<B>
+				: B extends { readonly Type: null | undefined }
+					? Unwrap<A>
+					: never
+			: U
+		: never
+
+type NestedFields<S> =
+	FixedSchema<S> extends {
+		readonly fields: infer F extends Schema.Struct.Fields
+	}
+		? F
+		: never
+
+type Paths<Fields, Depth extends number> = [Depth] extends [never]
 	? never
-	: {
-			// A record with number keys has number keys, as `counts.1`.
-			[K in keyof T & (string | number)]-?: PathsOf<
-				`${K}`,
-				NonNullable<T[K]>,
-				Depth,
-				Arrays,
-				Parents
-			>
-		}[keyof T & (string | number)]
+	: string extends keyof Fields
+		? never
+		: {
+				[K in keyof Fields & string]:
+					| K
+					| ([NestedFields<Fields[K]>] extends [never]
+							? never
+							: `${K}.${Paths<NestedFields<Fields[K]>, PreviousDepth[Depth]>}`)
+			}[keyof Fields & string]
 
-/**
- * The paths of one field `K` with the values `V`. Each kind of value in `V`
- * gives its own paths, so a field that holds a string or a struct is a field,
- * and the fields of the struct are fields too. A function is no field.
- */
-type PathsOf<
-	K extends string,
-	V,
-	Depth extends number,
-	Arrays extends boolean,
-	Parents extends boolean,
-> =
-	// A field that is only ever `null` or missing is a field too, and so is a
-	// field that may hold any value, as one of `Schema.Unknown` may.
-	| ([V] extends [never] ? K : {} extends V ? K : never)
-	| ([Extract<V, Leaf | Whole>] extends [never] ? never : K)
-	| ([Extract<V, ReadonlyArray<unknown>>] extends [never]
-			? never
-			: Arrays extends true
-				? K
-				: never)
-	// A condition reads a field below `K` only when `K` holds plain data: a
-	// list, a whole value such as a date, or a function may have a getter or a
-	// method with the name, so the binding does not take such a read. A rule
-	// or a request names a field and does not read it, so it may.
-	| (Arrays extends true
-			? ObjectPaths<
-					K,
-					Exclude<V, Leaf | Whole | Function | ReadonlyArray<unknown>>,
-					Depth,
-					Arrays,
-					Parents
-				>
-			: [Extract<V, Whole | Function | ReadonlyArray<unknown>>] extends [never]
-				? ObjectPaths<K, Exclude<V, Leaf>, Depth, Arrays, Parents>
-				: never)
+/** Real Schema field paths, with at most five parts. */
+export type FieldPath<Fields> = (
+	Fields extends unknown ? (path: Paths<Fields, 4>) => void : never
+) extends (path: infer P) => void
+	? P & string
+	: never
+/** Real fields and their parent paths that a request may name. */
+export type FieldSelector<Fields> = FieldPath<Fields>
+/** Real fields and their parent paths that a rule may name. */
+export type FieldName<Fields> = FieldPath<Fields>
 
-/** The paths of a field `K` that holds the objects `O`, and of the fields below. */
-type ObjectPaths<
-	K extends string,
-	O,
-	Depth extends number,
-	Arrays extends boolean,
-	Parents extends boolean,
-> = [O] extends [never]
-	? never
-	: // A record is one field to a rule or a request, as `permittedFields`
-		// lists it.
-		| (Parents extends true
-				? K
-				: Arrays extends true
-					? string extends keyof O
-						? K
-						: number extends keyof O
-							? K
-							: never
-					: never)
-		| `${K}.${FieldPathInternal<O, PreviousDepth[Depth], Arrays, Parents>}`
-
-/**
- * The paths of the fields of `T` that hold one value, with dots for nested
- * fields. Arrays are left out. A map, a set, a date, a URL, a byte array, an
- * `Option` and the other value types of Effect, such as `BigDecimal` and
- * `Duration`, are one field, and a path does not go into them. A path does
- * not go into a field that may hold one of them or a list either. The type
- * goes down four levels, so type checking stays fast. For a union of types,
- * only the common fields are paths.
- *
- * @stability stable
- * @category utility types
- * @since 0.3.0
- */
-export type FieldPath<T> = [T] extends [object]
-	? FieldPathInternal<T, 4, false>
+type Normalize<A> = Exclude<A, undefined> | (undefined extends A ? null : never)
+type ValueAt<T, Path extends string> = T extends unknown
+	? T extends object
+		? Path extends `${infer Head}.${infer Tail}`
+			? Head extends keyof T
+				? ValueAt<T[Head], Tail>
+				: never
+			: Path extends keyof T
+				? Normalize<T[Path]>
+				: never
+		: null
 	: never
 
-/**
- * The paths of the fields of `T` that a rule or a request may name, as in
- * `Rule.Options.fields`. They are the paths of {@link FieldPath}, and the
- * paths of arrays too: a rule may allow or deny a whole array field, and
- * `permittedFields` lists it.
- *
- * @stability stable
- * @category utility types
- * @since 1.0.0
- */
-export type FieldSelector<T> = [T] extends [object]
-	? FieldPathInternal<T, 4, true>
-	: never
+/** The value at a field path. Missing data has the value `null`. */
+export type PathValue<T, Path extends string> = ValueAt<T, Path>
 
-/**
- * The names that the `fields` of a rule may have: the paths of
- * {@link FieldSelector}, and the paths of the structs above them. A name of a
- * struct covers the fields below it.
- *
- * @stability stable
- * @category utility types
- * @since 2.0.0
- */
-export type FieldName<T> = [T] extends [object]
-	? FieldPathInternal<T, 4, true, true>
-	: never
-
-/**
- * The value type that fits every field in `F`. For one field, it is the type
- * of the field. For a union of fields, it is the values that each of them can
- * hold, so a value of a union type can not test a field of another type. For
- * a union of data types, as for a rule on two kinds, it is the values that
- * the field can hold in each of them.
- *
- * @stability stable
- * @category utility types
- * @since 1.0.0
- */
-export type FieldValue<Data, F extends string> = (
-	Data extends unknown
+/** Values shared by all fields in a union of paths. */
+export type FieldValue<
+	Fields extends Schema.Struct.Fields,
+	F extends string,
+> = (
+	Fields extends unknown
 		? F extends unknown
-			? (value: PathValue<Data, F>) => void
+			? (value: PathValue<Schema.Struct.Type<Fields>, F>) => void
 			: never
 		: never
 ) extends (value: infer V) => void
 	? V
 	: never
 
-type Normalize<A> = Exclude<A, undefined> | (undefined extends A ? null : never)
-
-/**
- * The type of the field of `T` at `Path`. A field that may be missing may also
- * be `null`. Each type of a union gives its own value: a field below a value
- * that is not an object, as below a string, is `null`, as a read of it is.
- *
- * @stability stable
- * @category utility types
- * @since 0.3.0
- */
-export type PathValue<T, Path extends string> = ValueWalk<T, Path>
-
-/**
- * The values of the part `Name` of each type of `U`. A part below a value
- * that is not an object, as below a string or `null`, is `null`.
- */
-type StepValue<U, Name extends string> = U extends unknown
-	? U extends object
-		? ChildOf<U, Name>
-		: null
-	: never
-
-/**
- * Walks a path two parts at a time, with the values of each step. The type
- * checker takes at most about 1000 steps of a type that calls itself, so a
- * walk of one part at a time would stop before a path of 1000 parts.
- */
-type ValueWalk<
-	U,
+type SchemaAt<
+	Fields,
 	Path extends string,
-> = Path extends `${infer A}.${infer B}.${infer Rest}`
-	? ValueWalk<StepValue<StepValue<U, A>, B>, Rest>
-	: Path extends `${infer A}.${infer B}`
-		? Normalize<StepValue<StepValue<U, A>, B>>
-		: Normalize<StepValue<U, Path>>
-
-/**
- * The type of the part `Name` of `T`. A part of a path is text, so the part
- * `"1"` names the number key `1` too, as of a record with number keys.
- */
-type ChildOf<T, Name extends string> = Name extends keyof T
-	? T[Name]
-	: Name extends `${infer N extends number}`
-		? N extends keyof T
-			? T[N]
-			: number extends keyof T
-				? T[number]
-				: never
+> = Path extends `${infer Head}.${infer Tail}`
+	? Head extends keyof Fields
+		? SchemaAt<NestedFields<Fields[Head]>, Tail>
+		: never
+	: Path extends keyof Fields
+		? Unwrap<Fields[Path]>
 		: never
 
-/**
- * What a path may do, for one use of it: go below a list or a whole value,
- * as a rule or a request may, and end at a struct, as the fields of a rule
- * may. See {@link FieldPath}, {@link FieldSelector} and {@link FieldName},
- * which list the short paths with the same rules.
- */
-interface PathRules {
-	readonly arrays: boolean
-	readonly parents: boolean
-}
-
-/** The rules of a path that a condition reads. */
-interface ReadRules {
-	readonly arrays: false
-	readonly parents: false
-}
-
-/** The rules of the field of a request. */
-interface SelectRules {
-	readonly arrays: true
-	readonly parents: false
-}
-
-/** The rules of a field of a rule, which may name a struct. */
-interface NameRules {
-	readonly arrays: true
-	readonly parents: true
-}
-
-/** The objects below a field with the values `V`: see `PathsOf`. */
-type ObjectsBelow<V, Arrays extends boolean> = Arrays extends true
-	? Exclude<V, Leaf | Whole | Function | ReadonlyArray<unknown>>
-	: [Extract<V, Whole | Function | ReadonlyArray<unknown>>] extends [never]
-		? Exclude<V, Leaf>
-		: never
-
-/** Tests if `Name` names a field of every object of `O`, as `keyof` does. */
-type HasPart<O, Name extends string> = Name extends keyof O
-	? true
-	: Name extends `${infer N extends number}`
-		? N extends keyof O
-			? true
-			: number extends keyof O
-				? true
-				: false
-		: false
-
-/**
- * The objects below the part `Name` of the objects `O`, for a path that goes
- * on, or `never` when it can not go on.
- */
-type PathStep<O, Name extends string, R extends PathRules> =
-	HasPart<O, Name> extends true
-		? ObjectsBelow<NonNullable<ChildOf<O, Name>>, R["arrays"]>
-		: never
-
-/** Tests if a path may end at a field with the values `V`: see `PathsOf`. */
-type EndsAt<V, R extends PathRules, Last extends boolean> = [V] extends [never]
-	? true
-	: {} extends V
-		? true
-		: [Extract<V, Leaf | Whole>] extends [never]
-			? R["arrays"] extends true
-				? [Extract<V, ReadonlyArray<unknown>>] extends [never]
-					? EndsAtObjects<ObjectsBelow<V, true>, R, Last>
-					: true
-				: false
-			: true
-
-/**
- * Tests if a path may end at a field that holds the objects `O`: a field of a
- * rule may name a struct, and a request may name a record, or a struct at
- * the last part that a path may have.
- */
-type EndsAtObjects<O, R extends PathRules, Last extends boolean> = [O] extends [
-	never,
-]
+type ScalarSchema<S, Depth extends number = 4> = [Depth] extends [never]
 	? false
-	: R["parents"] extends true
-		? true
-		: string extends keyof O
-			? true
-			: number extends keyof O
+	: S extends { readonly from: unknown }
+		? false
+		: S extends { readonly members: ReadonlyArray<infer M> }
+			? false extends ScalarSchema<M, PreviousDepth[Depth]>
+				? false
+				: true
+			: S extends {
+						readonly ast: {
+							readonly _tag:
+								| "Null"
+								| "Undefined"
+								| "Never"
+								| "String"
+								| "Boolean"
+								| "Number"
+								| "Literal"
+								| "Enum"
+						}
+				  }
 				? true
-				: Last
+				: S extends { readonly literals: ReadonlyArray<unknown> }
+					? true
+					: false
 
-/** The paths one part below `Done`, as the names that may come next. */
-type NextNames<O, Done extends string> = `${Done}${keyof O & (string | number)}`
-
-/**
- * Walks a path two parts at a time, from the objects `O`. It gives `true`
- * for a path that the rules `R` take, or the names that may come next after
- * the last good part. `Count` counts the parts before `F`, so the walk knows
- * the last part that a path may have: part 1000, the default of
- * `Limits.fieldPathParts`.
- */
-type PathWalk<
-	O,
-	F extends string,
-	Done extends string,
-	R extends PathRules,
-	Count extends ReadonlyArray<0>,
-> = F extends `${infer A}.${infer B}.${infer Rest}`
-	? PathStep<O, A, R> extends infer O1
-		? [O1] extends [never]
-			? NextNames<O, Done>
-			: PathStep<O1, B, R> extends infer O2
-				? [O2] extends [never]
-					? NextNames<O1, `${Done}${A}.`>
-					: PathWalk<O2, Rest, `${Done}${A}.${B}.`, R, [...Count, 0, 0]>
-				: never
-		: never
-	: F extends `${infer A}.${infer B}`
-		? PathStep<O, A, R> extends infer O1
-			? [O1] extends [never]
-				? NextNames<O, Done>
-				: PathEnd<O1, B, `${Done}${A}.`, R, [...Count, 0]>
-			: never
-		: PathEnd<O, F, Done, R, Count>
-
-type PathEnd<
-	O,
-	Name extends string,
-	Done extends string,
-	R extends PathRules,
-	Count extends ReadonlyArray<0>,
-> =
-	HasPart<O, Name> extends true
-		? EndsAt<
-				NonNullable<ChildOf<O, Name>>,
-				R,
-				Count["length"] extends 999 ? true : false
-			> extends true
-			? true
-			: // The name is a field, but a path may not end at it, as at a struct
-				// for a condition: the paths below it may come next. The names of
-				// this place would hold the name itself.
-				NextNames<
-					ObjectsBelow<NonNullable<ChildOf<O, Name>>, R["arrays"]>,
-					`${Done}${Name}.`
-				>
-		: NextNames<O, Done>
-
-/**
- * Checks one field path `F` of `T`, of any length up to about 1000 parts.
- * It gives `F` for a path that the rules `R` take. For another path, it gives
- * the paths that may come next after its last good part, so a type error
- * names them. For a union of types, a part must be in each of them.
- */
-type PathCheck<T, F extends string, R extends PathRules> = [T] extends [object]
-	? // Each path of a union of paths, as of a field typed `FieldSelector`,
-		// is checked by itself.
-		F extends unknown
-		? PathWalk<T, F, "", R, []> extends true
+type ScalarPath<Fields extends Schema.Struct.Fields> = {
+	[F in FieldPath<Fields>]: ScalarSchema<SchemaAt<Fields, F>> extends true
+		? FieldValue<Fields, F> extends Scalar
 			? F
-			: // The names come from parts of `F`. Inference must not find `F`
-				// in them, so a call gets its `F` from the path that it gives.
-				NoInfer<PathWalk<T, F, "", R, []>>
+			: never
 		: never
-	: never
-
-/**
- * A path of `T` that a condition may read, as one of {@link FieldPath}, of
- * any length up to about 1000 parts. It is `F` when `F` is such a path, and
- * the names that may come next when it is not.
- *
- * @stability stable
- * @category utility types
- * @since 2.1.0
- */
-export type ReadPath<T, F extends string> = PathCheck<T, F, ReadRules>
-
-/**
- * A path of `T` that a request may name, as one of {@link FieldSelector}, of
- * any length up to about 1000 parts. See {@link ReadPath}.
- *
- * @stability stable
- * @category utility types
- * @since 2.1.0
- */
-export type SelectPath<T, F extends string> = PathCheck<T, F, SelectRules>
-
-/**
- * A path of `T` that a field of a rule may name, as one of
- * {@link FieldName}, of any length up to about 1000 parts. See
- * {@link ReadPath}.
- *
- * @stability stable
- * @category utility types
- * @since 2.1.0
- */
-export type NamePath<T, F extends string> = PathCheck<T, F, NameRules>
-
-/**
- * A path that a condition may read, with an ordered value. The path that is
- * given must be one that {@link ReadPath} takes: a path of the type `string`
- * is not, since the names that `ReadPath` gives for it fit `string` too.
- */
-type OrderedReadPath<T, F extends string> = [F] extends [ReadPath<T, F>]
-	? Exclude<PathValue<T, F>, null> extends number | string
+}[FieldPath<Fields>]
+type OrderedPath<Fields extends Schema.Struct.Fields> = {
+	[F in ScalarPath<Fields>]: Exclude<FieldValue<Fields, F>, null> extends
+		string | number
 		? F
 		: never
-	: ReadPath<T, F>
+}[ScalarPath<Fields>]
 
-/**
- * A path that a condition may read, with a scalar value. See
- * {@link OrderedReadPath}.
- */
-type ScalarReadPath<T, F extends string> = [F] extends [ReadPath<T, F>]
-	? PathValue<T, F> extends Scalar
-		? F
-		: never
-	: ReadPath<T, F>
+type FieldsFor<D, K extends string> = "*" extends K ? {} : Domain.FieldsOf<D, K>
+type ValueFor<D, K extends string> = "*" extends K
+	? Domain.AnyValue<D>
+	: Domain.ValueOf<D, K>
 
 /**
  * A value for a field of type `A`: a fixed value, or a field of the principal
@@ -796,85 +482,85 @@ type PrincipalOf<V, _P> = [Extract<V, PrincipalRef>] extends [never]
 		: unknown
 
 /**
- * Makes conditions for a resource with the data type `Data` and the value type
- * `Value`, and a principal with the type `P`.
+ * Makes conditions for kind `K` of domain `D`.
  *
  * @stability stable
  * @category models
  * @since 0.3.0
  */
-export interface Builder<Data, Value, P> {
+export interface Builder<D, K extends string> {
 	/** The field is equal to the value. */
 	readonly eq: <
-		const F extends string,
-		const V extends OperandOf<FieldValue<Data, F>, any>,
+		const F extends ScalarPath<FieldsFor<D, K>>,
+		const V extends OperandOf<FieldValue<FieldsFor<D, K>, F>, any>,
 	>(
-		field: ReadPath<Data, F>,
+		field: F,
 		value: V,
-	) => Test<Value, PrincipalOf<V, P>>
+	) => Test<ValueFor<D, K>, PrincipalOf<V, Domain.Principal<D>>>
 	/** The field is not equal to the value. */
 	readonly ne: <
-		const F extends string,
-		const V extends OperandOf<FieldValue<Data, F>, any>,
+		const F extends ScalarPath<FieldsFor<D, K>>,
+		const V extends OperandOf<FieldValue<FieldsFor<D, K>, F>, any>,
 	>(
-		field: ReadPath<Data, F>,
+		field: F,
 		value: V,
-	) => Test<Value, PrincipalOf<V, P>>
+	) => Test<ValueFor<D, K>, PrincipalOf<V, Domain.Principal<D>>>
 	readonly lt: <
-		const F extends string,
-		const V extends OperandOf<Exclude<FieldValue<Data, F>, null>, any>,
+		const F extends OrderedPath<FieldsFor<D, K>>,
+		const V extends OperandOf<
+			Exclude<FieldValue<FieldsFor<D, K>, F>, null>,
+			any
+		>,
 	>(
-		field: OrderedReadPath<Data, F>,
+		field: F,
 		value: V,
-	) => Test<Value, PrincipalOf<V, P>>
+	) => Test<ValueFor<D, K>, PrincipalOf<V, Domain.Principal<D>>>
 	readonly lte: <
-		const F extends string,
-		const V extends OperandOf<Exclude<FieldValue<Data, F>, null>, any>,
+		const F extends OrderedPath<FieldsFor<D, K>>,
+		const V extends OperandOf<
+			Exclude<FieldValue<FieldsFor<D, K>, F>, null>,
+			any
+		>,
 	>(
-		field: OrderedReadPath<Data, F>,
+		field: F,
 		value: V,
-	) => Test<Value, PrincipalOf<V, P>>
+	) => Test<ValueFor<D, K>, PrincipalOf<V, Domain.Principal<D>>>
 	readonly gt: <
-		const F extends string,
-		const V extends OperandOf<Exclude<FieldValue<Data, F>, null>, any>,
+		const F extends OrderedPath<FieldsFor<D, K>>,
+		const V extends OperandOf<
+			Exclude<FieldValue<FieldsFor<D, K>, F>, null>,
+			any
+		>,
 	>(
-		field: OrderedReadPath<Data, F>,
+		field: F,
 		value: V,
-	) => Test<Value, PrincipalOf<V, P>>
+	) => Test<ValueFor<D, K>, PrincipalOf<V, Domain.Principal<D>>>
 	readonly gte: <
-		const F extends string,
-		const V extends OperandOf<Exclude<FieldValue<Data, F>, null>, any>,
+		const F extends OrderedPath<FieldsFor<D, K>>,
+		const V extends OperandOf<
+			Exclude<FieldValue<FieldsFor<D, K>, F>, null>,
+			any
+		>,
 	>(
-		field: OrderedReadPath<Data, F>,
+		field: F,
 		value: V,
-	) => Test<Value, PrincipalOf<V, P>>
-	/** The field is equal to one of the values. */
+	) => Test<ValueFor<D, K>, PrincipalOf<V, Domain.Principal<D>>>
 	readonly in: <
-		const F extends string,
-		const Vs extends ReadonlyArray<OperandOf<FieldValue<Data, F>, any>>,
+		const F extends ScalarPath<FieldsFor<D, K>>,
+		const Vs extends ReadonlyArray<
+			OperandOf<FieldValue<FieldsFor<D, K>, F>, any>
+		>,
 	>(
-		field: ReadPath<Data, F>,
+		field: F,
 		values: Vs,
-	) => Test<Value, PrincipalOf<Vs[number], P>>
-	/** The field has a value that is not `null`. */
-	readonly exists: <const F extends string>(
-		field: ReadPath<Data, F>,
-	) => Test<Value>
-	/**
-	 * The path of the resource starts with these parts. A part of a path may
-	 * be any {@link Scalar}, as a number field of the resource, and the
-	 * binding checks each part against the path of each kind of the rule.
-	 */
+	) => Test<ValueFor<D, K>, PrincipalOf<Vs[number], Domain.Principal<D>>>
+	readonly exists: (field: FieldPath<FieldsFor<D, K>>) => Test<ValueFor<D, K>>
 	readonly under: <const Ps extends ReadonlyArray<Scalar | Ref<Scalar, any>>>(
 		...prefix: Ps
-	) => Test<Value, PrincipalOf<Ps[number], P>>
-	/**
-	 * A field of the principal, to use as a value. The field must have a
-	 * {@link Scalar} type.
-	 */
-	readonly principal: <const F extends string>(
-		field: ScalarReadPath<P, F>,
-	) => Ref<PathValue<P, F>, P>
+	) => Test<ValueFor<D, K>, PrincipalOf<Ps[number], Domain.Principal<D>>>
+	readonly principal: <const F extends ScalarPath<Domain.PrincipalFields<D>>>(
+		field: F,
+	) => Ref<FieldValue<Domain.PrincipalFields<D>, F>, Domain.Principal<D>>
 	readonly and: <const Cs extends ReadonlyArray<Any>>(
 		...conditions: Cs
 	) => Condition<ReadsOf<Cs[number]>, OpaqueOf<Cs[number]>>
@@ -884,29 +570,15 @@ export interface Builder<Data, Value, P> {
 	readonly not: <C extends Any>(
 		condition: C,
 	) => Condition<ReadsOf<C>, OpaqueOf<C>>
-	/**
-	 * A test that runs any code. It may give a boolean or an `Effect`. A
-	 * condition with a predicate can not become JSON or a query.
-	 */
+	/** A predicate may use the full class values, with their methods. */
 	readonly predicate: <E = never, R = never>(
 		name: string,
 		test: (
-			value: Value,
-			principal: P,
+			value: ValueFor<D, K>,
+			principal: Domain.Principal<D>,
 		) => boolean | Effect.Effect<boolean, E, R>,
-	) => Condition<Reads<Value, P>, Opaque<E, R>>
+	) => Condition<Reads<ValueFor<D, K>, Domain.Principal<D>>, Opaque<E, R>>
 }
-
-const isOperand = (u: unknown): u is Operand =>
-	hasProperty(u, "_tag") && (u._tag === "Literal" || u._tag === "Principal")
-
-const toOperand = (value: unknown): Operand =>
-	isOperand(value) ? value : Nodes.literal(value as Scalar)
-
-const compare =
-	(op: CompareOperator) =>
-	(field: string, value: unknown): Ast =>
-		new Nodes.Compare({ op, field, value: toOperand(value) })
 
 // A list of conditions goes in as an array, not as arguments: a call may take
 // only so many arguments, and a decoded condition may have more children.
@@ -920,49 +592,11 @@ const orOf = (conditions: ReadonlyArray<Ast>): Ast =>
 
 const makeNot = (condition: Ast): Ast => new Nodes.Not(condition as Nodes.Node)
 
-const sharedBuilder: Builder<any, any, any> = {
-	eq: compare("eq"),
-	ne: compare("ne"),
-	lt: compare("lt"),
-	lte: compare("lte"),
-	gt: compare("gt"),
-	gte: compare("gte"),
-	in: (field: string, values: ReadonlyArray<unknown>) =>
-		new Nodes.In({ field, values: Arr.map(Array.from(values), toOperand) }),
-	exists: (field: string) => new Nodes.Exists({ field }),
-	under: (...prefix: ReadonlyArray<unknown>) =>
-		new Nodes.Under({ prefix: Arr.map(prefix, toOperand) }),
-	principal: (path: string) => Nodes.principalRef(path),
-	and: (...conditions: ReadonlyArray<Ast>) => andOf(conditions),
-	or: (...conditions: ReadonlyArray<Ast>) => orOf(conditions),
-	not: makeNot,
-	predicate: (
-		name: string,
-		test: (
-			value: unknown,
-			principal: unknown,
-		) => boolean | Effect.Effect<boolean, unknown, unknown>,
-	) =>
-		new Nodes.Predicate({
-			name,
-			run: (value, principal) =>
-				Effect.suspend(() => {
-					const result = test(value, principal)
-					return Effect.isEffect(result) ? result : Effect.succeed(result)
-				}),
-		}),
-} as never
-
-/**
- * Makes a builder. Rules give you a builder with the right types, so you do not
- * often need this.
- *
- * @stability stable
- * @category constructors
- * @since 0.3.0
- */
-export const builder = <Data, Value, P>(): Builder<Data, Value, P> =>
-	sharedBuilder
+/** Makes conditions with the fields of one kind in a domain. */
+export const builder: <D extends Domain.Any, K extends Domain.Kind<D>>(
+	domain: D,
+	kind: K,
+) => Builder<D, K> = BuilderData.make as never
 
 /**
  * Always true.
@@ -1100,8 +734,8 @@ type ReadsInput<I> =
 /**
  * Tests a condition on a value. A predicate may fail with its error. When the
  * condition has a predicate, the input must have the value and the principal
- * that the predicate reads. The test runs on the simple form of the condition
- * with the principal in it, so it reads only the fields that a residual reads.
+ * that the predicate reads. The test reads the stable own data fields of the
+ * values. A predicate may use the full class value.
  *
  * @stability stable
  * @category evaluation
@@ -1205,9 +839,12 @@ export interface Interpreter<A> {
  * @category errors
  * @since 0.3.0
  */
-export class Untranslatable extends Schema.TaggedError<Untranslatable>(
-	"@nmnmcc/ability/Condition/Untranslatable",
-)("Untranslatable", { reason: Schema.String }) {}
+export class Untranslatable extends Schema.TaggedError<
+	Untranslatable,
+	{ readonly brand: unique symbol }
+>("@nmnmcc/ability/Condition/Untranslatable")("Untranslatable", {
+	reason: Schema.String,
+}) {}
 
 const literalValue = (operand: Operand, field: string): Scalar => {
 	if (operand._tag !== "Literal") {
@@ -1219,64 +856,51 @@ const literalValue = (operand: Operand, field: string): Scalar => {
 }
 
 /**
- * Folds a condition. A shared child is folded again for each place. The walk
- * takes the steps of a trampoline, so a deep condition does not fill the
- * stack.
+ * Folds a condition. A shared child is folded again for each place. The fixed depth limit keeps this walk small.
  */
-const foldNode = <A>(root: Nodes.Node, interpreter: Interpreter<A>): A =>
-	Trampoline.run(root.depth, (R) => {
-		const go = (node: Nodes.Node): Trampoline.Step<A> => {
-			const children = (nodes: ReadonlyArray<Nodes.Node>) =>
-				R.forEach(nodes, (child) => R.suspend(() => go(child)))
-			switch (node._tag) {
-				case "True":
-					return R.succeed(interpreter.true())
-				case "False":
-					return R.succeed(interpreter.false())
-				case "Compare":
-					return R.succeed(
-						interpreter.compare(
-							node.op,
-							node.field,
-							literalValue(node.value, node.field),
-						),
-					)
-				case "In":
-					return R.succeed(
-						interpreter.in(
-							node.field,
-							Arr.map(node.values, (operand) =>
-								literalValue(operand, node.field),
-							),
-						),
-					)
-				case "Exists":
-					return R.succeed(interpreter.exists(node.field))
-				case "Under":
-					throw Untranslatable.make({
-						reason:
-							"An Under node needs the resource path. Call Condition.partial first.",
-					})
-				case "And":
-					return R.map(children(node.conditions), interpreter.and)
-				case "Or":
-					return R.map(children(node.conditions), interpreter.or)
-				case "Not":
-					return R.map(
-						R.suspend(() => go(node.condition)),
-						interpreter.not,
-					)
-				case "Predicate":
-					if (interpreter.predicate === undefined) {
-						throw Untranslatable.make({
-							reason: `The predicate "${node.name}" can not become a query`,
-						})
-					}
-					return R.succeed(interpreter.predicate(node.name))
-			}
+const foldNode = <A>(node: Nodes.Node, interpreter: Interpreter<A>): A => {
+	switch (node._tag) {
+		case "True":
+			return interpreter.true()
+		case "False":
+			return interpreter.false()
+		case "Compare":
+			return interpreter.compare(
+				node.op,
+				node.field,
+				literalValue(node.value, node.field),
+			)
+		case "In":
+			return interpreter.in(
+				node.field,
+				Arr.map(node.values, (operand) => literalValue(operand, node.field)),
+			)
+		case "Exists":
+			return interpreter.exists(node.field)
+		case "Under":
+			throw Untranslatable.make({
+				reason:
+					"An Under node needs the resource path. Call Condition.partial first.",
+			})
+		case "And":
+			return interpreter.and(
+				Arr.map(node.conditions, (child) => foldNode(child, interpreter)),
+			)
+		case "Or":
+			return interpreter.or(
+				Arr.map(node.conditions, (child) => foldNode(child, interpreter)),
+			)
+		case "Not":
+			return interpreter.not(foldNode(node.condition, interpreter))
+		case "Predicate": {
+			if (interpreter.predicate === undefined)
+				throw Untranslatable.make({
+					reason: `The predicate "${node.name}" can not become a query`,
+				})
+			return interpreter.predicate(node.name)
 		}
-		return go(root)
-	})
+	}
+}
 
 /**
  * Changes a condition into another form with an interpreter. Call
@@ -1356,149 +980,22 @@ export type Satisfiability = Search.Satisfiability
  * @since 1.0.0
  */
 export interface SatisfiableOptions {
-	/**
-	 * The Schema of the values. Its shape gives the kinds of values of each
-	 * field. Without it, a field may have any value.
-	 */
-	readonly schema?: Schema.Top | undefined
-	/** The most steps that the search may take. The default is 1000000. */
-	readonly budget?: number | undefined
+	/** The Schema of the values to search. */
+	readonly schema: Schema.Top
 }
 
-/**
- * Tests if some value makes a condition true, and gives such a value.
- *
- * Call {@link partial} first: the condition must have no principal fields and
- * no `Under` nodes. A condition with a predicate gives `Unknown`.
- *
- * Each test of a condition compares one field with constants, so the
- * constants cut the values of each field into a few cells. The search tries
- * one value from each cell, one field at a time. The values of a field come
- * from the shape of the Schema in `options.schema`: its literals, `null` for
- * a nullable or optional field, and finite or integer numbers.
- *
- * The search reads the shape of the Schema, not its other checks, such as a
- * minimum length. So `Unsatisfiable` holds for every value of the Schema. A
- * `Satisfiable` example fits the shape, but a check may still stop it.
- *
- * The problem is as hard as boolean satisfiability, so the search has a
- * budget. Past it, the answer is `Unknown`. A condition with more than 256
- * fields gives `Unknown` too.
- *
- * @stability stable
- * @category evaluation
- * @since 1.0.0
- */
+/** Tests whether some value makes a condition true within the fixed search limit. */
 export const satisfiable = (
 	condition: Any,
-	options: SatisfiableOptions = {},
-): Satisfiability => {
-	const catalog =
-		options.schema === undefined
-			? undefined
-			: Catalog.catalogOf(options.schema.ast)
-	return Search.satisfiable(
-		nodeOf(condition),
-		Search.kindsIn(catalog),
-		options.budget,
-		undefined,
-		catalog?.inhabited ?? true,
-	)
-}
+	options: SatisfiableOptions,
+): Satisfiability =>
+	Search.satisfiable(nodeOf(condition), Catalog.catalogOf(options.schema.ast))
 
-/**
- * The JSON form of an operand.
- *
- * @stability stable
- * @category models
- * @since 2.0.0
- */
-export type EncodedOperand =
-	| { readonly _tag: "Literal"; readonly value: Scalar }
-	| { readonly _tag: "Principal"; readonly path: string }
-
-/**
- * The JSON form of a condition with no predicate.
- *
- * @stability stable
- * @category models
- * @since 0.3.0
- */
-export type Encoded =
-	| { readonly _tag: "True" }
-	| { readonly _tag: "False" }
-	| {
-			readonly _tag: "Compare"
-			readonly op: CompareOperator
-			readonly field: string
-			readonly value: EncodedOperand
-	  }
-	| {
-			readonly _tag: "In"
-			readonly field: string
-			readonly values: ReadonlyArray<EncodedOperand>
-	  }
-	| { readonly _tag: "Exists"; readonly field: string }
-	| { readonly _tag: "Under"; readonly prefix: ReadonlyArray<EncodedOperand> }
-	| {
-			readonly _tag: "And" | "Or"
-			readonly conditions: ReadonlyArray<Encoded>
-	  }
-	| { readonly _tag: "Not"; readonly condition: Encoded }
-
-/**
- * A condition with no predicate, that may read any values. It is the type of
- * {@link schema}: a decoded condition reads nothing, so it fits any rule, and
- * any plain condition, such as one from a builder or a residual, may be
- * encoded.
- *
- * @stability stable
- * @category models
- * @since 1.0.0
- */
-// `any` for what it reads: the field is contravariant, so no other type both
-// takes every condition and fits every rule.
-export type PlainCondition = Condition<any>
-
-/**
- * The Schema of a condition with no predicate. It checks the shape only. Use
- * `Policy.schema` to check the field names against a domain too.
- *
- * The decoder takes the default limits: at most `conditionNodes` nodes,
- * 1000000, and `jsonNodes` objects and array items, 10000000, with a shared
- * object counted for each place. It stops at the first one past a limit. It
- * takes any number of levels, and it reads only the own data fields of the
- * input. Use `Policy.schema` for the limits of a domain.
- *
- * @stability stable
- * @category schemas
- * @since 0.3.0
- */
-export const schema: Schema.Codec<PlainCondition, Encoded> =
-	Schema.Unknown.pipe(
-		Schema.decodeTo(
-			Schema.declare(
-				(input): input is PlainCondition =>
-					Nodes.isNode(input) && !input.opaque,
-			),
-			SchemaTransformation.transformEffect({
-				decode: (input: unknown, options) =>
-					Result.match(Json.decode(input), {
-						onSuccess: (node) => Effect.succeed(node as never),
-						onFailure: (problem) =>
-							Effect.fail(
-								new SchemaIssue.Pointer(
-									problem.path,
-									new SchemaIssue.InvalidValue(
-										{ message: problem.message },
-										input,
-										options,
-									),
-								),
-							),
-					}),
-				encode: (condition: PlainCondition) =>
-					Effect.sync(() => Json.toJson(condition as never)),
-			}),
-		),
-	) as never
+/** A JSON text Codec for plain conditions bound to one kind of a domain. */
+export const schema: <D extends Domain.Any, K extends Domain.Kind<D>>(
+	domain: D,
+	kind: K,
+) => Schema.Codec<
+	Condition<Reads<Domain.ValueOf<D, K>, Domain.Principal<D>>>,
+	string
+> = Codec.schema as never

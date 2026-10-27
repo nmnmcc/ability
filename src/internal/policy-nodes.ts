@@ -11,14 +11,10 @@
  */
 import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
-import * as Equal from "effect/Equal"
-import * as Hash from "effect/Hash"
 import * as Schema from "effect/Schema"
 import * as Rule from "./rule.ts"
 import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
-import * as Structure from "./structure.ts"
-import * as Trampoline from "./trampoline.ts"
 
 /** The combining algorithms of a list of rules. The decoder reads this list too. */
 export const Algorithm = Schema.Literals([
@@ -45,15 +41,22 @@ interface Facts {
 
 /** Checks the facts of a node against the limits. */
 const checked = (facts: Facts): Facts => {
-	// A node does not know its domain, so it checks the ceiling. A policy
-	// checks the limit of its domain.
-	if (facts.size > Limits.ceilings.policyNodes) {
+	if (facts.size > Limits.policyNodes) {
 		throw Limits.exceeded(
 			"A policy tree",
 			"policyNodes",
 			"nodes",
 			facts.size,
-			Limits.ceilings.policyNodes,
+			Limits.policyNodes,
+		)
+	}
+	if (facts.depth > Limits.policyDepth) {
+		throw Limits.exceeded(
+			"A policy tree",
+			"policyDepth",
+			"levels",
+			facts.depth,
+			Limits.policyDepth,
 		)
 	}
 	return facts
@@ -70,29 +73,9 @@ const factsOf = (children: ReadonlyArray<Node>): Facts =>
 /** The base of every node. It keeps the facts. */
 abstract class Base extends Data.Class {
 	readonly #facts: Facts
-	readonly #hash: number
-
-	/** `hashed` is the data that the hash reads, which is `props` at most. */
-	constructor(
-		tag: string,
-		props: object,
-		facts: Facts,
-		hashed: object = props,
-	) {
+	constructor(props: object, facts: Facts) {
 		super(props as never)
 		this.#facts = facts
-		this.#hash = Structure.hashOf(kind, tag, hashed)
-	}
-
-	// A tree has no limit of levels, so the hash and the equality are the
-	// ones of `Structure`, which do not fill the stack. They read the same
-	// data as the ones of `Data.Class`.
-	[Hash.symbol](): number {
-		return this.#hash
-	}
-
-	[Equal.symbol](that: unknown): boolean {
-		return Structure.equals(kind, this, that)
 	}
 
 	/** The number of nodes, with the rules and their conditions. */
@@ -109,12 +92,6 @@ abstract class Base extends Data.Class {
 	get opaque(): boolean {
 		return this.#facts.opaque
 	}
-}
-
-const kind: Structure.Kind = {
-	isNode: (u): u is Base => u instanceof Base,
-	// A rule holds its `meta`, which may have very many levels.
-	isRecord: Rule.isRule,
 }
 
 /**
@@ -138,6 +115,7 @@ export class Rules extends Base {
 				`"${String(props.algorithm)}" is not a combining algorithm`,
 			)
 		}
+		checked({ size: 1 + props.rules.length, depth: 1, opaque: false })
 		const rules = Object.freeze(Array.from(props.rules))
 		// A value that is not a rule, such as a copy of a rule made with a
 		// spread, may keep the type fields of another rule, and it does not
@@ -147,23 +125,12 @@ export class Rules extends Base {
 		}
 		const conditions = Arr.map(rules, whenOf)
 		super(
-			"Rules",
 			{ algorithm: props.algorithm, rules },
 			checked({
-				size: Arr.reduce(
-					conditions,
-					1,
-					// A condition counts its nodes and the values of its tests.
-					(total, when) => total + 1 + (when?.weight ?? 0),
-				),
+				size: Arr.reduce(rules, 1, (total, rule) => total + rule.weight),
 				depth: 1,
 				opaque: Arr.some(conditions, (when) => when?.opaque ?? false),
 			}),
-			// The hash of a rule reads only its small parts: see `Rule`.
-			{
-				algorithm: props.algorithm,
-				rules: Arr.map(rules, (rule) => rule[Hash.symbol]()),
-			},
 		)
 	}
 }
@@ -171,6 +138,7 @@ export class Rules extends Base {
 const checkChildren = (
 	policies: ReadonlyArray<unknown>,
 ): ReadonlyArray<Node> => {
+	checked({ size: 1 + policies.length, depth: 1, opaque: false })
 	const children = Array.from(policies)
 	if (!Arr.every(children, isNode)) {
 		throw new Error("A child of a policy tree is not a node of a policy")
@@ -184,7 +152,7 @@ export class All extends Base {
 	declare readonly policies: ReadonlyArray<Node>
 	constructor(policies: ReadonlyArray<Node>) {
 		const children = checkChildren(policies)
-		super("All", { policies: children }, factsOf(children))
+		super({ policies: children }, factsOf(children))
 	}
 }
 
@@ -194,7 +162,7 @@ export class Any extends Base {
 	declare readonly policies: ReadonlyArray<Node>
 	constructor(policies: ReadonlyArray<Node>) {
 		const children = checkChildren(policies)
-		super("Any", { policies: children }, factsOf(children))
+		super({ policies: children }, factsOf(children))
 	}
 }
 
@@ -204,7 +172,7 @@ export class FirstOf extends Base {
 	declare readonly policies: ReadonlyArray<Node>
 	constructor(policies: ReadonlyArray<Node>) {
 		const children = checkChildren(policies)
-		super("FirstOf", { policies: children }, factsOf(children))
+		super({ policies: children }, factsOf(children))
 	}
 }
 
@@ -215,7 +183,7 @@ export class Ceiling extends Base {
 	declare readonly policy: Node
 	constructor(props: { readonly cap: Node; readonly policy: Node }) {
 		const [cap, policy] = checkChildren([props.cap, props.policy])
-		super("Ceiling", { cap, policy }, factsOf([cap!, policy!]))
+		super({ cap, policy }, factsOf([cap!, policy!]))
 	}
 }
 
@@ -230,35 +198,15 @@ export const isNode = (u: unknown): u is Node => u instanceof Base
  * into the condition of each rule takes the rules from this list first, so it
  * does not go down the levels of the tree and of a condition at once.
  */
-export const rulesOf = (root: Node): ReadonlyArray<Rule.Rule> => {
-	// The rules go into one list, in order. A walk that joined the lists of
-	// the children at each node would copy the list of a deep tree at each
-	// level. The list belongs to this walk.
-	const rules: Array<Rule.Rule> = []
-	// The walk takes the steps of a trampoline, so a deep tree does not fill
-	// the stack.
-	Trampoline.run(root.depth, (R) => {
-		const children = (nodes: ReadonlyArray<Node>) =>
-			R.map(
-				R.forEach(nodes, (child) => R.suspend(() => go(child))),
-				() => undefined,
-			)
-		const go = (node: Node): Trampoline.Step<undefined> => {
-			switch (node._tag) {
-				case "Rules":
-					Arr.forEach(node.rules, (rule) => {
-						rules.push(rule)
-					})
-					return R.succeed(undefined)
-				case "All":
-				case "Any":
-				case "FirstOf":
-					return children(node.policies)
-				case "Ceiling":
-					return children([node.cap, node.policy])
-			}
-		}
-		return go(root)
-	})
-	return rules
+export const rulesOf = (node: Node): ReadonlyArray<Rule.Rule> => {
+	switch (node._tag) {
+		case "Rules":
+			return node.rules
+		case "All":
+		case "Any":
+		case "FirstOf":
+			return Arr.flatMap(node.policies, rulesOf)
+		case "Ceiling":
+			return [...rulesOf(node.cap), ...rulesOf(node.policy)]
+	}
 }

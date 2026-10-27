@@ -8,11 +8,12 @@ import {
 	Option,
 	Schema,
 } from "effect"
-import { Condition, Limits, Resource } from "../src/index.ts"
+import { Condition, Domain, Limits, Resource } from "../src/index.ts"
 import * as Nodes from "../src/internal/nodes.ts"
-import { alice, aliceBot, Bot, Caller, sharedBot } from "./fixtures.ts"
+import { alice, aliceBot, App, Bot, Caller, sharedBot } from "./fixtures.ts"
 
-const $ = Condition.builder<Resource.Data<typeof Bot>, Bot, Caller>()
+const $ = Condition.builder(App, "Bot")
+const codec = Condition.schema(App, "Bot")
 
 const path = [
 	"org",
@@ -176,8 +177,9 @@ describe("Condition", () => {
 			$.or($.in("name", ["a", "b"]), $.not($.exists("ownerUserId"))),
 			$.gte("level", 3),
 		)
-		const json = JSON.parse(JSON.stringify(condition))
-		const decoded = Schema.decodeUnknownSync(Condition.schema)(json)
+		const json = Schema.encodeSync(codec)(condition)
+		assert.strictEqual(typeof json, "string")
+		const decoded = Schema.decodeSync(codec)(json)
 		assert.deepStrictEqual(decoded, condition)
 		assert.deepStrictEqual(Condition.fields(condition), [
 			"name",
@@ -241,119 +243,86 @@ describe("Condition", () => {
 		)
 	})
 
-	it("does not put a principal value that is not a scalar in a condition", () => {
-		const principal = { ...alice, userId: 1n } as unknown as Caller
-		const condition = $.eq("ownerUserId", $.principal("userId"))
-		assert.deepStrictEqual(
-			Condition.partial(condition, { principal, path }),
-			Condition.never,
-		)
+	it("keeps the identity of a bound condition and principal reference", () => {
+		const First = Domain.make({ principal: Caller, resources: [Bot] })
+		const Second = Domain.make({ principal: Caller, resources: [Bot] })
+		const first = Condition.builder(First, "Bot")
+		const second = Condition.builder(Second, "Bot")
+		const condition = first.eq("ownerUserId", first.principal("userId"))
+		assert.throws(() => first.eq("ownerUserId", second.principal("userId")))
+		assert.throws(() => Condition.and(condition, second.exists("name")))
+		const exit = Schema.encodeExit(Condition.schema(Second, "Bot"))(condition)
+		assert.isTrue(Exit.isFailure(exit))
+		assert.isFalse(Exit.hasDies(exit))
 	})
 
-	it("stops a shared condition past the ceiling when it is made", () => {
-		const calls = { true: 0 }
-		const visit = Condition.fold<void>({
-			true: () => {
-				calls.true += 1
-			},
-			false: () => undefined,
-			compare: () => undefined,
-			in: () => undefined,
-			exists: () => undefined,
-			and: () => undefined,
-			or: () => undefined,
-			not: () => undefined,
-		})
+	it("counts each use of a shared child against the fixed size", () => {
 		const doubled = (levels: number) =>
-			Array.from({ length: levels }).reduce<Condition.Condition>(
-				(condition) => Condition.and(condition, condition),
-				Condition.always,
+			Arr.reduce(Arr.range(1, levels), Condition.always, (condition) =>
+				Condition.and(condition, condition),
 			)
-		// A shared child counts for each place: 15 levels have 65535 nodes.
-		Effect.runSync(visit(doubled(15)))
-		assert.strictEqual(calls.true, 2 ** 15)
-		// A node does not know its domain, so it checks the ceiling: 26 levels
-		// have 134217727 nodes.
-		const start = Date.now()
-		assert.doesNotThrow(() => doubled(25))
-		assert.throws(
-			() => doubled(26),
-			/134217727 nodes and values. The most is 100000000/,
-		)
-		assert.isBelow(Date.now() - start, 100)
-		// A decode checks the limit of the decode, with the default here.
-		const shared = Arr.reduce(
-			Arr.range(1, 20),
-			{ _tag: "True" } as unknown,
-			(inner) => ({ _tag: "And", conditions: [inner, inner] }),
-		)
-		const exit = Schema.decodeUnknownExit(Condition.schema)(shared)
-		assert.isTrue(Exit.isFailure(exit))
-		assert.include(
-			String(Exit.isFailure(exit) ? exit.cause : ""),
-			"The most is 1000000",
-		)
+		assert.doesNotThrow(() => doubled(12))
+		assert.throws(() => doubled(13), /The most is 10000/)
 	})
 
-	it("keeps a number that JSON can not hold out of the JSON text", () => {
-		const condition = Condition.builder<
-			{ readonly n: number | null },
-			unknown,
-			unknown
-		>().eq("n", Infinity)
-		const exit = Schema.decodeUnknownExit(Condition.schema)(
-			JSON.parse(JSON.stringify(condition)),
+	it("accepts exactly the fixed number of structural units", () => {
+		const values = Arr.range(1, Limits.conditionNodes - 1)
+		const condition = $.in("level", values)
+		assert.strictEqual(condition.weight, Limits.conditionNodes)
+		const text = Schema.encodeSync(codec)(condition)
+		assert.isTrue(Equal.equals(Schema.decodeSync(codec)(text), condition))
+		assert.throws(() => $.in("level", [...values, 0]), /The most is 10000/)
+	})
+
+	it("takes JSON text only", () => {
+		Arr.forEach(
+			[
+				{ _tag: "True" },
+				"{",
+				'{"_tag":"Other"}',
+				'{"_tag":"Not"}',
+				'{"_tag":"Compare","op":"eq","field":"name"}',
+				'{"_tag":"Exists","field":"shared"}',
+				'{"_tag":"Exists","field":"settings.model.extra"}',
+			],
+			(input) => {
+				const exit = Schema.decodeUnknownExit(codec)(input)
+				assert.isTrue(Exit.isFailure(exit))
+				assert.isFalse(Exit.hasDies(exit))
+			},
 		)
-		assert.isTrue(Exit.isFailure(exit))
 	})
 
 	it("decodes an empty list as an empty list", () => {
-		const decode = Schema.decodeUnknownSync(Condition.schema)
+		const decode = Schema.decodeSync(codec)
 		assert.isTrue(
-			Equal.equals(decode({ _tag: "And", conditions: [] }), Condition.and()),
+			Equal.equals(decode('{"_tag":"And","conditions":[]}'), Condition.and()),
 		)
 		assert.isTrue(
-			Equal.equals(decode({ _tag: "Or", conditions: [] }), Condition.or()),
+			Equal.equals(decode('{"_tag":"Or","conditions":[]}'), Condition.or()),
 		)
+		const input = '{"_tag":"In","field":"name","values":[]}'
 		assert.deepStrictEqual(
-			Schema.encodeSync(Condition.schema)(
-				decode({ _tag: "In", field: "a", values: [] }),
-			),
-			{ _tag: "In", field: "a", values: [] },
+			JSON.parse(Schema.encodeSync(codec)(decode(input))),
+			JSON.parse(input),
 		)
 	})
 
-	it("does not take a field path with more parts than the limit", () => {
-		const exit = Schema.decodeExit(Condition.schema)({
-			_tag: "Compare",
-			op: "eq",
-			field: `${"x.".repeat(1000)}x`,
-			value: { _tag: "Literal", value: "yes" },
-		})
+	it("does not take a path with more than five parts", () => {
+		const text = JSON.stringify({ _tag: "Exists", field: "a.b.c.d.e.f" })
+		const exit = Schema.decodeExit(codec)(text)
 		assert.isTrue(Exit.isFailure(exit))
-		assert.include(
-			String(Exit.isFailure(exit) ? exit.cause : ""),
-			"A field path has more than 1000 parts. The most is 1000.",
-		)
-		assert.isTrue(
-			Exit.isSuccess(
-				Schema.decodeExit(Condition.schema)({
-					_tag: "Exists",
-					field: `${"x.".repeat(999)}x`,
-				}),
-			),
-		)
-		// A node does not know its domain, so it checks the ceiling.
 		assert.throws(
-			() =>
-				Condition.builder<any, unknown, unknown>().exists(
-					`${"x.".repeat(10_000)}x`,
-				),
-			/A field path has 10001 parts. The most is 10000./,
+			() => new Nodes.Exists({ field: "a.b.c.d.e.f" }),
+			/The most is 5/,
 		)
 	})
 
-	it("copies the list of andAll and orAll", () => {
+	it("copies lists when it makes a condition", () => {
+		const values = ["Helper"]
+		const condition = $.in("name", values)
+		values.length = 0
+		assert.isTrue(test(condition))
 		const parts: Array<Condition.Condition> = [
 			$.eq("ownerUserId", "alice") as Condition.Condition,
 		]
@@ -364,61 +333,47 @@ describe("Condition", () => {
 		assert.isTrue(test(either))
 	})
 
-	it("decodes and walks deep JSON without filling the stack", () => {
-		const deep = Array.from({ length: 100_000 }).reduce<unknown>(
-			(condition) => ({ _tag: "Not", condition }),
-			{ _tag: "Exists", field: "a" },
-		)
-		const exit = Schema.decodeUnknownExit(Condition.schema)(deep)
-		assert.isTrue(Exit.isSuccess(exit))
-		if (Exit.isFailure(exit)) {
-			return
+	it("reads only own data fields", () => {
+		class Value {
+			get name() {
+				throw new Error("A getter must not run")
+			}
 		}
-		const condition = exit.value
-		// An even number of `Not` nodes gives the test back.
-		assert.isTrue(Condition.evaluateSync(condition, { value: { a: 1 } }))
-		assert.isFalse(Condition.evaluateSync(condition, { value: {} }))
-		assert.deepStrictEqual(Condition.fields(condition), ["a"])
-		// The JSON form decodes again. `JSON.stringify` of it is not in the
-		// test: the engine writes JSON text with a walk that fills the stack
-		// at this depth.
-		const again = condition.pipe(
-			Schema.encodeSync(Condition.schema),
-			Schema.decodeSync(Condition.schema),
+		const value = new Value() as unknown as Bot
+		assert.isFalse(test($.exists("name"), value))
+		assert.isFalse(test($.eq("name", "Helper"), value))
+		assert.isTrue(
+			test($.eq("ownerUserId", null), {
+				...aliceBot,
+				ownerUserId: undefined,
+			} as unknown as Bot),
 		)
-		assert.isTrue(Condition.evaluateSync(again, { value: { a: 1 } }))
 	})
 
 	describe("satisfiable", () => {
 		const Shape = Schema.Struct({
 			count: Schema.Int,
 			ratio: Schema.Finite,
-			// The test needs NaN and the infinities in this field.
+			// This field also admits NaN and the infinities.
 			// @effect-diagnostics-next-line schemaNumber:off
 			size: Schema.Number,
 			name: Schema.String,
 			state: Schema.Literals(["open", "closed"]),
 			flag: Schema.Boolean,
 			note: Schema.optionalKey(Schema.String),
-			box: Schema.NullOr(Schema.Struct({ label: Schema.String })),
-			when: Schema.Date,
-			// A required field with no value would make the whole Schema empty.
-			nothing: Schema.optionalKey(Schema.Never),
 		})
-		type Data = typeof Shape.Type
-		const _ = Condition.builder<Data, Data, never>()
-		// The types of a builder do not let a test name a struct field, or
-		// compare a date with a string. These tests need both.
-		const loose = Condition.builder<
-			Record<string, Condition.Scalar>,
-			object,
-			never
-		>()
+		const Item = Resource.make("Item", {
+			actions: ["read"],
+			fields: Shape.fields,
+		})
+		const Items = Domain.make({
+			principal: Schema.Struct({}),
+			resources: [Item],
+		})
+		const _ = Condition.builder(Items, "Item")
 		type Plain = Condition.Condition<any>
 		const tagOf = (condition: Plain) =>
 			Condition.satisfiable(condition, { schema: Shape })._tag
-
-		/** Tests that the example makes the condition true. */
 		const example = (condition: Plain) => {
 			const answer = Condition.satisfiable(condition, { schema: Shape })
 			assert.strictEqual(answer._tag, "Satisfiable")
@@ -463,6 +418,15 @@ describe("Condition", () => {
 			})
 		})
 
+		it("keeps non-finite values out of JSON text", () => {
+			const numberCodec = Condition.schema(Items, "Item")
+			Arr.forEach([NaN, Infinity, -Infinity], (value) => {
+				const exit = Schema.encodeExit(numberCodec)(_.eq("size", value))
+				assert.isTrue(Exit.isFailure(exit))
+				assert.isFalse(Exit.hasDies(exit))
+			})
+		})
+
 		it("treats 0 and -0 as one value", () => {
 			assert.strictEqual(
 				tagOf(_.and(_.eq("size", 0), _.ne("size", -0))),
@@ -493,143 +457,127 @@ describe("Condition", () => {
 			)
 		})
 
-		it("finds no value for a Schema that has none", () => {
-			interface Loop {
-				readonly next: Loop
-			}
-			const Loop: Schema.Codec<Loop> = Schema.Struct({
-				next: Schema.suspend((): Schema.Codec<Loop> => Loop),
-			})
-			interface Chain {
-				readonly next: Chain | null
-			}
-			const Chain: Schema.Codec<Chain> = Schema.Struct({
-				next: Schema.NullOr(Schema.suspend((): Schema.Codec<Chain> => Chain)),
-			})
-			const tagWith = (schema: Schema.Top) =>
-				Condition.satisfiable(Condition.always, { schema })._tag
-			assert.strictEqual(tagWith(Schema.Never), "Unsatisfiable")
-			assert.strictEqual(
-				tagWith(Schema.Struct({ a: Schema.String, b: Schema.Never })),
-				"Unsatisfiable",
-			)
-			// A loop with no end has no value, and a chain that may end has one.
-			assert.strictEqual(tagWith(Loop), "Unsatisfiable")
-			assert.strictEqual(tagWith(Chain), "Satisfiable")
-			assert.strictEqual(
-				tagWith(Schema.Struct({ b: Schema.optionalKey(Schema.Never) })),
-				"Satisfiable",
-			)
-		})
-
-		it("lets an optional field be missing", () => {
-			assert.deepStrictEqual(example(_.not(_.exists("note"))), {
-				note: null,
-			})
+		it("lets only an optional field be missing", () => {
+			assert.deepStrictEqual(example(_.not(_.exists("note"))), { note: null })
 			assert.strictEqual(tagOf(_.not(_.exists("ratio"))), "Unsatisfiable")
-			// A struct takes an `Error` with its fields, and a `name` that the
-			// `Error` has only from its prototype reads as missing.
-			assert.strictEqual(tagOf(_.not(_.exists("name"))), "Satisfiable")
+			assert.strictEqual(tagOf(_.not(_.exists("name"))), "Unsatisfiable")
 		})
 
-		it("makes the fields below a missing struct missing", () => {
-			// With no Schema, a field may have any value, and the search still
-			// knows that the fields below a missing struct are missing.
-			const missing = _.and(_.exists("box.label"), _.not(loose.exists("box")))
-			assert.strictEqual(Condition.satisfiable(missing)._tag, "Unsatisfiable")
-			const present = _.and(_.eq("box.label", "x"), loose.exists("box"))
-			const answer = Condition.satisfiable(present)
-			assert.deepStrictEqual(
-				answer._tag === "Satisfiable" ? answer.example : undefined,
-				{ box: { label: "x" } },
-			)
-		})
-
-		it("searches a field that is not a scalar by its shape", () => {
-			assert.deepStrictEqual(example(_.exists("box.label")), {
-				box: { label: "" },
+		it("does not prove coverage for complex or related data", () => {
+			const shapes: ReadonlyArray<Schema.Top> = [
+				Schema.Struct({ data: Schema.Record(Schema.String, Schema.String) }),
+				Schema.Struct({ data: Schema.Array(Schema.String) }),
+				Schema.Struct({
+					data: Schema.NullOr(Schema.Struct({ value: Schema.String })),
+				}),
+				Schema.Struct({
+					data: Schema.optionalKey(Schema.Struct({ value: Schema.String })),
+				}),
+				Schema.Struct({
+					data: Schema.Union([
+						Schema.Struct({ a: Schema.String }),
+						Schema.Struct({ b: Schema.String }),
+					]),
+				}),
+			]
+			Arr.forEach(shapes, (schema) => {
+				assert.deepStrictEqual(
+					Condition.satisfiable(Condition.always, { schema }),
+					{ _tag: "Unknown", reason: "schema" } as never,
+				)
 			})
-			assert.strictEqual(
-				tagOf(_.and(_.exists("box.label"), _.not(loose.exists("box")))),
-				"Unsatisfiable",
-			)
-			// A date is an object, so it is never a string.
-			assert.strictEqual(tagOf(loose.ne("when", "x")), "Satisfiable")
-			assert.strictEqual(tagOf(loose.eq("when", "x")), "Unsatisfiable")
-			assert.strictEqual(tagOf(_.exists("nothing")), "Unsatisfiable")
-		})
-
-		it("finds no value for a field of no value", () => {
-			const Empty = Schema.Struct({
-				name: Schema.String,
-				missing: Schema.Never,
-			})
-			const $ = Condition.builder<
-				{ readonly missing: string | null },
-				unknown,
-				never
-			>()
-			const tag = (condition: Plain) =>
-				Condition.satisfiable(condition, { schema: Empty })._tag
-			assert.strictEqual(tag($.exists("missing")), "Unsatisfiable")
-			assert.strictEqual(tag($.not($.exists("missing"))), "Unsatisfiable")
-			// A plain field next to it is still exact.
-			assert.strictEqual(tagOf(_.eq("name", "a")), "Satisfiable")
-		})
-
-		it("lets a field have any value with no Schema", () => {
-			const answer = Condition.satisfiable(
-				_.and(_.not(_.lt("count", 0)), _.not(_.gte("count", 0))),
-			)
-			assert.strictEqual(answer._tag, "Satisfiable")
 		})
 
 		it("can not say with a predicate", () => {
 			assert.deepStrictEqual(
-				Condition.satisfiable($.predicate("shared", (bot) => bot.shared)),
+				Condition.satisfiable(
+					$.predicate("shared", (bot) => bot.shared),
+					{ schema: Bot },
+				),
 				{ _tag: "Unknown", reason: "predicate" } as never,
 			)
 		})
 
-		it("stops at its budget", () => {
-			// Ten boolean fields with a test that is never true. The search
-			// visits more than five nodes before it knows.
-			const names = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"]
-			const free = Condition.builder<Record<string, boolean>, object, never>()
-			const condition = Condition.and(
-				Condition.or(...names.map((name) => free.eq(name, true))),
-				...names.map((name) => free.ne(name, true)),
-			)
-			const Flags = Schema.Struct(
-				Object.fromEntries(names.map((name) => [name, Schema.Boolean])),
+		it("stops when an analysis reads more than sixteen fields", () => {
+			const names = [
+				"a",
+				"b",
+				"c",
+				"d",
+				"e",
+				"f",
+				"g",
+				"h",
+				"i",
+				"j",
+				"k",
+				"l",
+				"m",
+				"n",
+				"o",
+				"p",
+				"q",
+			] as const
+			const fields = Object.fromEntries(
+				Arr.map(names, (name) => [name, Schema.Boolean]),
+			) as Record<(typeof names)[number], typeof Schema.Boolean>
+			const Flags = Resource.make("Flags", { actions: ["read"], fields })
+			const FlagsDomain = Domain.make({
+				principal: Schema.Struct({}),
+				resources: [Flags],
+			})
+			const free = Condition.builder(FlagsDomain, "Flags")
+			const atLimit = Condition.andAll(
+				Arr.map(names.slice(0, Limits.searchFields), (name) =>
+					free.eq(name, true),
+				),
 			)
 			assert.strictEqual(
-				Condition.satisfiable(condition, { schema: Flags })._tag,
-				"Unsatisfiable",
+				Condition.satisfiable(atLimit, { schema: Schema.Struct(fields) })._tag,
+				"Satisfiable",
+			)
+			const condition = Condition.andAll(
+				Arr.map(names, (name) => free.eq(name, true)),
 			)
 			assert.strictEqual(
-				Condition.satisfiable(condition, { schema: Flags, budget: 5 })._tag,
+				Condition.satisfiable(condition, { schema: Schema.Struct(fields) })
+					._tag,
 				"Unknown",
 			)
 		})
 
-		it("needs a condition with the principal in it", () => {
-			assert.throws(() =>
-				Condition.satisfiable($.eq("ownerUserId", $.principal("userId"))),
+		it("returns Unknown when the fixed search budget runs out", () => {
+			const test = (most: number) =>
+				_.and(
+					_.in("ratio", Arr.range(1, most)),
+					_.or(_.lt("ratio", 0), _.gt("ratio", most), _.eq("ratio", 0)),
+				)
+			assert.strictEqual(tagOf(test(40)), "Unsatisfiable")
+			assert.deepStrictEqual(
+				Condition.satisfiable(test(9900), { schema: Shape }),
+				{
+					_tag: "Unknown",
+					reason: "budget",
+				} as never,
 			)
-			assert.throws(() => Condition.satisfiable($.under("org", "acme")))
+		})
+
+		it("needs a condition with the principal already in it", () => {
+			assert.throws(() =>
+				Condition.satisfiable($.eq("ownerUserId", $.principal("userId")), {
+					schema: Bot,
+				}),
+			)
+			assert.throws(() =>
+				Condition.satisfiable($.under("org", "acme"), { schema: Bot }),
+			)
 		})
 	})
 })
 
 describe("Condition equality", () => {
-	it("is not equal to a value of another type with the same hash", () => {
-		const condition = Condition.builder<
-			{ readonly id: string },
-			unknown,
-			unknown
-		>().eq("id", "1")
-		// With Effect 4.0.6, the two have the same hash.
+	it("is not equal to a value of another type", () => {
+		const condition = $.eq("id", "1")
 		const other = Option.some(-340028015)
 		assert.isFalse(Equal.equals(condition, other))
 		assert.isFalse(Equal.equals(other, condition))
@@ -643,32 +591,23 @@ describe("Condition node properties", () => {
 	const Step = Schema.Literals(["and", "or", "not", "leaf"])
 
 	it.prop(
-		"stops a shared condition exactly when it goes past the ceiling",
+		"counts each node and operand for each place in a shared tree",
 		{ steps: Schema.Array(Step).check(Schema.isMaxLength(40)) },
 		({ steps }) => {
-			// The constructors of the nodes, with no step that makes a condition
-			// smaller, so the size of each node is the size that is counted here.
 			const leaf: Nodes.Node = new Nodes.Compare({
 				op: "eq",
-				field: "a",
+				field: "level",
 				value: Nodes.literal(1),
 			})
-			// The size after each step, counted by hand. A constructor checks the
-			// ceiling, as a node does not know its domain, and there is no limit
-			// of levels. A step past the ceiling stops the work.
-			const sizes = Arr.reduce(steps, [1], (all, step) => {
-				const size = all[all.length - 1]!
+			const weights = Arr.reduce(steps, [2], (all, step) => {
+				const weight = all[all.length - 1]!
 				return [
 					...all,
 					step === "and" || step === "or"
-						? 2 * size + 1
-						: size + (step === "not" ? 1 : 2),
+						? 2 * weight + 1
+						: weight + (step === "not" ? 1 : 3),
 				]
 			})
-			const fails = Arr.some(
-				sizes,
-				(size) => size > Limits.ceilings.conditionNodes,
-			)
 			const make = () =>
 				Arr.reduce(steps, leaf, (condition, step): Nodes.Node =>
 					step === "and"
@@ -679,40 +618,41 @@ describe("Condition node properties", () => {
 								? new Nodes.Not(condition)
 								: new Nodes.And([condition, leaf]),
 				)
-			if (fails) {
+			if (Arr.some(weights, (weight) => weight > Limits.conditionNodes)) {
 				assert.throws(make, /The most is/)
 				return true
 			}
-			return make().size === sizes[sizes.length - 1]
+			return make().weight === weights[weights.length - 1]
 		},
 	)
 
 	it.prop(
-		"decodes any JSON or fails, and never throws",
+		"decodes JSON text or returns a failure without a defect",
 		{ input: Schema.Json },
 		({ input }) => {
-			const exit = Schema.decodeUnknownExit(Condition.schema)(input)
+			const exit = Schema.decodeExit(codec)(JSON.stringify(input))
 			return Exit.isSuccess(exit) || !Exit.hasDies(exit)
 		},
 	)
 
 	it.prop(
-		"decodes a chain of Not nodes of any depth, and gives its meaning",
-		{
-			levels: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 5000 })),
-		},
+		"accepts chains up to the fixed depth and rejects longer chains",
+		{ levels: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 70 })) },
 		({ levels }) => {
-			const chain = Array.from({ length: levels - 1 }).reduce<unknown>(
+			const chain = Arr.reduce(
+				Array.from({ length: levels - 1 }),
+				{ _tag: "True" } as unknown,
 				(condition) => ({ _tag: "Not", condition }),
-				{ _tag: "True" },
 			)
-			const exit = Schema.decodeUnknownExit(Condition.schema)(chain)
-			// An even number of `Not` nodes over `True` is true.
-			return (
-				Exit.isSuccess(exit) &&
-				Condition.evaluateSync(exit.value, { value: {} }) ===
-					((levels - 1) % 2 === 0)
-			)
+			const exit = Schema.decodeExit(codec)(JSON.stringify(chain))
+			return levels > Limits.conditionDepth
+				? Exit.isFailure(exit)
+				: Exit.isSuccess(exit) &&
+						Condition.evaluateSync(exit.value, {
+							value: aliceBot,
+							principal: alice,
+						}) ===
+							((levels - 1) % 2 === 0)
 		},
 	)
 })

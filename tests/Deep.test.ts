@@ -1,281 +1,188 @@
-// A test gives its own layer, so it uses Effect.provide.
-// @effect-diagnostics strictEffectProvide:off
 import { assert, describe, it } from "@effect/vitest"
 import {
 	Array as Arr,
 	Context,
 	Effect,
 	Equal,
-	Exit,
 	Hash,
 	HashSet,
 	Schema,
 } from "effect"
-import {
-	Authorizer,
-	Condition,
-	Domain,
-	Policy,
-	Resource,
-} from "../src/index.ts"
+import { Condition, Domain, Limits, Policy, Resource } from "../src/index.ts"
 import { alice, aliceBot, App, Bot } from "./fixtures.ts"
 
-// Each test sends a very deep input through the public functions. A walk that
-// called itself for each level would fill the stack here. A walk of more than
-// 200 levels runs in the run loop of an Effect, which is slower, so each test
-// has more time.
-const levels = 5000
+const conditionText = (value: string, depth = Limits.conditionDepth): string =>
+	JSON.stringify(
+		Arr.reduce(
+			Arr.range(1, depth - 1),
+			{
+				_tag: "Compare",
+				op: "eq",
+				field: "name",
+				value: { _tag: "Literal", value },
+			} as unknown,
+			(condition) => ({ _tag: "Not", condition }),
+		),
+	)
 
-/** A condition of `levels` levels of `And` and `Or`, each with a test. */
-const deepCondition = (): unknown =>
+const conditionOf = (value: string) =>
+	Schema.decodeSync(Condition.schema(App, "Bot"))(conditionText(value))
+
+const metaOf = (value: string): Schema.Json =>
 	Arr.reduce(
-		Arr.range(1, levels),
-		{
-			_tag: "Compare",
-			op: "eq",
-			field: "name",
-			value: { _tag: "Literal", value: "n" },
-		} as unknown,
-		(inner, level) => ({
-			_tag: level % 2 === 0 ? "And" : "Or",
-			conditions: [
-				inner,
-				{
-					_tag: "Compare",
-					op: "ne",
-					field: "id",
-					value: { _tag: "Literal", value: `i${String(level)}` },
-				},
-			],
-		}),
+		Arr.range(1, Limits.metaDepth),
+		value as Schema.Json,
+		(inner): Schema.Json => ({ inner }),
 	)
 
-describe("Deep inputs", () => {
-	it(
-		"walks a very deep condition with every function of Condition",
-		{ timeout: 60_000 },
-		() => {
-			const condition = Schema.decodeUnknownSync(Condition.schema)(
-				deepCondition(),
-			)
-			const value = { name: "n", id: "x" }
-			const test = Condition.evaluateSync(condition, { value })
-			assert.strictEqual(
-				Effect.runSync(Condition.evaluate(condition, { value })),
-				test,
-			)
-			const simple = Condition.simplify(condition)
-			assert.strictEqual(Condition.evaluateSync(simple, { value }), test)
-			const partial = Condition.partial(condition, {})
-			assert.strictEqual(Condition.evaluateSync(partial, { value }), test)
-			assert.deepStrictEqual(Condition.fields(condition), ["name", "id"])
-			assert.include(
-				["Satisfiable", "Unsatisfiable", "Unknown"],
-				Condition.satisfiable(condition)._tag,
-			)
-			const count = Effect.runSync(
-				Condition.fold(condition, {
-					true: () => 0,
-					false: () => 0,
-					compare: () => 1,
-					in: () => 1,
-					exists: () => 1,
-					and: (parts) => Arr.reduce(parts, 0, (total, part) => total + part),
-					or: (parts) => Arr.reduce(parts, 0, (total, part) => total + part),
-					not: (part) => part,
-				}),
-			)
-			// One test at the bottom, and one at each level.
-			assert.strictEqual(count, levels + 1)
-			const again = condition.pipe(
-				Schema.encodeSync(Condition.schema),
-				Schema.decodeSync(Condition.schema),
-			)
-			assert.strictEqual(Condition.evaluateSync(again, { value }), test)
-		},
-	)
-
-	it(
-		"decides, explains and analyses a policy with a very deep condition",
-		{ timeout: 60_000 },
-		() => {
-			const policy = Schema.decodeUnknownSync(Policy.schema(App))({
-				_tag: "Rules",
-				algorithm: "denyOverrides",
-				rules: [
-					{
-						_tag: "Allow",
-						actions: ["read"],
-						resources: ["Bot"],
-						when: deepCondition(),
-					},
-				],
-			})
-			const request = {
-				principal: alice,
-				action: "read",
-				resource: aliceBot,
-			} as const
-			const decision = Policy.decideSync(policy, request)._tag
-			assert.strictEqual(
-				Effect.runSync(Policy.explain(policy, request)).decision._tag,
-				decision,
-			)
-			const kind = { principal: alice, action: "read", kind: "Bot" } as const
-			const residual = Policy.residual(policy, kind)
-			assert.strictEqual(
-				Condition.evaluateSync(residual, { value: aliceBot }),
-				decision === "Allow",
-			)
-			assert.include(
-				["All", "None", "Some", "Unknown"],
-				Policy.coverage(policy, kind)._tag,
-			)
-			assert.isArray(
-				Effect.runSync(
-					Policy.permittedFields(policy, {
-						principal: alice,
-						action: "read",
-						resource: aliceBot,
-					}),
-				),
-			)
-			const json = Schema.encodeSync(Policy.schema(App))(policy)
-			assert.isTrue(Exit.isSuccess(Schema.decodeExit(Policy.schema(App))(json)))
-		},
-	)
-
-	it("hashes and compares very deep conditions and policy trees", () => {
-		const nots = (value: string): unknown =>
-			Arr.reduce(
-				Arr.range(1, levels),
-				{
-					_tag: "Compare",
-					op: "eq",
-					field: "name",
-					value: { _tag: "Literal", value },
-				} as unknown,
-				(inner) => ({ _tag: "Not", condition: inner }),
-			)
-		const decode = Schema.decodeUnknownSync(Condition.schema)
-		const one = decode(nots("n"))
-		const again = decode(nots("n"))
-		const other = decode(nots("m"))
-		assert.strictEqual(Hash.hash(one), Hash.hash(again))
-		assert.isTrue(Equal.equals(one, again))
-		assert.isFalse(Equal.equals(one, other))
-		assert.strictEqual(HashSet.size(HashSet.make(one, again, other)), 2)
-		const tree = (condition: unknown) =>
-			Arr.reduce(
-				Arr.range(1, levels),
-				Schema.decodeUnknownSync(Policy.schema(App))({
-					_tag: "Rules",
-					algorithm: "denyOverrides",
-					rules: [
-						{
-							_tag: "Allow",
-							actions: ["read"],
-							resources: ["Bot"],
-							when: condition,
-						},
-					],
-				}) as Policy.Policy<typeof App>,
-				(inner) => Policy.all([inner]),
-			)
-		const policy = tree(nots("n"))
-		assert.strictEqual(Hash.hash(policy), Hash.hash(tree(nots("n"))))
-		assert.isTrue(Equal.equals(policy, tree(nots("n"))))
-		assert.isFalse(Equal.equals(policy, tree(nots("m"))))
+const policyOf = (value: string): Policy.Policy<typeof App> => {
+	const when = conditionOf(value)
+	const leaf = Policy.define(App)(function* (_) {
+		yield* _.allow("read", Bot, { when: () => when, meta: metaOf(value) })
 	})
+	return Arr.reduce(Arr.range(1, Limits.policyDepth - 1), leaf, (inner) =>
+		Policy.all([inner]),
+	)
+}
 
-	it("compares policies with very deep meta", () => {
-		const Noted = Domain.make({
-			principal: App.principal,
-			resources: [Bot],
-			meta: Schema.Unknown,
-		})
-		const meta = (value: string): unknown =>
-			Arr.reduce(Arr.range(1, levels), { value } as unknown, (inner) => ({
-				inner,
-			}))
-		const policy = (value: string) =>
-			Schema.decodeSync(Policy.schema(Noted))({
-				_tag: "Rules",
-				algorithm: "denyOverrides",
-				rules: [
-					{
-						_tag: "Allow",
-						actions: ["read"],
-						resources: ["Bot"],
-						meta: meta(value),
-					},
-				],
-			})
-		assert.isTrue(Equal.equals(policy("a"), policy("a")))
-		assert.isFalse(Equal.equals(policy("a"), policy("b")))
+describe("Fixed depth bounds", () => {
+	it("runs every condition walk at the supported depth", () => {
+		const condition = conditionOf("n")
+		assert.strictEqual(condition.depth, Limits.conditionDepth)
+		const input = { value: aliceBot, principal: alice }
+		const expected = Condition.evaluateSync(condition, input)
 		assert.strictEqual(
-			HashSet.size(HashSet.make(policy("a"), policy("a"), policy("b"))),
-			2,
+			Effect.runSync(Condition.evaluate(condition, input)),
+			expected,
 		)
-		// A rule by itself, out of its policy.
-		const ruleOf = (value: string) =>
-			(policy(value).node as { readonly rules: ReadonlyArray<unknown> })
-				.rules[0]
-		assert.strictEqual(Hash.hash(ruleOf("a")), Hash.hash(ruleOf("a")))
-		assert.isTrue(Equal.equals(ruleOf("a"), ruleOf("a")))
-		assert.isFalse(Equal.equals(ruleOf("a"), ruleOf("b")))
+		assert.strictEqual(
+			Condition.evaluateSync(Condition.simplify(condition), input),
+			expected,
+		)
+		assert.strictEqual(
+			Condition.evaluateSync(
+				Condition.partial(condition, { principal: alice }),
+				input,
+			),
+			expected,
+		)
+		assert.deepStrictEqual(Condition.fields(condition), ["name"])
+		assert.strictEqual(
+			Condition.satisfiable(condition, { schema: Bot })._tag,
+			"Satisfiable",
+		)
+		const count = Effect.runSync(
+			Condition.fold(condition, {
+				true: () => 0,
+				false: () => 0,
+				compare: () => 1,
+				in: () => 1,
+				exists: () => 1,
+				and: (parts) => Arr.reduce(parts, 0, (sum, part) => sum + part),
+				or: (parts) => Arr.reduce(parts, 0, (sum, part) => sum + part),
+				not: (part) => part + 1,
+			}),
+		)
+		assert.strictEqual(count, Limits.conditionDepth)
+		const codec = Condition.schema(App, "Bot")
+		const again = condition.pipe(
+			Schema.encodeSync(codec),
+			Schema.decodeSync(codec),
+		)
+		assert.isTrue(Equal.equals(condition, again))
+		assert.strictEqual(Hash.hash(condition), Hash.hash(again))
+		assert.isFalse(Equal.equals(condition, conditionOf("other")))
 	})
 
-	it("compares the fields of a meta that have a symbol as their name", () => {
-		const Noted = Domain.make({
-			principal: App.principal,
-			resources: [Bot],
-			meta: Schema.Unknown,
+	it("hashes, loads, decides, and analyses all depth bounds together", () => {
+		const policy = policyOf("n")
+		const same = policyOf("n")
+		const other = policyOf("other")
+		assert.isTrue(Equal.equals(policy, same))
+		assert.isFalse(Equal.equals(policy, other))
+		assert.strictEqual(Hash.hash(policy), Hash.hash(same))
+		assert.strictEqual(HashSet.size(HashSet.make(policy, same, other)), 2)
+		const request = {
+			principal: alice,
+			action: "read",
+			resource: aliceBot,
+		} as const
+		const expected = Policy.decideSync(policy, request)
+		assert.strictEqual(
+			Effect.runSync(Policy.explain(policy, request)).decision._tag,
+			expected._tag,
+		)
+		const target = { principal: alice, action: "read", kind: "Bot" } as const
+		assert.strictEqual(
+			Condition.evaluateSync(Policy.residual(policy, target), {
+				value: aliceBot,
+			}),
+			expected._tag === "Allow",
+		)
+		assert.strictEqual(Policy.coverage(policy, target)._tag, "Some")
+		assert.isArray(Effect.runSync(Policy.permittedFields(policy, request)))
+		const codec = Policy.schema(App)
+		const again = policy.pipe(
+			Schema.encodeSync(codec),
+			Schema.decodeSync(codec),
+		)
+		assert.isTrue(Equal.equals(policy, again))
+		assert.strictEqual(Policy.decideSync(again, request)._tag, expected._tag)
+	})
+
+	it("rejects the next condition and policy levels", () => {
+		assert.throws(
+			() =>
+				Schema.decodeSync(Condition.schema(App, "Bot"))(
+					conditionText("n", Limits.conditionDepth + 1),
+				),
+			"levels",
+		)
+		assert.throws(() => Policy.all([policyOf("n")]), "levels")
+	})
+
+	it("decides a large path test without making a larger residual", () => {
+		const parts = Arr.replicate("n", 6_000)
+		const Item = Resource.make("Item", {
+			actions: ["read"],
+			fields: { name: Schema.String },
+			path: (fields) => Arr.replicate(fields.name, 6_000),
 		})
-		const grant = Symbol("grant")
-		const policy = (value: string) =>
-			Policy.define(Noted)(function* (_) {
-				yield* _.allow("read", Bot, { meta: { [grant]: value } })
-			})
-		assert.isTrue(Equal.equals(policy("a"), policy("a")))
-		assert.isFalse(Equal.equals(policy("a"), policy("b")))
-		assert.strictEqual(HashSet.size(HashSet.make(policy("a"), policy("b"))), 2)
-	})
-
-	it("compares policies with a meta that holds itself", () => {
-		const Noted = Domain.make({
-			principal: App.principal,
-			resources: [Bot],
-			meta: Schema.Unknown,
+		const domain = Domain.make({
+			principal: Schema.Struct({}),
+			resources: [Item],
 		})
-		const policy = () => {
-			// A list that holds itself, as code may make.
-			const meta: Array<unknown> = []
-			meta.push(meta)
-			return Policy.define(Noted)(function* (_) {
-				yield* _.allow("read", Bot, { meta })
-			})
-		}
-		assert.isTrue(Equal.equals(policy(), policy()))
+		const policy = Policy.define(domain)(function* (_) {
+			yield* _.allow("read", Item, { when: ($) => $.under(...parts) })
+		})
+		const request = {
+			action: "read",
+			resource: Item.make({ name: "n" }),
+			principal: {},
+		} as const
+		assert.strictEqual(Policy.decideSync(policy, request)._tag, "Allow")
+		assert.strictEqual(
+			Effect.runSync(Policy.decide(policy, request))._tag,
+			"Allow",
+		)
 	})
 
-	it("runs a very deep tree with a predicate, and gives it services", () => {
+	it("provides predicate services at the policy depth bound", () => {
 		class Gate extends Context.Service<Gate, boolean>()(
 			"@nmnmcc/ability/tests/Deep.test/Gate",
 		) {}
-		const gated = Policy.define(App)(function* (_) {
+		const leaf = Policy.define(App)(function* (_) {
 			yield* _.allow("read", Bot, {
-				when: ($) =>
-					$.predicate("gate", () => Effect.map(Gate, (open) => open)),
+				when: ($) => $.predicate("gate", () => Gate),
 			})
 		})
-		const deep = Arr.reduce(
-			Arr.range(1, levels),
-			gated as Policy.Policy<typeof App, Condition.Opaque<never, Gate>>,
-			(inner, level) =>
-				level % 2 === 0 ? Policy.all([inner]) : Policy.firstOf([inner]),
+		const tree = Arr.reduce(
+			Arr.range(1, Limits.policyDepth - 1),
+			leaf,
+			(inner, index) =>
+				index % 2 === 0 ? Policy.all([inner]) : Policy.firstOf([inner]),
 		)
-		const provided = Policy.provideContext(deep, Context.make(Gate, true))
+		const provided = Policy.provideContext(tree, Context.make(Gate, true))
 		assert.strictEqual(
 			Effect.runSync(
 				Policy.decide(provided, {
@@ -286,51 +193,5 @@ describe("Deep inputs", () => {
 			)._tag,
 			"Allow",
 		)
-	})
-
-	it("checks a request with a deep principal in an Authorizer", () => {
-		interface Chain {
-			readonly id: string
-			readonly next: Chain | null
-		}
-		const Chain: Schema.Codec<Chain> = Schema.Struct({
-			id: Schema.String,
-			next: Schema.NullOr(Schema.suspend((): Schema.Codec<Chain> => Chain)),
-		})
-		const Item = Resource.make("Item", {
-			actions: ["read"],
-			fields: { name: Schema.String },
-		})
-		const Items = Domain.make({ principal: Chain, resources: [Item] })
-		class CurrentChain extends Context.Service<CurrentChain, Chain>()(
-			"@nmnmcc/ability/tests/Deep.test/CurrentChain",
-		) {}
-		class ItemAuth extends Authorizer.Service<ItemAuth>()("test/ItemAuth", {
-			domain: Items,
-			principal: CurrentChain,
-		}) {}
-		const layer = Authorizer.layer(ItemAuth, {
-			policy: () =>
-				Effect.succeed(
-					Policy.define(Items)(function* (_) {
-						yield* _.allow("read", Item)
-					}),
-				),
-		})
-		const principal = Arr.reduce(
-			Arr.range(1, 2000),
-			{ id: "0", next: null } as Chain,
-			(next, index): Chain => ({ id: String(index), next }),
-		)
-		const exit = Effect.runSyncExit(
-			ItemAuth.check({
-				action: "read",
-				resource: Item.make({ name: "a" }),
-			}).pipe(
-				Effect.provideService(CurrentChain, principal),
-				Effect.provide(layer),
-			),
-		)
-		assert.isTrue(Exit.isSuccess(exit))
 	})
 })

@@ -1,7 +1,10 @@
 import { Schema } from "effect"
 import { Domain, Policy, Resource } from "../src/index.ts"
 
-export class Caller extends Schema.Class<Caller>("Caller")({
+export class Caller extends Schema.Class<
+	Caller,
+	{ readonly brand: unique symbol }
+>("Caller")({
 	userId: Schema.String,
 	organizationId: Schema.String,
 	role: Schema.Literals(["admin", "member", "guest"]),
@@ -52,7 +55,6 @@ export const Grant = Schema.Struct({
 export const App = Domain.make({
 	principal: Caller,
 	resources: [Bot, Trigger],
-	meta: Grant,
 })
 
 export const alice = Caller.make({

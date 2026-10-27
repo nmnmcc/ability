@@ -40,16 +40,15 @@ const expected: Record<string, ReadonlyArray<string>> = {
 	Limits: [
 		"LimitExceeded",
 		"catalogFields",
-		"ceilings",
 		"conditionDepth",
 		"conditionNodes",
-		"defaults",
 		"fieldPathParts",
-		"jsonNodes",
-		"patternParts",
+		"jsonDepth",
+		"jsonItems",
+		"jsonTextLength",
+		"metaDepth",
 		"policyDepth",
 		"policyNodes",
-		"principalNodes",
 		"residualNodes",
 		"searchFields",
 		"searchSteps",
@@ -69,14 +68,13 @@ const expected: Record<string, ReadonlyArray<string>> = {
 		"permittedFields",
 		"provideContext",
 		"residual",
-		"rule",
 		"schema",
 	],
 	Resource: ["Class", "make"],
 }
 
 describe("Exports", () => {
-	it("gives the same modules and values as before", () => {
+	it("gives the supported v3 modules and values", () => {
 		const modules: Record<string, object> = { ...Ability }
 		assert.deepStrictEqual(Object.keys(modules).sort(), Object.keys(expected))
 		Object.entries(expected).forEach(([name, values]) => {
@@ -84,7 +82,7 @@ describe("Exports", () => {
 		})
 	})
 
-	it("gives the same values of the HttpApi entry point as before", () => {
+	it("gives the supported HttpApi values", () => {
 		assert.deepStrictEqual(Object.keys(HttpApi).sort(), [
 			"GroupRequired",
 			"Required",

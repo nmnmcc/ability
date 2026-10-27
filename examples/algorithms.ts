@@ -13,11 +13,16 @@
  * - `Policy.firstOf`: the first policy that gives an answer wins. Here the
  *   grants that a person gave by hand come before the usual rules.
  * - `Policy.ceiling`: a deny of the cap always wins.
+ *
+ * Each rule comes from a domain builder. All parts of a combined policy must
+ * belong to that same domain.
  */
 import { Schema } from "effect"
 import { Domain, Policy, Resource } from "../src/index.ts"
 
-class User extends Schema.Class<User>("User")({
+class User extends Schema.Class<User, { readonly brand: unique symbol }>(
+	"User",
+)({
 	id: Schema.String,
 	team: Schema.String,
 }) {}

@@ -24,7 +24,9 @@
 import { Effect, Schema } from "effect"
 import { Condition, Domain, Policy, Resource } from "../src/index.ts"
 
-class Member extends Schema.Class<Member>("Member")({
+class Member extends Schema.Class<Member, { readonly brand: unique symbol }>(
+	"Member",
+)({
 	userId: Schema.String,
 	workspaceId: Schema.String,
 	role: Schema.Literals(["viewer", "member", "admin", "owner"]),
@@ -51,7 +53,7 @@ class Task extends Resource.Class<Task>()("Task", {
 
 const Tracker = Domain.make({ principal: Member, resources: [Task] })
 
-/** The rules of a role. A loader runs this one time for each member. */
+/** A loader builds these rules from the current role of the member. */
 const forRole = (member: Member) =>
 	Policy.define(Tracker)(function* (_) {
 		// Every role may read the tasks of its workspace.
@@ -252,7 +254,7 @@ const program = Effect.gen(function* () {
 				),
 		})._tag,
 		// May the owner delete some tasks? "Some", so the page shows a delete
-		// button.
+		// button. Unknown would not show it.
 		deleteButton: Policy.coverage(forSession(owner), {
 			principal: owner,
 			action: "delete",

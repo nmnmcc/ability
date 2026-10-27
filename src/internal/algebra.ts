@@ -4,8 +4,7 @@
  *
  * The constructors of the nodes keep each condition small, so each walk here
  * has no memo. A shared child is walked again for each place, and the limits
- * of the nodes keep that work small. A walk takes the steps of a trampoline,
- * so a deep condition does not fill the stack: see `Trampoline`.
+ * of the nodes keep that work small. Fixed depth bounds permit direct walks.
  */
 // A predicate gives an Effect with an error type and a service type that this
 // code does not know, so they are `unknown` here.
@@ -17,7 +16,6 @@ import * as Option from "effect/Option"
 import type * as Resource from "../Resource.ts"
 import * as Nodes from "./nodes.ts"
 import { readPath } from "./read.ts"
-import * as Trampoline from "./trampoline.ts"
 
 type Node = Nodes.Node
 
@@ -65,32 +63,6 @@ const shapeOf = (node: Node): unknown => {
 const structureText = (node: Node): string => JSON.stringify(shapeOf(node))
 
 /**
- * The work of the text of the structure of a condition: each node, and each
- * value of an `In` test or an `Under` test. A node counts as one in `size`,
- * also an `In` test with very many values. This walk reads the nodes only,
- * so it takes `size` steps.
- */
-const weightOf = (node: Node): number => {
-	switch (node._tag) {
-		case "In":
-			return 1 + node.values.length
-		case "Under":
-			return 1 + node.prefix.length
-		case "And":
-		case "Or":
-			return Arr.reduce(
-				node.conditions,
-				1,
-				(total, child) => total + weightOf(child),
-			)
-		case "Not":
-			return 1 + weightOf(node.condition)
-		default:
-			return 1
-	}
-}
-
-/**
  * The most nodes of a condition that a smart constructor reads for its key,
  * and the most children of a child that it puts into a node. A larger child
  * is its own key, and it stays one child, so the work of a constructor stays
@@ -99,7 +71,7 @@ const weightOf = (node: Node): number => {
  */
 const keyNodes = 64
 
-/** The most work of a key, with the values of its tests: see {@link weightOf}. */
+/** The most work of a key, with the values of its tests. */
 const keyWeight = 256
 
 /**
@@ -111,9 +83,7 @@ const keyWeight = 256
  * and it hashes a string with the random seed of the engine.
  */
 export const keyOf = (node: Node): string | Node =>
-	node.size > keyNodes || weightOf(node) > keyWeight
-		? node
-		: structureText(node)
+	node.size > keyNodes || node.weight > keyWeight ? node : structureText(node)
 
 /**
  * Keeps the first node of each structure, in order. A large node is a copy
@@ -223,14 +193,14 @@ const junction = (tag: "And" | "Or", children: ReadonlyArray<Node>): Node => {
 
 /** An `And` of simple children, made simple. */
 export const and = (children: ReadonlyArray<Node>): Node =>
-	junction("And", children)
+	Nodes.inheritAll(junction("And", children), children)
 
 /** An `Or` of simple children, made simple. */
 export const or = (children: ReadonlyArray<Node>): Node =>
-	junction("Or", children)
+	Nodes.inheritAll(junction("Or", children), children)
 
 /** A `Not` of a simple child, made simple. */
-export const not = (child: Node): Node => {
+const notNode = (child: Node): Node => {
 	switch (child._tag) {
 		case "True":
 			return never
@@ -254,41 +224,25 @@ export const not = (child: Node): Node => {
 	}
 }
 
-type Step<A> = Trampoline.Step<A>
-
-/** The children of a node, each walked by `go` as a step of `R`. */
-const eachChild = <A>(
-	R: Trampoline.Runner,
-	children: ReadonlyArray<Node>,
-	go: (child: Node) => Step<A>,
-): Step<ReadonlyArray<A>> =>
-	R.forEach(children, (child) => R.suspend(() => go(child)))
+export const not = (child: Node): Node => Nodes.inherit(notNode(child), child)
 
 /** Makes a condition simple, from its leaves up. */
+const simplifyNode = (node: Node): Node => {
+	switch (node._tag) {
+		case "And":
+		case "Or":
+			return junction(node._tag, Arr.map(node.conditions, simplify))
+		case "Not":
+			return node.condition.pipe(simplify, not)
+		case "In":
+			return node.values.length === 0 ? never : node
+		default:
+			return node
+	}
+}
+
 export const simplify = (node: Node): Node =>
-	Trampoline.run(node.depth, (R) => {
-		const go = (current: Node): Step<Node> => {
-			switch (current._tag) {
-				case "And":
-				case "Or": {
-					const tag = current._tag
-					return R.map(eachChild(R, current.conditions, go), (children) =>
-						junction(tag, children),
-					)
-				}
-				case "Not":
-					return R.map(
-						R.suspend(() => go(current.condition)),
-						not,
-					)
-				case "In":
-					return R.succeed(current.values.length === 0 ? never : current)
-				default:
-					return R.succeed(current)
-			}
-		}
-		return go(node)
-	})
+	Nodes.inherit(simplifyNode(node), node)
 
 // Tests on a value
 
@@ -387,55 +341,39 @@ const testUnder = (
  * The children of `And` and `Or` run in order, and they stop at the first
  * child that gives the answer.
  */
-const testWith = (input: Input) => (R: Trampoline.Runner) => {
-	const go = (node: Node): Step<boolean> => {
-		switch (node._tag) {
-			case "True":
-				return R.succeed(true)
-			case "False":
-				return R.succeed(false)
-			case "Compare":
-				return R.succeed(
-					testCompare(
-						node.op,
-						getField(input.value, node.field),
-						resolve(node.value, input.principal),
-					),
-				)
-			case "In": {
-				const field = getField(input.value, node.field)
-				return R.succeed(
-					node.values.some(
-						(operand) => resolve(operand, input.principal) === field,
-					),
-				)
-			}
-			case "Exists":
-				return R.succeed(getField(input.value, node.field) !== null)
-			case "Under":
-				return R.succeed(testUnder(node.prefix, input))
-			case "And":
-				return R.every(node.conditions, (child) => R.suspend(() => go(child)))
-			case "Or":
-				return R.some(node.conditions, (child) => R.suspend(() => go(child)))
-			case "Not":
-				return R.map(
-					R.suspend(() => go(node.condition)),
-					(value) => !value,
-				)
-			case "Predicate":
-				// The types stop this. A predicate needs `evaluate`.
-				throw new Error(
-					`The predicate "${node.name}" needs an Effect. Use Condition.evaluate.`,
-				)
+const testSync = (node: Node, input: Input): boolean => {
+	switch (node._tag) {
+		case "True":
+			return true
+		case "False":
+			return false
+		case "Compare":
+			return testCompare(
+				node.op,
+				getField(input.value, node.field),
+				resolve(node.value, input.principal),
+			)
+		case "In": {
+			const field = getField(input.value, node.field)
+			return Arr.some(
+				node.values,
+				(operand) => resolve(operand, input.principal) === field,
+			)
 		}
+		case "Exists":
+			return getField(input.value, node.field) !== null
+		case "Under":
+			return testUnder(node.prefix, input)
+		case "And":
+			return Arr.every(node.conditions, (child) => testSync(child, input))
+		case "Or":
+			return Arr.some(node.conditions, (child) => testSync(child, input))
+		case "Not":
+			return !testSync(node.condition, input)
+		case "Predicate":
+			throw new Error(`The predicate "${node.name}" needs Condition.evaluate`)
 	}
-	return go
 }
-
-/** Tests a simple condition with no predicate on a value. */
-const testSync = (node: Node, input: Input): boolean =>
-	Trampoline.run(node.depth, (R) => testWith(input)(R)(node))
 
 /**
  * Tests a simple condition on a value. The children of `And` and `Or` run in
@@ -448,9 +386,7 @@ const test = (
 	input: Input,
 ): Effect.Effect<boolean, unknown, unknown> => {
 	if (!node.opaque) {
-		return node.depth <= Trampoline.directDepth
-			? Effect.sync(() => testSync(node, input))
-			: node.pipe(testWith(input)(Trampoline.loop), Trampoline.toEffect)
+		return Effect.sync(() => testSync(node, input))
 	}
 	switch (node._tag) {
 		case "Predicate":
@@ -482,22 +418,16 @@ const test = (
 	}
 }
 
-/**
- * Tests a condition with no predicate on a value. The test runs on the
- * simple form of the condition with the principal in it, as a residual does.
- * So a test reads only the fields that the residual reads: a read of a field
- * that is not plain data is a defect, and a field that the answer does not
- * need, as in `x AND False`, is not read.
- */
+/** Tests a plain condition directly, without making a residual tree. */
 export const evaluateSync = (node: Node, input: Input): boolean =>
-	testSync(partial(node, input), input)
+	testSync(node, input)
 
-/** Tests a condition on a value, as {@link evaluateSync} does. */
+/** Tests a condition directly. Predicates run in order and keep their errors. */
 export const evaluate = (
 	node: Node,
 	input: Input,
 ): Effect.Effect<boolean, unknown, unknown> =>
-	Effect.suspend(() => test(partial(node, input), input))
+	Effect.suspend(() => test(node, input))
 
 // The principal and the path
 
@@ -554,130 +484,101 @@ export interface PartialInput {
  * resource. The result is simple. It has no principal fields and no `Under`
  * nodes. A predicate keeps the principal.
  */
-export const partial = (node: Node, input: PartialInput): Node =>
-	Trampoline.run(node.depth, (R) => {
-		const bind = (current: Node): Step<Node> => {
-			switch (current._tag) {
-				case "Compare": {
-					const value = bindOperand(current.value, input.principal)
-					return R.succeed(
-						value === undefined
-							? never
-							: value === current.value
-								? current
-								: new Nodes.Compare({
-										op: current.op,
-										field: current.field,
-										value,
-									}),
-					)
-				}
-				case "In": {
-					const values = Arr.flatMap(current.values, (operand) =>
-						Option.toArray(
-							Option.fromUndefinedOr(bindOperand(operand, input.principal)),
-						),
-					)
-					return R.succeed(
-						values.length === 0
-							? never
-							: new Nodes.In({ field: current.field, values }),
-					)
-				}
-				case "Under":
-					return R.succeed(
-						expandUnder(current.prefix, input.principal, input.path),
-					)
-				case "And":
-					return R.map(eachChild(R, current.conditions, bind), and)
-				case "Or":
-					return R.map(eachChild(R, current.conditions, bind), or)
-				case "Not":
-					return R.map(
-						R.suspend(() => bind(current.condition)),
-						not,
-					)
-				case "Predicate": {
-					const run = Nodes.runOf(current)
-					return R.succeed(
-						new Nodes.Predicate({
-							name: current.name,
-							run: (value) => run(value, input.principal),
-						}),
-					)
-				}
-				default:
-					return R.succeed(current)
-			}
+const partialNode = (node: Node, input: PartialInput): Node => {
+	switch (node._tag) {
+		case "Compare": {
+			const value = bindOperand(node.value, input.principal)
+			return value === undefined
+				? never
+				: value === node.value
+					? node
+					: new Nodes.Compare({ op: node.op, field: node.field, value })
 		}
-		return bind(node)
-	})
+		case "In": {
+			const values = Arr.flatMap(node.values, (operand) =>
+				Option.toArray(
+					Option.fromUndefinedOr(bindOperand(operand, input.principal)),
+				),
+			)
+			return values.length === 0
+				? never
+				: new Nodes.In({ field: node.field, values })
+		}
+		case "Under":
+			return expandUnder(node.prefix, input.principal, input.path)
+		case "And":
+			return and(Arr.map(node.conditions, (child) => partial(child, input)))
+		case "Or":
+			return or(Arr.map(node.conditions, (child) => partial(child, input)))
+		case "Not":
+			return not(partial(node.condition, input))
+		case "Predicate": {
+			const run = Nodes.runOf(node)
+			return new Nodes.Predicate({
+				name: node.name,
+				run: (value) => run(value, input.principal),
+			})
+		}
+		default:
+			return node
+	}
+}
+
+export const partial = (node: Node, input: PartialInput): Node =>
+	Nodes.inherit(partialNode(node, input), node)
 
 /** Gives the services in `context` to every predicate of a condition. */
-export const provide = (node: Node, context: Context.Context<never>): Node =>
-	Trampoline.run(node.depth, (R) => {
-		const go = (current: Node): Step<Node> => {
-			if (!current.opaque) {
-				return R.succeed(current)
-			}
-			switch (current._tag) {
-				case "Predicate": {
-					const run = Nodes.runOf(current)
-					return R.succeed(
-						new Nodes.Predicate({
-							name: current.name,
-							run: (value, principal) =>
-								Effect.provideContext(run(value, principal), context),
-						}),
-					)
-				}
-				case "And":
-					return R.map(
-						eachChild(R, current.conditions, go),
-						(children) => new Nodes.And(children),
-					)
-				case "Or":
-					return R.map(
-						eachChild(R, current.conditions, go),
-						(children) => new Nodes.Or(children),
-					)
-				case "Not":
-					return R.map(
-						R.suspend(() => go(current.condition)),
-						(child) => new Nodes.Not(child),
-					)
-				default:
-					return R.succeed(current)
-			}
+const provideNode = (node: Node, context: Context.Context<never>): Node => {
+	if (!node.opaque) {
+		return node
+	}
+	switch (node._tag) {
+		case "Predicate": {
+			const run = Nodes.runOf(node)
+			return new Nodes.Predicate({
+				name: node.name,
+				run: (value, principal) =>
+					Effect.provideContext(run(value, principal), context),
+			})
 		}
-		return go(node)
-	})
+		case "And":
+			return new Nodes.And(
+				Arr.map(node.conditions, (child) => provide(child, context)),
+			)
+		case "Or":
+			return new Nodes.Or(
+				Arr.map(node.conditions, (child) => provide(child, context)),
+			)
+		case "Not":
+			return new Nodes.Not(provide(node.condition, context))
+		default:
+			return node
+	}
+}
+
+export const provide = (node: Node, context: Context.Context<never>): Node =>
+	Nodes.inherit(provideNode(node, context), node)
 
 /** The fields that a condition tests, in the order that they first come. */
 export const fields = (node: Node): ReadonlyArray<string> => {
-	// The fields go into one native `Set`, in order, as in `dedupe`: a field
-	// of a condition that is not bound to a domain may be any string. A walk
-	// that joined the lists of the children would copy the list of a deep
-	// condition at each level. The set belongs to this walk.
+	// Names come from policy data, so a native Set uses the engine's hash seed.
 	const seen = new Set<string>()
-	Trampoline.run(node.depth, (R) => {
-		const go = (current: Node): Step<undefined> => {
-			switch (current._tag) {
-				case "Compare":
-				case "In":
-				case "Exists":
-					seen.add(current.field)
-					return R.succeed(undefined)
-				case "And":
-				case "Or":
-					return R.map(eachChild(R, current.conditions, go), () => undefined)
-				case "Not":
-					return R.suspend(() => go(current.condition))
-				default:
-					return R.succeed(undefined)
-			}
+	const visit = (current: Node): void => {
+		switch (current._tag) {
+			case "Compare":
+			case "In":
+			case "Exists":
+				seen.add(current.field)
+				return
+			case "And":
+			case "Or":
+				Arr.forEach(current.conditions, visit)
+				return
+			case "Not":
+				visit(current.condition)
+				return
 		}
-		return go(node)
-	})
+	}
+	visit(node)
 	return Array.from(seen)
 }

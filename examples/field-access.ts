@@ -7,14 +7,16 @@
  * - Only the people team may change pay. A deny rule for some fields does not
  *   stop a change to the other fields.
  *
- * `fields` takes patterns: `*` stands for any part of one field name, and `**`
- * for any number of parts. `Policy.permittedFields` gives the fields that a
+ * `fields` takes field paths. A parent, as `pay`, includes its child fields.
+ * `*` means all fields. `Policy.permittedFields` gives the fields that a
  * request may use, for example to make a form or to cut a JSON answer.
  */
 import { Effect, Schema } from "effect"
 import { Domain, Policy, Resource } from "../src/index.ts"
 
-class Staff extends Schema.Class<Staff>("Staff")({
+class Staff extends Schema.Class<Staff, { readonly brand: unique symbol }>(
+	"Staff",
+)({
 	id: Schema.String,
 	team: Schema.Literals(["engineering", "people"]),
 }) {}
@@ -40,7 +42,7 @@ const policyFor = (staff: Staff) =>
 			when: ($) => $.eq("id", $.principal("id")),
 		})
 		yield* _.allow("read", Person, {
-			fields: ["pay.*"],
+			fields: ["pay"],
 			when: ($) => $.eq("managerId", $.principal("id")),
 		})
 		yield* _.allow("update", Person, {
@@ -51,7 +53,7 @@ const policyFor = (staff: Staff) =>
 			yield* _.allow(["read", "update"], Person)
 		} else {
 			yield* _.deny("update", Person, {
-				fields: ["pay.**"],
+				fields: ["pay"],
 				reason: "Only the people team may change pay",
 			})
 		}

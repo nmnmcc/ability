@@ -33,6 +33,10 @@ import {
 	sharedBot,
 } from "./fixtures.ts"
 
+/**
+ * The caller belongs to the request, so each check reads it.
+ * @effect-leakable-service
+ */
 class Identity extends Context.Service<Identity, Caller>()(
 	"@nmnmcc/ability/tests/HttpApi.test/Identity",
 ) {}
@@ -45,7 +49,10 @@ class Auth extends Authorizer.Service<Auth>()(
 	},
 ) {}
 
-class BotNotFound extends Schema.TaggedError<BotNotFound>()("BotNotFound", {
+class BotNotFound extends Schema.TaggedError<
+	BotNotFound,
+	{ readonly brand: unique symbol }
+>()("BotNotFound", {
 	id: Schema.String,
 }) {}
 

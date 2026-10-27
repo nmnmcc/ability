@@ -154,7 +154,7 @@ export type Target<D> = {
 	[K in Domain.Kind<D>]: {
 		readonly action: Domain.ActionOf<D, K>
 		readonly resource: Domain.ValueOf<D, K>
-		readonly field?: Condition.FieldSelector<Domain.DataOf<D, K>>
+		readonly field?: Condition.FieldSelector<Domain.FieldsOf<D, K>>
 		/** A target has a resource value or a kind, never both. */
 		readonly kind?: never
 	}
@@ -185,11 +185,7 @@ export type FieldlessTarget<D> = {
  * @since 1.0.0
  */
 export type Scope<D, K extends string> = (
-	builder: Condition.Builder<
-		Domain.DataOf<D, K>,
-		Domain.ValueOf<D, K>,
-		Domain.Principal<D>
-	>,
+	builder: Condition.Builder<D, K>,
 ) => Condition.Condition<
 	Condition.Reads<Domain.ValueOf<D, K>, Domain.Principal<D>>
 >
@@ -207,89 +203,13 @@ export type KindTarget<D> = {
 	[K in Domain.Kind<D>]: {
 		readonly action: Domain.ActionOf<D, K>
 		readonly kind: K
-		readonly field?: Condition.FieldSelector<Domain.DataOf<D, K>>
+		readonly field?: Condition.FieldSelector<Domain.FieldsOf<D, K>>
 		/** The part of the kind. See {@link Scope}. */
 		readonly within?: Scope<D, K>
 		/** A target has a resource value or a kind, never both. */
 		readonly resource?: never
 	}
 }[Domain.Kind<D>]
-
-/**
- * A {@link Target} with a field of any length. A function that takes a
- * target checks its field with {@link CheckField}, so a field of up to about
- * 1000 parts is fine, and a field that is not a field of the kind is a type
- * error.
- *
- * @stability stable
- * @category models
- * @since 2.1.0
- */
-export type DeepTarget<D> = {
-	[K in Domain.Kind<D>]: {
-		readonly action: Domain.ActionOf<D, K>
-		readonly resource: Domain.ValueOf<D, K>
-		readonly field?: string
-		readonly kind?: never
-	}
-}[Domain.Kind<D>]
-
-/**
- * A {@link KindTarget} with a field of any length. See {@link DeepTarget}.
- *
- * @stability stable
- * @category models
- * @since 2.1.0
- */
-export type DeepKindTarget<D> = {
-	[K in Domain.Kind<D>]: {
-		readonly action: Domain.ActionOf<D, K>
-		readonly kind: K
-		readonly field?: string
-		readonly within?: Scope<D, K>
-		readonly resource?: never
-	}
-}[Domain.Kind<D>]
-
-/** The kind of a target: its `kind`, or the `_tag` of its resource value. */
-type KindOfTarget<T> = T extends { readonly kind: infer K extends string }
-	? K
-	: T extends { readonly resource: { readonly _tag: infer K extends string } }
-		? K
-		: never
-
-/**
- * Checks the field of a target or a request: a field of its kind that a
- * request may name, of any length up to about 1000 parts. See
- * `Condition.SelectPath`. A target with no field needs no check.
- *
- * @stability stable
- * @category utility types
- * @since 2.1.0
- */
-export type CheckField<D, T> = T extends { readonly field?: infer F }
-	? [Exclude<F, undefined>] extends [never]
-		? unknown
-		: {
-				// A field that the target may leave out is checked too, when it is
-				// there.
-				readonly field?: Condition.SelectPath<
-					Domain.DataOf<D, KindOfTarget<T>>,
-					Exclude<F, undefined> & string
-				>
-			}
-	: unknown
-
-/**
- * A target or a request with its field checked, as {@link CheckField} does.
- * Each member of a union is checked by itself, so a member with no field
- * does not take the place of the check of another member.
- *
- * @stability stable
- * @category utility types
- * @since 2.1.3
- */
-export type Checked<D, T> = T extends unknown ? T & CheckField<D, T> : never
 
 /**
  * A request: a principal, an action, and a resource value.
@@ -299,17 +219,6 @@ export type Checked<D, T> = T extends unknown ? T & CheckField<D, T> : never
  * @since 0.3.0
  */
 export type Request<D> = Target<D> & { readonly principal: Domain.Principal<D> }
-
-/**
- * A {@link Request} with a field of any length. See {@link DeepTarget}.
- *
- * @stability stable
- * @category models
- * @since 2.1.0
- */
-export type DeepRequest<D> = DeepTarget<D> & {
-	readonly principal: Domain.Principal<D>
-}
 
 /**
  * A {@link Request} with no field.
@@ -330,17 +239,6 @@ export type FieldlessRequest<D> = FieldlessTarget<D> & {
  * @since 0.3.0
  */
 export type KindRequest<D> = KindTarget<D> & {
-	readonly principal: Domain.Principal<D>
-}
-
-/**
- * A {@link KindRequest} with a field of any length. See {@link DeepTarget}.
- *
- * @stability stable
- * @category models
- * @since 2.1.0
- */
-export type DeepKindRequest<D> = DeepKindTarget<D> & {
 	readonly principal: Domain.Principal<D>
 }
 
@@ -391,7 +289,7 @@ export interface Explanation {
  * A rule for the domain `D`. `I` is what the tests of its condition read, and
  * `X` is its mark: see `Condition.Condition`. A predicate reads the values and
  * the principal of its domain, so a rule may go only into a policy of its own
- * domain. A rule from {@link rule} has the domain `any`.
+ * domain.
  *
  * @stability stable
  * @category models
@@ -414,13 +312,13 @@ export interface RuleShape<I = unknown, X = never> {
 	readonly fields?: ReadonlyArray<string>
 	readonly reason?: string
 	readonly id?: string
-	readonly meta?: unknown
+	readonly meta?: Schema.Json
 	/**
 	 * The domain of the builder that made the rule. Two domains may have the
 	 * same types but other paths, so the types can not tell them apart. It is
 	 * not in the JSON form of a rule.
 	 */
-	readonly domain?: Domain.Any
+	readonly domain: Domain.Any
 }
 
 /**
@@ -524,14 +422,17 @@ export type ValueFor<D, K> = "*" extends K
 	: Domain.ValueOf<D, Extract<K, string>>
 
 /**
- * A field name or a field pattern of the kinds `K`.
+ * A real field path, a parent path, or `"*"` for the kinds `K`.
  *
  * @stability stable
  * @category models
  * @since 0.3.0
  */
 export type FieldFor<D, K> =
-	Condition.FieldName<DataFor<D, K>> | `${string}*${string}`
+	| Condition.FieldName<
+			"*" extends K ? {} : Domain.FieldsOf<D, Extract<K, string>>
+	  >
+	| "*"
 
 /**
  * A condition that a rule for the kinds `K` may have. Its predicates may read
@@ -547,22 +448,6 @@ export type ConditionFor<D, K> = Condition.Condition<
 >
 
 /**
- * Checks each field of a rule: a field pattern with a star, or a name of the
- * kinds `K`, of any length up to about 1000 parts. A name that is not a field
- * gives the names that may come next, so the type error names them. See
- * `Condition.NamePath`.
- *
- * @stability stable
- * @category utility types
- * @since 2.1.0
- */
-export type FieldsFor<D, K, Fields extends ReadonlyArray<string>> = {
-	readonly [I in keyof Fields]: Fields[I] extends `${string}*${string}`
-		? Fields[I]
-		: Condition.NamePath<DataFor<D, K>, Fields[I] & string>
-}
-
-/**
  * The options of a rule. `Fields` is the list of the fields of the rule.
  *
  * @stability stable
@@ -573,20 +458,14 @@ export interface RuleOptions<
 	D,
 	K,
 	C extends Condition.Any,
-	Fields extends ReadonlyArray<string> = ReadonlyArray<FieldFor<D, K>>,
+	Fields extends ReadonlyArray<FieldFor<D, K>> = ReadonlyArray<FieldFor<D, K>>,
 > {
 	/** The condition. It gets a builder with the types of the resource. */
-	readonly when?: (
-		builder: Condition.Builder<
-			DataFor<D, K>,
-			ValueFor<D, K>,
-			Domain.Principal<D>
-		>,
-	) => C
-	readonly fields?: Fields & FieldsFor<D, K, Fields>
+	readonly when?: (builder: Condition.Builder<D, K & string>) => C
+	readonly fields?: Fields
 	readonly reason?: string
 	readonly id?: string
-	readonly meta?: Domain.Meta<D>
+	readonly meta?: Schema.Json
 }
 
 type SingleOrArray<A> = A | ReadonlyArray<A>
@@ -604,7 +483,8 @@ export interface Builder<D> {
 		const A extends ActionForTargets<D, Res>,
 		const C extends ConditionFor<D, KindOf<TargetOf<Res>>> =
 			Condition.Condition,
-		const Fields extends ReadonlyArray<string> = readonly [],
+		const Fields extends ReadonlyArray<FieldFor<D, KindOf<TargetOf<Res>>>> =
+			readonly [],
 	>(
 		action: SingleOrArray<A>,
 		resource: Res,
@@ -615,7 +495,8 @@ export interface Builder<D> {
 		const A extends ActionForTargets<D, Res>,
 		const C extends ConditionFor<D, KindOf<TargetOf<Res>>> =
 			Condition.Condition,
-		const Fields extends ReadonlyArray<string> = readonly [],
+		const Fields extends ReadonlyArray<FieldFor<D, KindOf<TargetOf<Res>>>> =
+			readonly [],
 	>(
 		action: SingleOrArray<A>,
 		resource: Res,
@@ -643,25 +524,6 @@ export const builder = <D extends Domain.Any>(domain: D): Builder<D> =>
 	RuleData.builder(domain) as never
 
 /**
- * Makes a rule from its data, with no types. It does not check the data
- * against a domain: a policy does that when the rule goes into it. Use
- * {@link builder} for rules with types, or {@link schema} for rules from JSON.
- *
- * The condition may not have a predicate. A policy checks the fields of a
- * condition against the resources of its rule, but it can not check what
- * the code of a predicate reads. A rule from the builder keeps that in its
- * types; this one could give a predicate of one kind to another kind.
- *
- * @stability stable
- * @category constructors
- * @since 2.0.0
- */
-export const rule: <I = unknown>(
-	data: RuleShape<I, never>,
-	// The types come from the data only, not from where the rule goes.
-) => Rule<any, NoInfer<I>> = RuleData.makePlain as never
-
-/**
  * The options of a list of rules.
  *
  * @stability stable
@@ -676,8 +538,7 @@ export interface Options {
 /**
  * The error when a rule does not fit its domain: it names a kind, an action,
  * a field or a field of the principal that the domain does not have, or it
- * tests a field with a value that the field can not hold. It has one issue
- * for each problem, with its path, and a suggestion when a name has a mistake.
+ * tests a field with a value that the field can not hold. It has the first issue with its path.
  *
  * @stability stable
  * @category errors
@@ -736,7 +597,7 @@ type Combined<D extends Domain.Any, Ps extends ReadonlyArray<Any>> = Policy<
  * @since 0.3.0
  */
 export const all: <const Ps extends readonly [Any, ...Array<Any>]>(
-	policies: Ps,
+	policies: Ps & ReadonlyArray<Policy<DomainOf<Ps[0]>, any>>,
 ) => Combined<DomainOf<Ps[0]>, Ps> = Internal.combine("All")
 
 /**
@@ -747,7 +608,7 @@ export const all: <const Ps extends readonly [Any, ...Array<Any>]>(
  * @since 0.3.0
  */
 export const any: <const Ps extends readonly [Any, ...Array<Any>]>(
-	policies: Ps,
+	policies: Ps & ReadonlyArray<Policy<DomainOf<Ps[0]>, any>>,
 ) => Combined<DomainOf<Ps[0]>, Ps> = Internal.combine("Any")
 
 /**
@@ -758,7 +619,7 @@ export const any: <const Ps extends readonly [Any, ...Array<Any>]>(
  * @since 0.3.0
  */
 export const firstOf: <const Ps extends readonly [Any, ...Array<Any>]>(
-	policies: Ps,
+	policies: Ps & ReadonlyArray<Policy<DomainOf<Ps[0]>, any>>,
 ) => Combined<DomainOf<Ps[0]>, Ps> = Internal.combine("FirstOf")
 
 /**
@@ -812,10 +673,10 @@ export const provideContext: {
 export const decide: <
 	D extends Domain.Any,
 	X,
-	const Req extends DeepRequest<NoInfer<D>>,
+	const Req extends Request<NoInfer<D>>,
 >(
 	policy: Policy<D, X>,
-	request: Checked<NoInfer<D>, Req>,
+	request: Req,
 ) => Effect.Effect<
 	Decision.Decision,
 	Condition.ErrorOf<X>,
@@ -831,10 +692,10 @@ export const decide: <
  */
 export const decideSync: <
 	D extends Domain.Any,
-	const Req extends DeepRequest<NoInfer<D>>,
+	const Req extends Request<NoInfer<D>>,
 >(
 	policy: Policy<D>,
-	request: Checked<NoInfer<D>, Req>,
+	request: Req,
 ) => Decision.Decision = Decide.decideSync
 
 /**
@@ -850,10 +711,10 @@ export const decideSync: <
 export const explain: <
 	D extends Domain.Any,
 	X,
-	const Req extends DeepRequest<NoInfer<D>>,
+	const Req extends Request<NoInfer<D>>,
 >(
 	policy: Policy<D, X>,
-	request: Checked<NoInfer<D>, Req>,
+	request: Req,
 ) => Effect.Effect<Explanation, Condition.ErrorOf<X>, Condition.ServicesOf<X>> =
 	Decide.explain as never
 
@@ -921,7 +782,7 @@ export type ResidualReads<D, K> = Condition.Reads<
  *
  * A policy tree may use the condition of a child two times, so a small policy
  * may give a very large condition. When the condition would have more than
- * the `residualNodes` of the domain, 100000 by default, this function throws
+ * the fixed structural limit of 10000, this function throws
  * an error. In an `Authorizer`, the error is a defect, so the check fails.
  *
  * @stability stable
@@ -931,10 +792,10 @@ export type ResidualReads<D, K> = Condition.Reads<
 export const residual: <
 	D extends Domain.Any,
 	X,
-	const Req extends DeepKindRequest<NoInfer<D>>,
+	const Req extends KindRequest<NoInfer<D>>,
 >(
 	policy: Policy<D, X>,
-	request: Checked<NoInfer<D>, Req>,
+	request: Req,
 ) => Condition.Condition<ResidualReads<D, Req["kind"]>, X> =
 	Analysis.residual as never
 
@@ -950,8 +811,8 @@ export const residual: <
  * - `Some`: the policy allows some values in the scope and not others.
  *   `allowed` is an example of a value that it allows, and `refused` of a
  *   value in the scope that it does not allow.
- * - `Unknown`: the answer needs a predicate, or the search went past its
- *   budget.
+ * - `Unknown`: the answer needs a predicate, the Schema has an unsupported
+ *   shape, or the search went past its fixed limit.
  *
  * @stability stable
  * @category models
@@ -967,7 +828,7 @@ export type Coverage<I = unknown, X = never> = Data.TaggedEnum<{
 	}
 	Unknown: {
 		readonly condition: Condition.Condition<I, X>
-		readonly reason: "predicate" | "budget"
+		readonly reason: "predicate" | "budget" | "schema"
 	}
 }>
 
@@ -978,10 +839,9 @@ export type Coverage<I = unknown, X = never> = Data.TaggedEnum<{
  *
  * The answer comes from {@link Condition.satisfiable} with the shape of the
  * Schema of the resource. `All` and `None` hold for every value of the
- * Schema. `Some` means that, by the shape of the Schema, a value may get
- * either answer: a check such as a minimum length may still stop one of the
- * examples. `Unknown` comes only from a predicate or from the budget of the
- * search.
+ * Schema. `Some` gives a value with each answer. Schemas with unknown checks
+ * or complex shapes give `Unknown`, as do predicates and a search that goes
+ * past its fixed limit.
  *
  * `Some` does not mean that such a value is in your database. To know that,
  * run `condition` as a query.
@@ -993,70 +853,13 @@ export type Coverage<I = unknown, X = never> = Data.TaggedEnum<{
 export const coverage: <
 	D extends Domain.Any,
 	X,
-	const Req extends DeepKindRequest<NoInfer<D>>,
+	const Req extends KindRequest<NoInfer<D>>,
 >(
 	policy: Policy<D, X>,
-	request: Checked<NoInfer<D>, Req>,
+	request: Req,
 ) => Coverage<ResidualReads<D, Req["kind"]>, X> = Analysis.coverageAny as never
 
-// Schema
-
-/**
- * The JSON form of a rule.
- *
- * @stability stable
- * @category models
- * @since 0.3.0
- */
-export interface EncodedRule {
-	readonly _tag: "Allow" | "Deny"
-	readonly actions: ReadonlyArray<string>
-	readonly resources: ReadonlyArray<string>
-	readonly when?: Condition.Encoded
-	readonly fields?: ReadonlyArray<string>
-	readonly reason?: string
-	readonly id?: string
-	readonly meta?: unknown
-}
-
-/**
- * The JSON form of a policy.
- *
- * @stability stable
- * @category models
- * @since 0.3.0
- */
-export type EncodedNode =
-	| {
-			readonly _tag: "Rules"
-			readonly algorithm: Algorithm
-			readonly rules: ReadonlyArray<EncodedRule>
-	  }
-	| {
-			readonly _tag: "All" | "Any" | "FirstOf"
-			readonly policies: ReadonlyArray<EncodedNode>
-	  }
-	| {
-			readonly _tag: "Ceiling"
-			readonly cap: EncodedNode
-			readonly policy: EncodedNode
-	  }
-
-/**
- * The Schema of the policies of a domain with no predicates. Decoding checks
- * every kind, action, field and principal field against the domain, and the
- * `meta` of each rule against the `meta` Schema of the domain.
- *
- * The decoder takes the limits of the domain: at most `policyNodes` nodes
- * of the tree, `conditionNodes` nodes of each condition, and `jsonNodes`
- * objects and array items, with a shared object counted for each place. It
- * stops at the first one past a limit. It takes any number of levels, and it
- * reads only the own data fields of the input.
- *
- * @stability stable
- * @category schemas
- * @since 0.3.0
- */
+/** A JSON text Codec for policies with no predicates. */
 export const schema: <D extends Domain.Any>(
 	domain: D,
-) => Schema.Codec<Policy<D>, EncodedNode> = Internal.schema as never
+) => Schema.Codec<Policy<D>, string> = Internal.schema as never

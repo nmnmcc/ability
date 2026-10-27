@@ -70,8 +70,8 @@ export interface Descriptor {
 }
 
 /**
- * A resource. `Kind` is its name, `Action` is the union of its actions, `Data`
- * is the type of its Schema fields, and `Value` is the type of its values.
+ * A resource. `Kind` is its name, `Action` is the union of its actions, `Fields`
+ * is its Schema fields, and `Value` is the type of its values.
  *
  * @stability stable
  * @category models
@@ -80,14 +80,14 @@ export interface Descriptor {
 export interface Resource<
 	Kind extends string,
 	Action extends string,
-	Data extends object,
+	Fields extends Schema.Struct.Fields,
 	Value extends { readonly _tag: Kind },
 > {
 	readonly descriptor: Descriptor
 	readonly "~Resource"?: {
 		readonly Kind: Kind
 		readonly Action: Action
-		readonly Data: Data
+		readonly Fields: Fields
 		readonly Value: Value
 	}
 }
@@ -99,7 +99,12 @@ export interface Resource<
  * @category models
  * @since 0.3.0
  */
-export type Any = Resource<string, string, object, { readonly _tag: string }>
+export type Any = Resource<
+	string,
+	string,
+	Schema.Struct.Fields,
+	{ readonly _tag: string }
+>
 
 /**
  * The kind name of a resource.
@@ -126,7 +131,10 @@ export type Action<R> = R extends Resource<any, infer A, any, any> ? A : never
  * @category utility types
  * @since 0.3.0
  */
-export type Data<R> = R extends Resource<any, any, infer D, any> ? D : never
+export type Fields<R> = R extends Resource<any, any, infer F, any> ? F : never
+
+/** The data type of the Schema fields of a resource. */
+export type Data<R> = Schema.Struct.Type<Fields<R>>
 
 /**
  * The type of the values of a resource.
@@ -172,12 +180,7 @@ export type Class<
 	Actions extends ReadonlyArray<string>,
 	Fields extends Schema.Struct.Fields,
 > = Schema.Class<Self, Schema.TaggedStruct<Kind, Fields>, {}> &
-	Resource<
-		Kind,
-		Actions[number],
-		Schema.Struct.Type<Fields>,
-		Self & { readonly _tag: Kind }
-	> & {
+	Resource<Kind, Actions[number], Fields, Self & { readonly _tag: Kind }> & {
 		readonly kind: Kind
 		readonly actions: Actions
 	}
@@ -234,7 +237,7 @@ export interface Struct<
 > extends Resource<
 	Kind,
 	Actions[number],
-	Schema.Struct.Type<Fields>,
+	Fields,
 	Schema.Struct.Type<Fields> & { readonly _tag: Kind }
 > {
 	readonly kind: Kind
