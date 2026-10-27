@@ -1,8 +1,7 @@
-/** The bounded JSON text boundary for conditions and policies. */
+/** The JSON text boundary for conditions and policies. */
 import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
 import type * as Schema from "effect/Schema"
-import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
 
 /** An input problem with its path. */
@@ -29,22 +28,16 @@ export const at = <A>(path: ReadonlyArray<PropertyKey>, make: () => A): A => {
 /** Checks and copies one JSON value. Each value counts once. */
 const copyValue = (
 	input: unknown,
-	mostDepth: number,
-	mostItems: number,
 ): { readonly value: Schema.Json; readonly size: number } => {
 	const count = { size: 0 }
+	// A native Set finds ancestor objects by identity. Shared children are valid JSON.
+	const ancestors = new Set<object>()
 	const visit = (
 		value: unknown,
 		path: ReadonlyArray<PropertyKey>,
-		depth: number,
 	): Schema.Json => {
 		count.size += 1
-		if (count.size > mostItems) {
-			throw problem(
-				path,
-				`The JSON value has more than ${String(mostItems)} items`,
-			)
-		}
+
 		if (
 			value === null ||
 			typeof value === "string" ||
@@ -58,12 +51,7 @@ const copyValue = (
 		if (typeof value !== "object" || value === null) {
 			throw problem(path, "The value must be JSON data with finite numbers")
 		}
-		if (depth > mostDepth) {
-			throw problem(
-				path,
-				`The JSON value has more than ${String(mostDepth)} levels`,
-			)
-		}
+
 		const list = Array.isArray(value)
 		if (
 			!list &&
@@ -72,74 +60,66 @@ const copyValue = (
 		) {
 			throw problem(path, "A JSON object must have plain data fields")
 		}
-		const keys = Reflect.ownKeys(value)
-		const length = list ? value.length : keys.length
-		if (count.size + length > mostItems) {
-			throw problem(
-				path,
-				`The JSON value has more than ${String(mostItems)} items`,
-			)
-		}
-		if (list && keys.length !== length + 1) {
-			throw problem(
-				path,
-				"A JSON array must have every item and no added fields",
-			)
-		}
-		const read = (key: PropertyKey): Schema.Json => {
-			const field = Object.getOwnPropertyDescriptor(value, key)
-			if (
-				typeof key !== "string" ||
-				field === undefined ||
-				field.enumerable !== true ||
-				!("value" in field)
-			) {
-				throw problem([...path, key], "A JSON field must be an own data field")
-			}
-			return visit(field.value, [...path, list ? Number(key) : key], depth + 1)
-		}
-		return list
-			? Object.freeze(Array.from({ length }, (_, index) => read(String(index))))
-			: Object.freeze(
-					Object.fromEntries(Arr.map(keys, (key) => [key, read(key)])),
+		if (ancestors.has(value))
+			throw problem(path, "JSON data must not have a cycle")
+		ancestors.add(value)
+		try {
+			const keys = Reflect.ownKeys(value)
+			const length = list ? value.length : keys.length
+
+			if (list && keys.length !== length + 1) {
+				throw problem(
+					path,
+					"A JSON array must have every item and no added fields",
 				)
+			}
+			const read = (key: PropertyKey): Schema.Json => {
+				const field = Object.getOwnPropertyDescriptor(value, key)
+				if (
+					typeof key !== "string" ||
+					field === undefined ||
+					field.enumerable !== true ||
+					!("value" in field)
+				) {
+					throw problem(
+						[...path, key],
+						"A JSON field must be an own data field",
+					)
+				}
+				return visit(field.value, [...path, list ? Number(key) : key])
+			}
+			return list
+				? Object.freeze(
+						Array.from({ length }, (_, index) => read(String(index))),
+					)
+				: Object.freeze(
+						Object.fromEntries(Arr.map(keys, (key) => [key, read(key)])),
+					)
+		} finally {
+			ancestors.delete(value)
+		}
 	}
-	const value = visit(input, [], 1)
+	const value = visit(input, [])
 	return { value, size: count.size }
 }
 
-/** Makes the bounded, plain JSON data of a rule. */
-export const copyMeta = (input: unknown) =>
-	copyValue(input, Limits.metaDepth, Limits.policyNodes)
+/** Makes the plain JSON data of a rule. */
+export const copyMeta = (input: unknown) => copyValue(input)
 
 /** Parses text before any node decoder reads it. */
 export const parse = (input: string): Schema.Json => {
 	if (typeof input !== "string") {
 		throw problem([], "The input must be JSON text")
 	}
-	if (input.length > Limits.jsonTextLength) {
-		throw problem(
-			[],
-			`The JSON text has more than ${String(Limits.jsonTextLength)} code units`,
-		)
-	}
-	return at(
-		[],
-		() =>
-			copyValue(JSON.parse(input), Limits.jsonDepth, Limits.jsonItems).value,
-	)
+
+	return at([], () => copyValue(JSON.parse(input)).value)
 }
 
 /** Checks the value before JSON.stringify can change or lose a value. */
 export const stringify = (input: unknown): string => {
-	const value = copyValue(input, Limits.jsonDepth, Limits.jsonItems).value
+	const value = copyValue(input).value
 	const text = JSON.stringify(value)
-	if (text.length > Limits.jsonTextLength) {
-		throw problem(
-			[],
-			`The JSON text has more than ${String(Limits.jsonTextLength)} code units`,
-		)
-	}
+
 	return text
 }
 
@@ -230,33 +210,15 @@ export const decodeAt = (
 	input: unknown,
 	path: ReadonlyArray<PropertyKey> = [],
 ): Nodes.Node => {
-	const count = { units: 0 }
 	const visit = (
 		value: unknown,
 		place: ReadonlyArray<PropertyKey>,
-		depth: number,
 	): Nodes.Node =>
 		at(place, () => {
-			if (depth > Limits.conditionDepth) {
-				throw problem(
-					place,
-					`A condition has more than ${String(Limits.conditionDepth)} levels`,
-				)
-			}
-			const spend = (amount: number): void => {
-				count.units += amount
-				if (count.units > Limits.conditionNodes) {
-					throw problem(
-						place,
-						`A condition has more than ${String(Limits.conditionNodes)} units`,
-					)
-				}
-			}
-			spend(1)
 			const data = object(value, place)
 			const operands = (name: string): ReadonlyArray<Nodes.Operand> => {
 				const values = readList(data, name, place)
-				spend(values.length)
+
 				return Arr.map(values, (item, index) =>
 					operand(item, [...place, name, index]),
 				)
@@ -272,7 +234,7 @@ export const decodeAt = (
 					if (!Nodes.isCompareOperator(op)) {
 						throw problem([...place, "op"], `"${op}" is not a compare operator`)
 					}
-					spend(1)
+
 					return new Nodes.Compare({
 						op,
 						field: readString(data, "field", place),
@@ -295,28 +257,23 @@ export const decodeAt = (
 				case "Or": {
 					fields(data, ["_tag", "conditions"], place)
 					const children = readList(data, "conditions", place)
-					if (count.units + children.length > Limits.conditionNodes) {
-						throw problem(
-							place,
-							`A condition has more than ${String(Limits.conditionNodes)} units`,
-						)
-					}
+
 					return new Nodes[data["_tag"]](
 						Arr.map(children, (child, index) =>
-							visit(child, [...place, "conditions", index], depth + 1),
+							visit(child, [...place, "conditions", index]),
 						),
 					)
 				}
 				case "Not":
 					fields(data, ["_tag", "condition"], place)
 					return new Nodes.Not(
-						visit(data["condition"], [...place, "condition"], depth + 1),
+						visit(data["condition"], [...place, "condition"]),
 					)
 				default:
 					throw problem([...place, "_tag"], "The condition has no known tag")
 			}
 		})
-	return visit(input, path, 1)
+	return visit(input, path)
 }
 
 export const toJson = (node: Nodes.Node): unknown => Nodes.toJson(node)

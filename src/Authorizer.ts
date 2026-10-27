@@ -37,6 +37,7 @@
 import type * as Context from "effect/Context"
 import type * as Effect from "effect/Effect"
 import type * as Layer from "effect/Layer"
+import * as Schema from "effect/Schema"
 import type * as Condition from "./Condition.ts"
 import type * as Decision from "./Decision.ts"
 import type * as Domain from "./Domain.ts"
@@ -50,14 +51,15 @@ import type * as Policy from "./Policy.ts"
  * @category errors
  * @since 0.3.0
  */
-export const Forbidden: typeof Internal.Forbidden = Internal.Forbidden
-
-/**
- * @stability stable
- * @category errors
- * @since 0.3.0
- */
-export type Forbidden = Internal.Forbidden
+export class Forbidden extends Schema.TaggedError<
+	Forbidden,
+	{ readonly brand: unique symbol }
+>("@nmnmcc/ability/Authorizer/Forbidden")("Forbidden", {
+	action: Schema.String,
+	kind: Schema.String,
+	field: Schema.optionalKey(Schema.String),
+	reason: Schema.optionalKey(Schema.String),
+}) {}
 
 /**
  * The error when the policy of the principal can not be loaded. The cause is
@@ -67,15 +69,12 @@ export type Forbidden = Internal.Forbidden
  * @category errors
  * @since 0.3.0
  */
-export const PolicyUnavailable: typeof Internal.PolicyUnavailable =
-	Internal.PolicyUnavailable
-
-/**
- * @stability stable
- * @category errors
- * @since 0.3.0
- */
-export type PolicyUnavailable = Internal.PolicyUnavailable
+export class PolicyUnavailable extends Schema.TaggedError<
+	PolicyUnavailable,
+	{ readonly brand: unique symbol }
+>("@nmnmcc/ability/Authorizer/PolicyUnavailable")("PolicyUnavailable", {
+	cause: Schema.Defect(),
+}) {}
 
 /**
  * The error when a decider must wait for an answer. `ticket` names the
@@ -85,14 +84,13 @@ export type PolicyUnavailable = Internal.PolicyUnavailable
  * @category errors
  * @since 0.3.0
  */
-export const Pending: typeof Internal.Pending = Internal.Pending
-
-/**
- * @stability stable
- * @category errors
- * @since 0.3.0
- */
-export type Pending = Internal.Pending
+export class Pending extends Schema.TaggedError<
+	Pending,
+	{ readonly brand: unique symbol }
+>("@nmnmcc/ability/Authorizer/Pending")("Pending", {
+	ticket: Schema.String,
+	reason: Schema.optionalKey(Schema.String),
+}) {}
 
 /**
  * What a check is about: an act on a resource value, or an act on a kind of

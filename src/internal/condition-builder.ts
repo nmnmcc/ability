@@ -7,7 +7,6 @@ import { hasProperty } from "effect/Predicate"
 import type * as Domain from "../Domain.ts"
 import * as Bind from "./bind.ts"
 import * as Nodes from "./nodes.ts"
-import * as Limits from "./limits.ts"
 
 /** Internal rules use `*` until their full target list is bound. */
 export const make = (domain: Domain.Any, kind: string) => {
@@ -28,17 +27,7 @@ export const make = (domain: Domain.Any, kind: string) => {
 	}
 	const operands = (
 		values: ReadonlyArray<unknown>,
-	): ReadonlyArray<Nodes.Operand> => {
-		if (values.length >= Limits.conditionNodes)
-			throw Limits.exceeded(
-				"A condition",
-				"conditionNodes",
-				"units",
-				values.length + 1,
-				Limits.conditionNodes,
-			)
-		return Arr.map(values, operand)
-	}
+	): ReadonlyArray<Nodes.Operand> => Arr.map(values, operand)
 	const origin = { domain, kind }
 	const bound = (node: Nodes.Node): Nodes.Node => {
 		const issues = kind === "*" ? [] : Bind.conditionIssues(domain, kind, node)

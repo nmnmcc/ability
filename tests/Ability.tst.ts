@@ -103,9 +103,9 @@ describe("v3 types", () => {
 		expect($.exists).type.not.toBeCallableWith("active")
 	})
 
-	it("uses only paths of at most five Schema fields", () => {
+	it("uses paths from Schema fields", () => {
 		expect($.eq).type.toBeCallableWith("fifth.b.c.d.e", "x")
-		expect($.eq).type.not.toBeCallableWith("deep.b.c.d.e.f", "x")
+		expect($.eq).type.toBeCallableWith("deep.b.c.d.e.f", "x")
 		expect($.exists).type.not.toBeCallableWith("list.0")
 		expect($.exists).type.not.toBeCallableWith("map.key")
 		expect($.eq).type.toBeCallableWith("note", null)
@@ -134,7 +134,7 @@ describe("v3 types", () => {
 		expect(_.allow).type.not.toBeCallableWith("read", Post, {
 			fields: ["tit*"],
 		})
-		expect(_.allow).type.not.toBeCallableWith("read", Post, {
+		expect(_.allow).type.toBeCallableWith("read", Post, {
 			fields: ["deep.b.c.d.e.f"],
 		})
 		const predicate = $.predicate("post", (post) => post.active())

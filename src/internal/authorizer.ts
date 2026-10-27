@@ -1,5 +1,5 @@
 /**
- * The values of authorizers: the errors, the service class and the layer.
+ * The values of authorizers: the service class and the layer.
  * The types are in `Authorizer.ts`.
  */
 // The service erases the error type and the service type of predicates,
@@ -9,8 +9,7 @@
 import * as Context from "effect/Context"
 import * as Effect from "effect/Effect"
 import * as Layer from "effect/Layer"
-import * as Schema from "effect/Schema"
-import type * as Authorizer from "../Authorizer.ts"
+import * as Authorizer from "../Authorizer.ts"
 import type * as Condition from "../Condition.ts"
 import * as Decision from "../Decision.ts"
 import type * as Domain from "../Domain.ts"
@@ -22,34 +21,6 @@ import * as Policies from "./policy.ts"
 import * as ResourceData from "./resource.ts"
 
 type AnyServiceClass = Authorizer.AnyServiceClass
-
-/** The error when a policy says no. */
-export class Forbidden extends Schema.TaggedError<
-	Forbidden,
-	{ readonly brand: unique symbol }
->("@nmnmcc/ability/Authorizer/Forbidden")("Forbidden", {
-	action: Schema.String,
-	kind: Schema.String,
-	field: Schema.optionalKey(Schema.String),
-	reason: Schema.optionalKey(Schema.String),
-}) {}
-
-/** The error when the policy of the principal can not be loaded. */
-export class PolicyUnavailable extends Schema.TaggedError<
-	PolicyUnavailable,
-	{ readonly brand: unique symbol }
->("@nmnmcc/ability/Authorizer/PolicyUnavailable")("PolicyUnavailable", {
-	cause: Schema.Defect(),
-}) {}
-
-/** The error when a decider must wait for an answer. */
-export class Pending extends Schema.TaggedError<
-	Pending,
-	{ readonly brand: unique symbol }
->("@nmnmcc/ability/Authorizer/Pending")("Pending", {
-	ticket: Schema.String,
-	reason: Schema.optionalKey(Schema.String),
-}) {}
 
 /** Makes an authorizer service class for a domain. */
 export const Service =
@@ -95,8 +66,8 @@ const forbidden = (
 	target: AnyTarget,
 	kind: string,
 	reason: string | undefined,
-): Forbidden =>
-	Forbidden.make({
+): Authorizer.Forbidden =>
+	Authorizer.Forbidden.make({
 		action: target.action,
 		kind,
 		...(target.field === undefined ? {} : { field: target.field }),
@@ -138,7 +109,9 @@ export const makeLayer = (
 								"The loaded policy is not a policy of this domain",
 							),
 					),
-					Effect.mapError((cause) => PolicyUnavailable.make({ cause })),
+					Effect.mapError((cause) =>
+						Authorizer.PolicyUnavailable.make({ cause }),
+					),
 					Effect.map((value) =>
 						Policies.provideContext(value, services as never),
 					),

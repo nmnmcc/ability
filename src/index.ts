@@ -34,12 +34,6 @@ export * as Domain from "./Domain.ts"
 
 /**
  * @stability stable
- * @since 2.0.0
- */
-export * as Limits from "./Limits.ts"
-
-/**
- * @stability stable
  * @since 0.3.0
  */
 export * as Policy from "./Policy.ts"

@@ -2,7 +2,6 @@ import { assert, describe, it } from "@effect/vitest"
 import { Array as Arr, Effect, Exit, Schema } from "effect"
 import { Policy } from "../src/index.ts"
 import * as Json from "../src/internal/json.ts"
-import * as Limits from "../src/internal/limits.ts"
 import * as PolicyJson from "../src/internal/policy-json.ts"
 import { App } from "./fixtures.ts"
 
@@ -22,11 +21,12 @@ describe("JSON boundary", () => {
 						_tag: "Allow",
 						actions: ["read"],
 						resources: ["Bot"],
-						meta: nested(Limits.metaDepth + 1),
+						meta: { value: null },
 					},
 				],
 			})
-			const error = yield* Effect.flip(PolicyJson.decode(text, App))
+			const invalid = text.replace('"value":null', '"value":1e400')
+			const error = yield* Effect.flip(PolicyJson.decode(invalid, App))
 			assert.deepStrictEqual(error.path.slice(0, 3), ["rules", 0, "meta"])
 		}),
 	)
@@ -51,36 +51,21 @@ describe("JSON boundary", () => {
 		)
 	})
 
-	it("takes text at the length limit and stops above it", () => {
-		const text = JSON.stringify("x".repeat(Limits.jsonTextLength - 2))
-		assert.strictEqual(text.length, Limits.jsonTextLength)
-		assert.isString(Json.parse(text))
+	it("reads and writes text above the old length cap", () => {
+		const text = JSON.stringify("x".repeat(1000001))
 		assert.strictEqual(Json.stringify(Json.parse(text)), text)
-		assert.throws(() => Json.parse(`${text} `), /code units/)
-		assert.throws(
-			() => Json.stringify("x".repeat(Limits.jsonTextLength - 1)),
-			/code units/,
-		)
+		assert.strictEqual(Json.parse(`${text} `), "x".repeat(1000001))
 	})
-
-	it("takes bounded containers and stops before deeper walks", () => {
-		const text = JSON.stringify(nested(Limits.jsonDepth))
+	it("reads containers past the old depth cap", () => {
+		const text = JSON.stringify(nested(300))
 		assert.strictEqual(Json.stringify(Json.parse(text)), text)
-		assert.throws(
-			() => Json.parse(JSON.stringify(nested(Limits.jsonDepth + 1))),
-			/levels/,
-		)
-		const veryDeep = `${"[".repeat(20_000)}null${"]".repeat(20_000)}`
-		assert.throws(() => Json.parse(veryDeep), Json.Problem)
 	})
-
-	it("counts every value of a large input", () => {
-		const atLimit = Array.from({ length: Limits.jsonItems - 1 }, () => null)
+	it("reads more than 100000 JSON items", () => {
+		const items = Array.from({ length: 100001 }, () => null)
 		assert.strictEqual(
-			(Json.parse(JSON.stringify(atLimit)) as ReadonlyArray<unknown>).length,
-			atLimit.length,
+			(Json.parse(JSON.stringify(items)) as ReadonlyArray<unknown>).length,
+			items.length,
 		)
-		assert.throws(() => Json.parse(JSON.stringify([...atLimit, null])), /items/)
 	})
 
 	it("rejects invalid text and numbers that JSON cannot keep", () => {
@@ -91,7 +76,7 @@ describe("JSON boundary", () => {
 		assert.throws(() => Json.stringify({ value: undefined }), /JSON data/)
 	})
 
-	it("copies and counts JSON meta at its own bounds", () => {
+	it("copies JSON meta without depth or size caps", () => {
 		const input = { list: ["one", { two: true }] }
 		const copy = Json.copyMeta(input)
 		assert.strictEqual(copy.size, 5)
@@ -99,21 +84,21 @@ describe("JSON boundary", () => {
 		assert.notStrictEqual(copy.value, input)
 		input.list.push("three")
 		assert.deepStrictEqual(copy.value, { list: ["one", { two: true }] })
+		assert.strictEqual(Json.copyMeta(nested(32)).size, 33)
 		assert.strictEqual(
-			Json.copyMeta(nested(Limits.metaDepth)).size,
-			Limits.metaDepth + 1,
+			Json.copyMeta(Array.from({ length: 10001 }, () => null)).size,
+			10002,
 		)
-		assert.throws(() => Json.copyMeta(nested(Limits.metaDepth + 1)), /levels/)
-		assert.strictEqual(
-			Json.copyMeta(Array.from({ length: Limits.policyNodes - 1 }, () => null))
-				.size,
-			Limits.policyNodes,
-		)
-		assert.throws(
-			() =>
-				Json.copyMeta(Array.from({ length: Limits.policyNodes }, () => null)),
-			/items/,
-		)
+	})
+	it("rejects cycles but copies each use of a shared object", () => {
+		const cycle: { child?: unknown } = {}
+		cycle.child = cycle
+		assert.throws(() => Json.copyMeta(cycle), /cycle/)
+		const shared = { value: 1 }
+		assert.deepStrictEqual(Json.copyMeta([shared, shared]).value, [
+			{ value: 1 },
+			{ value: 1 },
+		])
 	})
 
 	it("rejects meta with data that JSON would lose", () => {

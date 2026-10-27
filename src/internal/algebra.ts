@@ -3,8 +3,7 @@
  * that puts the principal in, tests on a value, and folds.
  *
  * The constructors of the nodes keep each condition small, so each walk here
- * has no memo. A shared child is walked again for each place, and the limits
- * of the nodes keep that work small. Fixed depth bounds permit direct walks.
+ * has no memo. A shared child is walked again for each place.
  */
 // A predicate gives an Effect with an error type and a service type that this
 // code does not know, so they are `unknown` here.
@@ -58,7 +57,7 @@ const shapeOf = (node: Node): unknown => {
 /**
  * The text of the structure of a condition with no predicate. Two conditions
  * with one text give the same answer for every value. It reads all of the
- * condition, so a search counts its size in the budget.
+ * condition.
  */
 const structureText = (node: Node): string => JSON.stringify(shapeOf(node))
 
@@ -67,7 +66,7 @@ const structureText = (node: Node): string => JSON.stringify(shapeOf(node))
  * and the most children of a child that it puts into a node. A larger child
  * is its own key, and it stays one child, so the work of a constructor stays
  * small. A deep chain of `And` nodes, for one, does not copy all its leaves
- * at each level.
+ * at each level. These values select a cheaper path; they never reject input.
  */
 const keyNodes = 64
 

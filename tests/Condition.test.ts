@@ -8,7 +8,7 @@ import {
 	Option,
 	Schema,
 } from "effect"
-import { Condition, Domain, Limits, Resource } from "../src/index.ts"
+import { Condition, Domain, Resource } from "../src/index.ts"
 import * as Nodes from "../src/internal/nodes.ts"
 import { alice, aliceBot, App, Bot, Caller, sharedBot } from "./fixtures.ts"
 
@@ -256,22 +256,22 @@ describe("Condition", () => {
 		assert.isFalse(Exit.hasDies(exit))
 	})
 
-	it("counts each use of a shared child against the fixed size", () => {
+	it("counts shared children without a size cap", () => {
 		const doubled = (levels: number) =>
 			Arr.reduce(Arr.range(1, levels), Condition.always, (condition) =>
 				Condition.and(condition, condition),
 			)
 		assert.doesNotThrow(() => doubled(12))
-		assert.throws(() => doubled(13), /The most is 10000/)
+		assert.strictEqual(doubled(13).weight, 16383)
 	})
 
-	it("accepts exactly the fixed number of structural units", () => {
-		const values = Arr.range(1, Limits.conditionNodes - 1)
+	it("accepts large lists of operands", () => {
+		const values = Arr.range(1, 10_000 - 1)
 		const condition = $.in("level", values)
-		assert.strictEqual(condition.weight, Limits.conditionNodes)
+		assert.strictEqual(condition.weight, 10_000)
 		const text = Schema.encodeSync(codec)(condition)
 		assert.isTrue(Equal.equals(Schema.decodeSync(codec)(text), condition))
-		assert.throws(() => $.in("level", [...values, 0]), /The most is 10000/)
+		assert.strictEqual($.in("level", [...values, 0]).weight, 10001)
 	})
 
 	it("takes JSON text only", () => {
@@ -308,13 +308,13 @@ describe("Condition", () => {
 		)
 	})
 
-	it("does not take a path with more than five parts", () => {
-		const text = JSON.stringify({ _tag: "Exists", field: "a.b.c.d.e.f" })
-		const exit = Schema.decodeExit(codec)(text)
-		assert.isTrue(Exit.isFailure(exit))
-		assert.throws(
-			() => new Nodes.Exists({ field: "a.b.c.d.e.f" }),
-			/The most is 5/,
+	it("checks long path names against the domain", () => {
+		const field = Arr.makeBy(101, () => "a").join(".")
+		assert.strictEqual(new Nodes.Exists({ field }).field, field)
+		assert.isTrue(
+			Exit.isFailure(
+				Schema.decodeExit(codec)(JSON.stringify({ _tag: "Exists", field })),
+			),
 		)
 	})
 
@@ -498,7 +498,7 @@ describe("Condition", () => {
 			)
 		})
 
-		it("stops when an analysis reads more than sixteen fields", () => {
+		it("analyses more than sixteen fields", () => {
 			const names = [
 				"a",
 				"b",
@@ -528,9 +528,7 @@ describe("Condition", () => {
 			})
 			const free = Condition.builder(FlagsDomain, "Flags")
 			const atLimit = Condition.andAll(
-				Arr.map(names.slice(0, Limits.searchFields), (name) =>
-					free.eq(name, true),
-				),
+				Arr.map(names.slice(0, 16), (name) => free.eq(name, true)),
 			)
 			assert.strictEqual(
 				Condition.satisfiable(atLimit, { schema: Schema.Struct(fields) })._tag,
@@ -542,24 +540,18 @@ describe("Condition", () => {
 			assert.strictEqual(
 				Condition.satisfiable(condition, { schema: Schema.Struct(fields) })
 					._tag,
-				"Unknown",
+				"Satisfiable",
 			)
 		})
 
-		it("returns Unknown when the fixed search budget runs out", () => {
+		it("finishes a search past the old step budget", () => {
 			const test = (most: number) =>
 				_.and(
 					_.in("ratio", Arr.range(1, most)),
 					_.or(_.lt("ratio", 0), _.gt("ratio", most), _.eq("ratio", 0)),
 				)
 			assert.strictEqual(tagOf(test(40)), "Unsatisfiable")
-			assert.deepStrictEqual(
-				Condition.satisfiable(test(9900), { schema: Shape }),
-				{
-					_tag: "Unknown",
-					reason: "budget",
-				} as never,
-			)
+			assert.strictEqual(tagOf(test(9900)), "Unsatisfiable")
 		})
 
 		it("needs a condition with the principal already in it", () => {
@@ -618,10 +610,6 @@ describe("Condition node properties", () => {
 								? new Nodes.Not(condition)
 								: new Nodes.And([condition, leaf]),
 				)
-			if (Arr.some(weights, (weight) => weight > Limits.conditionNodes)) {
-				assert.throws(make, /The most is/)
-				return true
-			}
 			return make().weight === weights[weights.length - 1]
 		},
 	)
@@ -636,7 +624,7 @@ describe("Condition node properties", () => {
 	)
 
 	it.prop(
-		"accepts chains up to the fixed depth and rejects longer chains",
+		"loads chains past the old depth bound",
 		{ levels: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 70 })) },
 		({ levels }) => {
 			const chain = Arr.reduce(
@@ -645,14 +633,14 @@ describe("Condition node properties", () => {
 				(condition) => ({ _tag: "Not", condition }),
 			)
 			const exit = Schema.decodeExit(codec)(JSON.stringify(chain))
-			return levels > Limits.conditionDepth
-				? Exit.isFailure(exit)
-				: Exit.isSuccess(exit) &&
-						Condition.evaluateSync(exit.value, {
-							value: aliceBot,
-							principal: alice,
-						}) ===
-							((levels - 1) % 2 === 0)
+			return (
+				Exit.isSuccess(exit) &&
+				Condition.evaluateSync(exit.value, {
+					value: aliceBot,
+					principal: alice,
+				}) ===
+					((levels - 1) % 2 === 0)
+			)
 		},
 	)
 })

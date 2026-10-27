@@ -8,14 +8,7 @@ import {
 	Hash,
 	Schema,
 } from "effect"
-import {
-	Condition,
-	Decision,
-	Domain,
-	Limits,
-	Policy,
-	Resource,
-} from "../src/index.ts"
+import { Condition, Decision, Domain, Policy, Resource } from "../src/index.ts"
 import {
 	alice,
 	aliceBot,
@@ -589,7 +582,7 @@ describe("Policy", () => {
 		)
 	})
 
-	it("counts rules, lists, conditions and meta at the fixed policy bound", () => {
+	it("counts rules, lists, conditions and meta without a size cap", () => {
 		const codec = Policy.schema(App)
 		const make = (values: number, metaItems: number) =>
 			Policy.define(App)(function* (_) {
@@ -602,14 +595,14 @@ describe("Policy", () => {
 		// Nine fixed units: the policy, rule, two actions, kind, two fields,
 		// condition and meta array. Every operand and meta value adds one.
 		const policy = make(1000, 8991)
-		assert.strictEqual(policy.node.size, Limits.policyNodes)
+		assert.strictEqual(policy.node.size, 10000)
 		const text = Schema.encodeSync(codec)(policy)
 		assert.isTrue(Equal.equals(Schema.decodeSync(codec)(text), policy))
-		assert.throws(() => make(1000, 8992), /The most is 10000/)
+		assert.strictEqual(make(1000, 8992).node.size, 10001)
 		const data = JSON.parse(text) as { rules: [{ meta: Array<null> }] }
 		data.rules[0].meta.push(null)
 		const exit = Schema.decodeExit(codec)(JSON.stringify(data))
-		assert.isTrue(Exit.isFailure(exit))
+		assert.isTrue(Exit.isSuccess(exit))
 		assert.isFalse(Exit.hasDies(exit))
 
 		// Each use of a shared subtree counts. Two parts of 4999 units and
@@ -618,60 +611,57 @@ describe("Policy", () => {
 		assert.strictEqual(half.node.size, 4999)
 		const empty = emptyOf(App)
 		const shared = Policy.all([half, half, empty])
-		assert.strictEqual(shared.node.size, Limits.policyNodes)
+		assert.strictEqual(shared.node.size, 10000)
 		const sharedText = Schema.encodeSync(codec)(shared)
 		assert.isTrue(Equal.equals(Schema.decodeSync(codec)(sharedText), shared))
-		assert.throws(
-			() => Policy.all([half, half, empty, empty]),
-			/The most is 10000/,
-		)
+		assert.strictEqual(Policy.all([half, half, empty, empty]).node.size, 10001)
 		const sharedData = JSON.parse(sharedText) as { policies: Array<unknown> }
 		sharedData.policies.push(JSON.parse(Schema.encodeSync(codec)(empty)))
 		assert.isTrue(
-			Exit.isFailure(Schema.decodeExit(codec)(JSON.stringify(sharedData))),
+			Exit.isSuccess(Schema.decodeExit(codec)(JSON.stringify(sharedData))),
 		)
 	})
 
-	it("stops and closes a generator at the first rule past the unit bound", () => {
+	it("runs a generator past the old size cap", () => {
 		const meta = Array.from({ length: 5996 }, () => null)
 		const progress = { first: false, second: false, closed: false }
-		assert.throws(
-			() =>
-				Policy.define(App)(function* (_) {
-					try {
-						yield* _.allow("read", Bot, { meta })
-						progress.first = true
-						yield* _.allow("read", Bot, { meta })
-						progress.second = true
-					} finally {
-						progress.closed = true
-					}
-				}),
-			/The most is 10000/,
-		)
+		const policy = Policy.define(App)(function* (_) {
+			try {
+				yield* _.allow("read", Bot, { meta })
+				progress.first = true
+				yield* _.allow("read", Bot, { meta })
+				progress.second = true
+			} finally {
+				progress.closed = true
+			}
+		})
+		assert.isAbove(policy.node.size, 10000)
 		assert.deepStrictEqual(progress, {
 			first: true,
-			second: false,
+			second: true,
 			closed: true,
 		})
 	})
 
-	it("stops a residual that grows beyond a fixed bound", () => {
-		const base = Policy.define(App)(function* (_) {
-			yield* _.allow("read", Bot, { when: ($) => $.eq("level", 1) })
-			yield* _.deny("read", Bot, { when: ($) => $.eq("name", "Team") })
+	it("keeps a large residual in agreement with a decision", () => {
+		const policy = Policy.define(App)(function* (_) {
+			yield* _.allow("read", Bot, {
+				when: ($) => $.in("level", Arr.range(1, 11000)),
+			})
 		})
-		const policy = Arr.reduce(Arr.range(0, 23), base, (inner, depth) =>
-			depth % 2 === 0 ? Policy.any([inner]) : Policy.all([inner]),
-		)
-		assert.throws(
-			() =>
-				Policy.residual(policy, {
-					principal: alice,
-					action: "read",
-					kind: "Bot",
-				}),
-			/The most is/,
+		const residual = Policy.residual(policy, {
+			principal: alice,
+			action: "read",
+			kind: "Bot",
+		})
+		assert.isAbove(residual.weight, 10000)
+		assert.strictEqual(
+			Condition.evaluateSync(residual, { value: aliceBot }),
+			Policy.decideSync(policy, {
+				principal: alice,
+				action: "read",
+				resource: aliceBot,
+			})._tag === "Allow",
 		)
 	})
 

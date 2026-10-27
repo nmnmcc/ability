@@ -12,7 +12,7 @@ export const readPart = (value: unknown, name: string): unknown => {
 		: null
 }
 
-/** Reads a path with at most five parts. */
+/** Reads the own data fields of a path. */
 export const readPath = (
 	value: unknown,
 	names: ReadonlyArray<string>,

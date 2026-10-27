@@ -1,10 +1,9 @@
-/** A policy has one bounded JSON text format. */
+/** A policy has one JSON text format. */
 import * as Arr from "effect/Array"
 import * as Effect from "effect/Effect"
 import type * as Schema from "effect/Schema"
 import type * as Domain from "../Domain.ts"
 import * as Json from "./json.ts"
-import * as Limits from "./limits.ts"
 import * as PolicyNodes from "./policy-nodes.ts"
 import * as Rule from "./rule.ts"
 
@@ -127,26 +126,9 @@ export const decode = (
 ): Effect.Effect<Node, Json.Problem> =>
 	attempt(() => {
 		const data = Json.parse(input)
-		const count = { nodes: 0 }
-		const tree = (
-			value: unknown,
-			path: ReadonlyArray<PropertyKey>,
-			depth: number,
-		): Node =>
+
+		const tree = (value: unknown, path: ReadonlyArray<PropertyKey>): Node =>
 			Json.at(path, () => {
-				count.nodes += 1
-				if (depth > Limits.policyDepth) {
-					throw Json.problem(
-						path,
-						`A policy has more than ${String(Limits.policyDepth)} levels`,
-					)
-				}
-				if (count.nodes > Limits.policyNodes) {
-					throw Json.problem(
-						path,
-						`A policy has more than ${String(Limits.policyNodes)} units`,
-					)
-				}
 				const current = Json.object(value, path)
 				switch (current["_tag"]) {
 					case "Rules": {
@@ -159,13 +141,7 @@ export const decode = (
 							)
 						}
 						const rules = Json.readList(current, "rules", path)
-						if (count.nodes + rules.length > Limits.policyNodes) {
-							throw Json.problem(
-								path,
-								`A policy has more than ${String(Limits.policyNodes)} units`,
-							)
-						}
-						count.nodes += rules.length
+
 						return new PolicyNodes.Rules({
 							algorithm,
 							rules: Arr.map(rules, (rule, index) =>
@@ -184,27 +160,22 @@ export const decode = (
 								"A policy group needs at least one policy",
 							)
 						}
-						if (count.nodes + policies.length > Limits.policyNodes) {
-							throw Json.problem(
-								path,
-								`A policy has more than ${String(Limits.policyNodes)} units`,
-							)
-						}
+
 						return new PolicyNodes[current["_tag"]](
 							Arr.map(policies, (child, index) =>
-								tree(child, [...path, "policies", index], depth + 1),
+								tree(child, [...path, "policies", index]),
 							),
 						)
 					}
 					case "Ceiling":
 						Json.fields(current, ["_tag", "cap", "policy"], path)
 						return new PolicyNodes.Ceiling({
-							cap: tree(current["cap"], [...path, "cap"], depth + 1),
-							policy: tree(current["policy"], [...path, "policy"], depth + 1),
+							cap: tree(current["cap"], [...path, "cap"]),
+							policy: tree(current["policy"], [...path, "policy"]),
 						})
 					default:
 						throw Json.problem([...path, "_tag"], "The policy has no known tag")
 				}
 			})
-		return tree(data, [], 1)
+		return tree(data, [])
 	})

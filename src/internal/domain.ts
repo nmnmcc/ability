@@ -45,7 +45,7 @@ export const make = (options: {
 			(descriptor) => [descriptor.kind, descriptor] as const,
 		),
 	)
-	// The fixed catalog checks field names and size when the domain is made.
+	// The catalog checks field names when the domain is made.
 	const principalCatalog = Catalog.catalogOf(options.principal.ast)
 	return new DomainData({
 		principal: options.principal,

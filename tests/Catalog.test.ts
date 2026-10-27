@@ -1,7 +1,6 @@
 import { assert, describe, it } from "@effect/vitest"
 import { Array as Arr, Schema } from "effect"
 import * as Catalog from "../src/internal/catalog.ts"
-import * as Limits from "../src/internal/limits.ts"
 import * as Nodes from "../src/internal/nodes.ts"
 import * as Search from "../src/internal/search.ts"
 import { readPart, readPath } from "../src/internal/read.ts"
@@ -177,42 +176,28 @@ describe("Catalog", () => {
 		)
 	})
 
-	it("ends each path at five parts", () => {
-		const schema = Schema.Struct({
-			a: Schema.Struct({
-				b: Schema.Struct({
-					c: Schema.Struct({
-						d: Schema.Struct({ e: Schema.Struct({ f: Schema.String }) }),
-					}),
-				}),
-			}),
-		})
-		assert.deepStrictEqual(texts(schema), [
-			"a",
-			"a.b",
-			"a.b.c",
-			"a.b.c.d",
-			"a.b.c.d.e",
-		])
-		assert.isTrue(fieldOf(schema, "a.b.c.d.e").listed)
-		assert.isUndefined(Catalog.lookup(catalogOf(schema), "a.b.c.d.e.f"))
-		assert.isFalse(catalogOf(schema).supported)
+	it("keeps fields past 100 parts", () => {
+		const schema = Arr.reduce(
+			Arr.makeBy(101, () => 0),
+			Schema.String as Schema.Top,
+			(a) => Schema.Struct({ a }),
+		)
+		const path = Arr.makeBy(100, () => "a").join(".")
+		assert.strictEqual(texts(schema).length, 101)
+		assert.isFalse(fieldOf(schema, path).listed)
+		assert.isDefined(Catalog.lookup(catalogOf(schema), `${path}.a`))
+		assert.isTrue(catalogOf(schema).supported)
 	})
 
-	it("takes 1,000 fields and rejects one more", () => {
+	it("keeps more than 1000 fields", () => {
 		const fields = Object.fromEntries(
-			Arr.makeBy(Limits.catalogFields, (index) => [
-				`field${index}`,
-				Schema.String,
-			]),
+			Arr.makeBy(1000, (index) => [`field${index}`, Schema.String]),
 		)
+		assert.strictEqual(catalogOf(Schema.Struct(fields)).fields.length, 1000)
 		assert.strictEqual(
-			catalogOf(Schema.Struct(fields)).fields.length,
-			Limits.catalogFields,
-		)
-		assert.throws(
-			() => catalogOf(Schema.Struct({ ...fields, extra: Schema.String })),
-			/The most is 1000/,
+			catalogOf(Schema.Struct({ ...fields, extra: Schema.String })).fields
+				.length,
+			1001,
 		)
 	})
 

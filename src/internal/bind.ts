@@ -5,7 +5,6 @@ import * as Option from "effect/Option"
 import type * as Domain from "../Domain.ts"
 import type * as Resource from "../Resource.ts"
 import * as Catalog from "./catalog.ts"
-import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
 
 /** One problem, with its place in the input. */
@@ -52,14 +51,8 @@ const hasAction = (
 
 const fieldIssues = (context: Context, field: string, at: At): Issues => {
 	const parts = field.split(".")
-	if (
-		parts.length > Limits.fieldPathParts ||
-		Arr.some(parts, (part) => part.length === 0 || part.includes("*"))
-	) {
-		return issue(
-			at,
-			`The field "${field}" must be a real path with at most ${String(Limits.fieldPathParts)} parts`,
-		)
+	if (Arr.some(parts, (part) => part.length === 0 || part.includes("*"))) {
+		return issue(at, `The field "${field}" must be a real path`)
 	}
 	if (
 		context.all ||
@@ -251,7 +244,7 @@ const underIssues = (
 	})
 }
 
-/** Node constructors have already checked the shape and fixed bounds. */
+/** Node constructors have already checked the shape. */
 const checkCondition = (context: Context, node: Nodes.Node, at: At): Issues => {
 	const origin = Nodes.originOf(node)
 	if (origin !== undefined && origin.domain !== context.domain) {
@@ -384,7 +377,7 @@ export const ruleIssues = (
 		: checkCondition(context, rule.when, [...at, "when"])
 }
 
-/** A policy tree whose nodes have passed the fixed bounds. */
+/** A policy tree made from checked nodes. */
 type TreeNode =
 	| { readonly _tag: "Rules"; readonly rules: ReadonlyArray<RuleData> }
 	| {

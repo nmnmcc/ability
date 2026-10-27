@@ -30,7 +30,7 @@ type AnyRule = Policy.AnyRule
 type Explanation = Policy.Explanation
 type Step = Policy.Step
 
-/** The steps of one explanation. Tree size and depth bound its paths. */
+/** The steps of one explanation. */
 type Trace = Ref.Ref<Chunk.Chunk<Step>>
 
 interface DecideContext {
@@ -49,7 +49,7 @@ interface DecideContext {
 }
 
 /**
- * The place of a node or a rule in a tree. The fixed tree depth bounds each path.
+ * The place of a node or a rule in a tree.
  */
 type At = ReadonlyArray<number>
 
@@ -186,8 +186,7 @@ const next = <S>(state: S): WalkStep<S> => ({ _tag: "Next", state })
 
 /**
  * Decides a node. A shared child is decided again for each place, so its
- * predicates run each time, as the policy says. The limits of the nodes keep
- * this work small.
+ * predicates run each time, as the policy says.
  */
 export const decideNode = (
 	node: PolicyNodes.Node,

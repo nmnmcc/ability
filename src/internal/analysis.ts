@@ -36,8 +36,7 @@ const never: Ast = Condition.never
 
 /**
  * Makes conditions for one residual, with no types. Each step makes the
- * condition simple, and it stops the work when the condition has more nodes
- * than `residualNodes`. A policy tree may use a condition of a child two
+ * condition simple. A policy tree may use a condition of a child two
  * times, in its allow condition and in its deny condition, so a small policy
  * may give a very large condition.
  */
@@ -49,7 +48,7 @@ interface Build {
 	readonly not: (value: Ast) => Ast
 }
 
-/** The constructors check the size and depth of each residual step. */
+/** Build each residual step from condition nodes. */
 const build: Build = {
 	and: (values) => Algebra.and(values as ReadonlyArray<Nodes.Node>),
 	or: (values) => Algebra.or(values as ReadonlyArray<Nodes.Node>),
@@ -76,7 +75,7 @@ interface ResidualContext {
 	readonly fits: (pattern: string) => boolean
 	/** The tests of the field patterns on the field, for this request. */
 	readonly fieldTest: RuleData.FieldTest | undefined
-	/** The steps of a residual, with the limits of the domain. */
+	/** The steps of a residual. */
 	readonly build: Build
 }
 
@@ -125,7 +124,7 @@ const firstApplicableResidual = (
 
 /**
  * Gives the residual pair of a node. A shared child is worked again for each
- * place. The limits of the nodes and of a residual keep this work small.
+ * place.
  */
 const residualNode = (
 	node: PolicyNodes.Node,
@@ -340,8 +339,7 @@ const scopedResiduals = (policy: Any, request: ScopedRequest): Scoped => {
 		build,
 	}
 	// The type of the residual of a plain policy says that it has no
-	// predicate, so it can not be the predicate below. A residual past the
-	// limit is a defect.
+	// predicate, so it can not be the predicate below.
 	if (!usesPredicate(nodeOf(policy), context)) {
 		return inScope(residualNode(nodeOf(policy), context))
 	}
@@ -398,7 +396,7 @@ export type AnyCoverage = Data.TaggedEnum<{
 	}
 	Unknown: {
 		readonly condition: Ast
-		readonly reason: "predicate" | "budget" | "schema"
+		readonly reason: "predicate" | "schema"
 	}
 }>
 
@@ -412,7 +410,6 @@ const search = (scoped: Scoped, ast: Ast): Condition.Satisfiability =>
 
 /** The values in the scope that the policy does not allow. */
 const refusedOf = (scoped: Scoped): Ast =>
-	// The same fixed size and depth limits apply to this condition.
 	Algebra.and([
 		scoped.scope as Nodes.Node,
 		Algebra.not(scoped.allow as Nodes.Node),

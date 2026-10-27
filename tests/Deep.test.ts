@@ -8,10 +8,10 @@ import {
 	HashSet,
 	Schema,
 } from "effect"
-import { Condition, Domain, Limits, Policy, Resource } from "../src/index.ts"
+import { Condition, Domain, Policy, Resource } from "../src/index.ts"
 import { alice, aliceBot, App, Bot } from "./fixtures.ts"
 
-const conditionText = (value: string, depth = Limits.conditionDepth): string =>
+const conditionText = (value: string, depth = 128): string =>
 	JSON.stringify(
 		Arr.reduce(
 			Arr.range(1, depth - 1),
@@ -29,26 +29,22 @@ const conditionOf = (value: string) =>
 	Schema.decodeSync(Condition.schema(App, "Bot"))(conditionText(value))
 
 const metaOf = (value: string): Schema.Json =>
-	Arr.reduce(
-		Arr.range(1, Limits.metaDepth),
-		value as Schema.Json,
-		(inner): Schema.Json => ({ inner }),
-	)
+	Arr.reduce(Arr.range(1, 32), value as Schema.Json, (inner): Schema.Json => ({
+		inner,
+	}))
 
 const policyOf = (value: string): Policy.Policy<typeof App> => {
 	const when = conditionOf(value)
 	const leaf = Policy.define(App)(function* (_) {
 		yield* _.allow("read", Bot, { when: () => when, meta: metaOf(value) })
 	})
-	return Arr.reduce(Arr.range(1, Limits.policyDepth - 1), leaf, (inner) =>
-		Policy.all([inner]),
-	)
+	return Arr.reduce(Arr.range(1, 64 - 1), leaf, (inner) => Policy.all([inner]))
 }
 
-describe("Fixed depth bounds", () => {
-	it("runs every condition walk at the supported depth", () => {
+describe("Deep data", () => {
+	it("runs every condition walk past the old depth bound", () => {
 		const condition = conditionOf("n")
-		assert.strictEqual(condition.depth, Limits.conditionDepth)
+		assert.strictEqual(condition.depth, 128)
 		const input = { value: aliceBot, principal: alice }
 		const expected = Condition.evaluateSync(condition, input)
 		assert.strictEqual(
@@ -83,7 +79,7 @@ describe("Fixed depth bounds", () => {
 				not: (part) => part + 1,
 			}),
 		)
-		assert.strictEqual(count, Limits.conditionDepth)
+		assert.strictEqual(count, 128)
 		const codec = Condition.schema(App, "Bot")
 		const again = condition.pipe(
 			Schema.encodeSync(codec),
@@ -94,7 +90,7 @@ describe("Fixed depth bounds", () => {
 		assert.isFalse(Equal.equals(condition, conditionOf("other")))
 	})
 
-	it("hashes, loads, decides, and analyses all depth bounds together", () => {
+	it("hashes, loads, decides, and analyses deep trees and meta together", () => {
 		const policy = policyOf("n")
 		const same = policyOf("n")
 		const other = policyOf("other")
@@ -130,15 +126,11 @@ describe("Fixed depth bounds", () => {
 		assert.strictEqual(Policy.decideSync(again, request)._tag, expected._tag)
 	})
 
-	it("rejects the next condition and policy levels", () => {
-		assert.throws(
-			() =>
-				Schema.decodeSync(Condition.schema(App, "Bot"))(
-					conditionText("n", Limits.conditionDepth + 1),
-				),
-			"levels",
+	it("loads further condition and policy levels", () => {
+		assert.doesNotThrow(() =>
+			Schema.decodeSync(Condition.schema(App, "Bot"))(conditionText("n", 129)),
 		)
-		assert.throws(() => Policy.all([policyOf("n")]), "levels")
+		assert.doesNotThrow(() => Policy.all([policyOf("n")]))
 	})
 
 	it("decides a large path test without making a larger residual", () => {
@@ -167,7 +159,7 @@ describe("Fixed depth bounds", () => {
 		)
 	})
 
-	it("provides predicate services at the policy depth bound", () => {
+	it("provides predicate services in a deep policy", () => {
 		class Gate extends Context.Service<Gate, boolean>()(
 			"@nmnmcc/ability/tests/Deep.test/Gate",
 		) {}
@@ -176,11 +168,8 @@ describe("Fixed depth bounds", () => {
 				when: ($) => $.predicate("gate", () => Gate),
 			})
 		})
-		const tree = Arr.reduce(
-			Arr.range(1, Limits.policyDepth - 1),
-			leaf,
-			(inner, index) =>
-				index % 2 === 0 ? Policy.all([inner]) : Policy.firstOf([inner]),
+		const tree = Arr.reduce(Arr.range(1, 64 - 1), leaf, (inner, index) =>
+			index % 2 === 0 ? Policy.all([inner]) : Policy.firstOf([inner]),
 		)
 		const provided = Policy.provideContext(tree, Context.make(Gate, true))
 		assert.strictEqual(

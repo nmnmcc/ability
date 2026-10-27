@@ -312,9 +312,6 @@ export type OpaqueOf<C> = C extends { readonly "~Opaque": () => infer X }
 	? X
 	: never
 
-/** The next smaller path depth. A path has at most five parts. */
-type PreviousDepth = [never, 0, 1, 2, 3, 4]
-
 /** Optional keys keep their field Schema in `schema`. */
 type Unwrap<S> = S extends { readonly schema: infer Inner } ? Inner : S
 
@@ -337,21 +334,37 @@ type NestedFields<S> =
 		? F
 		: never
 
-type Paths<Fields, Depth extends number> = [Depth] extends [never]
+/** One level of Schema fields, with their full paths. */
+type PathLevel<Fields, Prefix extends string = ""> = string extends keyof Fields
 	? never
-	: string extends keyof Fields
-		? never
-		: {
-				[K in keyof Fields & string]:
-					| K
-					| ([NestedFields<Fields[K]>] extends [never]
-							? never
-							: `${K}.${Paths<NestedFields<Fields[K]>, PreviousDepth[Depth]>}`)
-			}[keyof Fields & string]
+	: {
+			[K in keyof Fields & string]: {
+				readonly path: `${Prefix}${K}`
+				readonly fields: NestedFields<Fields[K]>
+			}
+		}[keyof Fields & string]
 
-/** Real Schema field paths, with at most five parts. */
+type NextLevel<Level> = Level extends {
+	readonly path: infer P extends string
+	readonly fields: infer F
+}
+	? [F] extends [never]
+		? never
+		: PathLevel<F, `${P}.`>
+	: never
+
+/** Keep each level in an accumulator so deep paths do not nest type calls. */
+type Paths<Level, Found extends string = never> = [Level] extends [never]
+	? Found
+	: Paths<
+			NextLevel<Level>,
+			| Found
+			| (Level extends { readonly path: infer P extends string } ? P : never)
+		>
+
+/** Real Schema field paths. The compiler sets the type computation bounds. */
 export type FieldPath<Fields> = (
-	Fields extends unknown ? (path: Paths<Fields, 4>) => void : never
+	Fields extends unknown ? (path: Paths<PathLevel<Fields>>) => void : never
 ) extends (path: infer P) => void
 	? P & string
 	: never
@@ -361,17 +374,19 @@ export type FieldSelector<Fields> = FieldPath<Fields>
 export type FieldName<Fields> = FieldPath<Fields>
 
 type Normalize<A> = Exclude<A, undefined> | (undefined extends A ? null : never)
-type ValueAt<T, Path extends string> = T extends unknown
-	? T extends object
-		? Path extends `${infer Head}.${infer Tail}`
-			? Head extends keyof T
-				? ValueAt<T[Head], Tail>
-				: never
-			: Path extends keyof T
-				? Normalize<T[Path]>
-				: never
-		: null
-	: never
+type ReadField<T, Key extends string> = T extends object
+	? Key extends keyof T
+		? T[Key]
+		: never
+	: null
+
+/** Distribute over a value union before the next tail call. */
+type ValueAt<
+	T,
+	Path extends string,
+> = Path extends `${infer Head}.${infer Tail}`
+	? ValueAt<ReadField<T, Head>, Tail>
+	: Normalize<ReadField<T, Path>>
 
 /** The value at a field path. Missing data has the value `null`. */
 export type PathValue<T, Path extends string> = ValueAt<T, Path>
@@ -401,31 +416,35 @@ type SchemaAt<
 		? Unwrap<Fields[Path]>
 		: never
 
-type ScalarSchema<S, Depth extends number = 4> = [Depth] extends [never]
+type ScalarStep<S> = S extends { readonly from: unknown }
 	? false
-	: S extends { readonly from: unknown }
-		? false
-		: S extends { readonly members: ReadonlyArray<infer M> }
-			? false extends ScalarSchema<M, PreviousDepth[Depth]>
-				? false
-				: true
-			: S extends {
-						readonly ast: {
-							readonly _tag:
-								| "Null"
-								| "Undefined"
-								| "Never"
-								| "String"
-								| "Boolean"
-								| "Number"
-								| "Literal"
-								| "Enum"
-						}
-				  }
+	: S extends { readonly members: ReadonlyArray<infer M> }
+		? M
+		: S extends {
+					readonly ast: {
+						readonly _tag:
+							| "Null"
+							| "Undefined"
+							| "Never"
+							| "String"
+							| "Boolean"
+							| "Number"
+							| "Literal"
+							| "Enum"
+					}
+			  }
+			? true
+			: S extends { readonly literals: ReadonlyArray<unknown> }
 				? true
-				: S extends { readonly literals: ReadonlyArray<unknown> }
-					? true
-					: false
+				: false
+
+type ScalarSchema<S> = [S] extends [never]
+	? true
+	: false extends S
+		? false
+		: [S] extends [true]
+			? true
+			: ScalarSchema<ScalarStep<Exclude<S, true>>>
 
 type ScalarPath<Fields extends Schema.Struct.Fields> = {
 	[F in FieldPath<Fields>]: ScalarSchema<SchemaAt<Fields, F>> extends true
@@ -856,7 +875,7 @@ const literalValue = (operand: Operand, field: string): Scalar => {
 }
 
 /**
- * Folds a condition. A shared child is folded again for each place. The fixed depth limit keeps this walk small.
+ * Folds a condition. A shared child is folded again for each place.
  */
 const foldNode = <A>(node: Nodes.Node, interpreter: Interpreter<A>): A => {
 	switch (node._tag) {
@@ -964,7 +983,7 @@ export type Example = Search.Example
  * - `Satisfiable`: some value makes the condition true. `example` is one.
  * - `Unsatisfiable`: no value makes the condition true.
  * - `Unknown`: the search can not say. The condition has a predicate, or
- *   the search went past its budget.
+ *   the Schema is not supported.
  *
  * @stability stable
  * @category models
@@ -984,7 +1003,7 @@ export interface SatisfiableOptions {
 	readonly schema: Schema.Top
 }
 
-/** Tests whether some value makes a condition true within the fixed search limit. */
+/** Tests whether some value makes a condition true. */
 export const satisfiable = (
 	condition: Any,
 	options: SatisfiableOptions,

@@ -9,7 +9,6 @@ import type * as Policy from "../Policy.ts"
 import type * as Resource from "../Resource.ts"
 import * as Catalog from "./catalog.ts"
 import * as Json from "./json.ts"
-import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
 import * as ResourceData from "./resource.ts"
 
@@ -41,15 +40,7 @@ export class Rule<D = never, I = never, X = unknown> extends Data.Class<
 			data.resources.length +
 			(data.fields?.length ?? 0) +
 			(data.when?.weight ?? 0)
-		if (base > Limits.policyNodes) {
-			throw Limits.exceeded(
-				"A rule",
-				"policyNodes",
-				"units",
-				base,
-				Limits.policyNodes,
-			)
-		}
+
 		if (data.when !== undefined && !Nodes.isNode(data.when)) {
 			throw new Error("A rule needs a whole condition tree")
 		}
@@ -63,15 +54,7 @@ export class Rule<D = never, I = never, X = unknown> extends Data.Class<
 					)
 		const meta = data.meta === undefined ? undefined : Json.copyMeta(data.meta)
 		const weight = base + (meta?.size ?? 0)
-		if (weight > Limits.policyNodes) {
-			throw Limits.exceeded(
-				"A rule",
-				"policyNodes",
-				"units",
-				weight,
-				Limits.policyNodes,
-			)
-		}
+
 		super({
 			_tag: data._tag,
 			actions: [...data.actions],

@@ -15,7 +15,8 @@ The library is made with [Effect](https://effect.website) only:
 - An `Authorizer` is an Effect service. A "no" goes into the error channel. When
   a policy can not be loaded, the check fails, so an error is never a "yes".
 
-Version 3 narrows the API. See [MIGRATION.md](MIGRATION.md) to move from 2.x.
+Version 3.1 removes runtime size and search caps. See
+[MIGRATION.md](MIGRATION.md) to move from 2.x.
 
 ## Requirements
 
@@ -51,7 +52,6 @@ import * as AbilityHttpApi from "@nmnmcc/ability/HttpApi"
 | `Policy`     | Rules, and a tree of rules that gives a decision, a residual and fields.    |
 | `Decision`   | `Allow`, `Deny` or `NotApplicable`.                                         |
 | `Authorizer` | An Effect service that checks the principal of the current request.         |
-| `Limits`     | The limits that keep every walk and every decoder small.                    |
 | `HttpApi`    | Annotations and a middleware for `effect/http-api`. A separate entry point. |
 
 ## First Steps
@@ -189,9 +189,8 @@ _.allow("read", "*", {
   `settings.model`. Other stars, as in `settings.*` or `secret*`, are not valid.
   An empty list grants no fields. A deny on a child also stops a request for its
   whole parent.
-- `reason`, `id` and `meta` are kept with the rule. `meta` is JSON data with at
-  most 16 levels. Check a business Schema before passing it as meta. The domain
-  has no meta Schema.
+- `reason`, `id` and `meta` are kept with the rule. `meta` is JSON data. Check a
+  business Schema before passing it as meta. The domain has no meta Schema.
 
 An allow rule with fields covers a request for the whole value: "may update some
 fields" is a yes. A deny rule with fields does not stop a request for the whole
@@ -228,9 +227,9 @@ The builder in `when` has these functions:
 | `principal(field)`       | Not a test. It gives a field of the principal.    |
 | `predicate(name, test)`  | The test function says yes. It may be an Effect.  |
 
-The types check field paths with at most five parts. The same bounded paths are
-used for conditions, principal references, rule fields and request fields. There
-is no separate API for deeper paths.
+The types check paths from Schema fields. The same paths are used for
+conditions, principal references, rule fields and request fields. There is no
+separate API for deeper paths.
 
 Make a condition outside a rule with a domain and a kind:
 
@@ -257,10 +256,8 @@ So a predicate for a Document can not go into a rule for a Comment. Make
 conditions with the builder: a node made by hand, or a spread of a node, is not
 a condition, in the types or when the code runs.
 
-A condition has at most 64 levels and 10000 structural units. The count includes
-its nodes, operands and list items. Shared parts count each time they appear. A
-constructor rejects a larger condition before a decision uses it. See
-[Limits](#limits).
+Condition constructors check node shapes and keep their domain. They do not set
+a size or depth cap.
 
 ## Policies
 
@@ -291,10 +288,8 @@ Put policies together:
 | `Policy.firstOf([a, b])`      | The first policy that allows or denies.                          |
 | `Policy.ceiling(policy, cap)` | A deny from `cap` always wins. An allow from `cap` does nothing. |
 
-A policy tree has at most 32 levels and 10000 structural units, including its
-rules, conditions, operands, list items and meta values. Shared parts count each
-time they appear. A combinator rejects a larger tree. The JSON Codec has the
-same limits. See [Limits](#limits).
+Policy constructors check rules and domains. They do not set a size or depth
+cap.
 
 A shared part of a tree is decided again for each place, so its predicates run
 each time, and `Policy.explain` lists its rules each time.
@@ -334,9 +329,7 @@ When a rule that the request may use has a predicate, the residual is one
 predicate with the name `"policy"`. It runs the whole policy for each value, so
 it gives the same answers and the same failures as `Policy.decide`.
 
-A residual has the same depth and size limits as a condition. When a policy
-would make a larger residual, `Policy.residual` throws an error. An `Authorizer`
-check never treats that error as a yes.
+The application owns the cost of building and using a residual.
 
 ### Scopes
 
@@ -377,13 +370,11 @@ list query for the scope:
   so a scope with a mistake never gives a "yes".
 - `Some`: the policy allows some values and not others. It gives an example of
   each, `allowed` and `refused`.
-- `Unknown`: a predicate, an unsupported Schema or a search limit stops the
-  proof. The reason for an unsupported Schema is `"schema"`. This answer grants
-  no access.
+- `Unknown`: a predicate or an unsupported Schema stops the proof. The reason
+  for an unsupported Schema is `"schema"`. This answer grants no access.
 
 `Condition.satisfiable(condition, { schema: ResourceSchema })` requires a
-Schema. It uses the same fixed search limits as coverage: 16 fields and 100000
-steps. There are no per-call budgets.
+Schema. Coverage and satisfiability have no field or step cap.
 
 The analysis supports fixed fields, scalars, scalar unions, and nullable or
 optional scalar fields. It knows finite and integer number checks. It returns
@@ -447,11 +438,11 @@ The encoded value is a string. Do not call `JSON.stringify` on it or
 `JSON.parse` before decoding it. The Codec is the storage boundary; an object is
 not an encoded policy or condition.
 
-The Codec checks text length, JSON depth and size, node shape, and the domain.
-Unknown tags, missing conditions and wrong fields fail in the Schema error
-channel. Encoding also checks JSON values, so a non-finite number can not
-silently become `null`. The condition Codec binds its result to the domain and
-resource too. Predicates can not enter either Codec.
+The Codec checks JSON data, node shape, and the domain. Unknown tags, missing
+conditions and wrong fields fail in the Schema error channel. Encoding also
+checks JSON values, so a non-finite number can not silently become `null`. The
+condition Codec binds its result to the domain and resource too. Predicates can
+not enter either Codec.
 
 ## Authorizer
 
@@ -632,32 +623,86 @@ group without the middleware is not checked.
 one for every other method. `AbilityHttpApi.errors` gives the errors with HTTP
 status codes: 403, 503, and 409.
 
-## Limits
+## Resource use
 
-The limits are fixed. The `Limits` module exports their values and the limit
-error. A domain can not raise them. The library supports bounded data; it does
-not promise to handle arbitrary depth.
+The application owns input size, depth, time and memory budgets. The library
+sets no caps on paths, policy or condition trees, meta, JSON text, Schema
+catalogs or analysis searches. The `Limits` module has been removed.
 
-| Item                         | Limit                             |
-| ---------------------------- | --------------------------------- |
-| Policy depth                 | 32                                |
-| Condition and residual depth | 64                                |
-| Field path                   | 5 parts                           |
-| Meta depth                   | 16                                |
-| Policy or condition size     | 10000 structural units            |
-| Catalog size                 | 1000 fields per Schema            |
-| JSON text                    | 1000000 UTF-16 code units         |
-| JSON containers              | 256 levels and 100000 items       |
-| Analysis                     | 16 fields and 100000 search steps |
+Path types and scalar union checks use tail recursion. The library sets no type
+depth cap; TypeScript still has its own limits. Runtime walks and JSON
+operations also remain subject to the JavaScript engine. No arbitrary-depth or
+fixed-cost guarantee is made.
 
-Structural units include rules, condition nodes, operands, list items and meta
-values. Shared parts count each time they appear. Constructors reject an input
-past a limit. JSON limits fail in the Schema error channel. Analysis limits give
-`Unknown`. None of these outcomes grants access.
+A coverage search may try many combinations of field values. Use it when the
+application can afford that work. `filter` and `residual` do no coverage search.
 
-Types reject wrong shapes, names, paths and value types. Runtime checks remain
-for external JSON, dynamic sizes, finite number values and domain identity. Your
-application checks principal and resource data before giving it to the library.
+Types reject wrong shapes, names, paths and value types. Runtime checks still
+reject wrong domains, invalid JSON, cycles in JSON data, and invalid nodes.
+Unknown Schemas and predicates can still give `Unknown`; they never grant
+access. The caller gives stable, checked principal and resource values.
+
+### Measured examples
+
+These are reference measurements for 3.1.0, taken on 2026-10-28 with Node.js
+26.6.0, TypeScript 7.0.2, Effect 4.0.6 and @effect/tsgo 0.56.0 on Linux with an
+AMD EPYC-Genoa CPU. They are samples, not supported maximums. Shape and machine
+load affect the result.
+
+The typed samples check conditions, principal references and rule fields. Fields
+per resource include `ownerId`, apart from the single-path samples. Compiler
+time includes parsing and type checking. Memory is the compiler's `Memory used`
+statistic. Each value is the middle of five runs after one warmup, with
+incremental checks off.
+
+| Typed sample                              | Compiler time |  Memory |
+| ----------------------------------------- | ------------: | ------: |
+| 3 resources, 21 fields each, 60 rules     |        0.33 s | 161 MiB |
+| 10 resources, 101 fields each, 1000 rules |        0.81 s | 178 MiB |
+| 1 resource, 1001 fields, 20 rules         |        0.90 s | 168 MiB |
+| One field path with 100 parts             |        0.41 s | 162 MiB |
+| One field path with 500 parts             |        1.27 s | 177 MiB |
+
+The 1000-part path sample failed with TypeScript error `TS2589` (type
+instantiation is too deep). This does not put a 500-part cap in the library; 500
+was the last successful path length tested. Branching Schema shapes can have a
+different cost.
+
+The runtime rule samples use `denyOverrides`, one scalar condition per rule, and
+a value that matches the last rule. Each decision scans the full list. Check
+time is one `Policy.decideSync` call; load time is one JSON decode of the whole
+policy, with no I/O. Values are the middle of five warm batches.
+
+| Rules | Check time | JSON load time |
+| ----- | ---------: | -------------: |
+| 100   |   0.045 ms |         1.2 ms |
+| 1000  |    0.76 ms |        14.6 ms |
+| 10000 |     5.7 ms |         124 ms |
+
+The 10000-rule policy also passed residual checks and JSON round trips. Its JSON
+text had about 1.48 million code units.
+
+A chain of 1000 condition levels and a chain of 500 policy levels both passed
+decisions and JSON round trips. The next tested depths, 2000 and 1000, failed
+during JSON encoding with a call stack error. These are observed samples, not
+exact engine limits.
+
+Coverage of a simple condition on 40 boolean fields took about 7.4 ms. An
+unsatisfiable condition that places six items into five slots with no sharing
+used 30 boolean fields and took about 314 ms in one run. The eight-item,
+seven-slot case used 56 fields and did not finish in the runner's 15-second
+wait. Search shape matters more than field count alone.
+
+Run the same samples with:
+
+```sh
+devenv shell -- node benchmarks/resource-use.mjs
+```
+
+The runner uses separate processes for runtime probes, a 512 MiB Node heap and a
+15-second wait per probe. Each compiler run gets 20 seconds. These are
+measurement settings. The library has no such caps. The script prints failures
+as results and removes its temporary type samples when it ends.
 
 ## Examples
 

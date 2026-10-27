@@ -5,15 +5,11 @@
  *   and a shared child counted for each place;
  * - `depth`: the number of levels of the tree;
  * - `opaque`: a rule of the tree has a predicate.
- *
- * The constructor stops a tree past `policyNodes` or `policyDepth`. So a walk
- * over any tree, such as a decision, needs no memo.
  */
 import * as Arr from "effect/Array"
 import * as Data from "effect/Data"
 import * as Schema from "effect/Schema"
 import * as Rule from "./rule.ts"
-import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
 
 /** The combining algorithms of a list of rules. The decoder reads this list too. */
@@ -39,36 +35,12 @@ interface Facts {
 	readonly opaque: boolean
 }
 
-/** Checks the facts of a node against the limits. */
-const checked = (facts: Facts): Facts => {
-	if (facts.size > Limits.policyNodes) {
-		throw Limits.exceeded(
-			"A policy tree",
-			"policyNodes",
-			"nodes",
-			facts.size,
-			Limits.policyNodes,
-		)
-	}
-	if (facts.depth > Limits.policyDepth) {
-		throw Limits.exceeded(
-			"A policy tree",
-			"policyDepth",
-			"levels",
-			facts.depth,
-			Limits.policyDepth,
-		)
-	}
-	return facts
-}
-
-const factsOf = (children: ReadonlyArray<Node>): Facts =>
-	checked({
-		size: Arr.reduce(children, 1, (total, child) => total + child.size),
-		depth:
-			1 + Arr.reduce(children, 0, (top, child) => Math.max(top, child.depth)),
-		opaque: Arr.some(children, (child) => child.opaque),
-	})
+const factsOf = (children: ReadonlyArray<Node>): Facts => ({
+	size: Arr.reduce(children, 1, (total, child) => total + child.size),
+	depth:
+		1 + Arr.reduce(children, 0, (top, child) => Math.max(top, child.depth)),
+	opaque: Arr.some(children, (child) => child.opaque),
+})
 
 /** The base of every node. It keeps the facts. */
 abstract class Base extends Data.Class {
@@ -115,7 +87,6 @@ export class Rules extends Base {
 				`"${String(props.algorithm)}" is not a combining algorithm`,
 			)
 		}
-		checked({ size: 1 + props.rules.length, depth: 1, opaque: false })
 		const rules = Object.freeze(Array.from(props.rules))
 		// A value that is not a rule, such as a copy of a rule made with a
 		// spread, may keep the type fields of another rule, and it does not
@@ -126,11 +97,11 @@ export class Rules extends Base {
 		const conditions = Arr.map(rules, whenOf)
 		super(
 			{ algorithm: props.algorithm, rules },
-			checked({
+			{
 				size: Arr.reduce(rules, 1, (total, rule) => total + rule.weight),
 				depth: 1,
 				opaque: Arr.some(conditions, (when) => when?.opaque ?? false),
-			}),
+			},
 		)
 	}
 }
@@ -138,7 +109,6 @@ export class Rules extends Base {
 const checkChildren = (
 	policies: ReadonlyArray<unknown>,
 ): ReadonlyArray<Node> => {
-	checked({ size: 1 + policies.length, depth: 1, opaque: false })
 	const children = Array.from(policies)
 	if (!Arr.every(children, isNode)) {
 		throw new Error("A child of a policy tree is not a node of a policy")

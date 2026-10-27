@@ -37,7 +37,7 @@
 import type * as Context from "effect/Context"
 import type * as Data from "effect/Data"
 import type * as Effect from "effect/Effect"
-import type * as Schema from "effect/Schema"
+import * as Schema from "effect/Schema"
 import type * as Condition from "./Condition.ts"
 import * as Analysis from "./internal/analysis.ts"
 import * as Decide from "./internal/decide.ts"
@@ -544,14 +544,18 @@ export interface Options {
  * @category errors
  * @since 2.0.0
  */
-export const PolicyError: typeof Internal.PolicyError = Internal.PolicyError
-
-/**
- * @stability stable
- * @category errors
- * @since 2.0.0
- */
-export type PolicyError = Internal.PolicyError
+export class PolicyError extends Schema.TaggedError<
+	PolicyError,
+	{ readonly brand: unique symbol }
+>("@nmnmcc/ability/Policy/PolicyError")("PolicyError", {
+	issues: Schema.Array(
+		Schema.Struct({
+			path: Schema.Array(Schema.Union([Schema.String, Schema.Finite])),
+			message: Schema.String,
+		}),
+	),
+	message: Schema.String,
+}) {}
 
 /** The mark of a union of rules: `Condition.Opaque` when one has a predicate. */
 type RulesOpaque<Rules> = Rules extends { readonly "~Opaque": () => infer X }
@@ -581,7 +585,8 @@ export const define: <D extends Domain.Any>(
 	options?: Options,
 ) => <Rules extends Rule<D, never, any>, A>(
 	body: (builder: Builder<D>) => Generator<Rules, A, unknown>,
-) => Policy<D, RulesOpaque<Rules>> = Internal.define as never
+) => Policy<D, RulesOpaque<Rules>> = (domain, options) =>
+	Internal.define(domain, PolicyError.make, options) as never
 
 type Combined<D extends Domain.Any, Ps extends ReadonlyArray<Any>> = Policy<
 	D,
@@ -781,9 +786,7 @@ export type ResidualReads<D, K> = Condition.Reads<
  * is false for a value of another kind.
  *
  * A policy tree may use the condition of a child two times, so a small policy
- * may give a very large condition. When the condition would have more than
- * the fixed structural limit of 10000, this function throws
- * an error. In an `Authorizer`, the error is a defect, so the check fails.
+ * may give a very large condition.
  *
  * @stability stable
  * @category evaluation
@@ -812,7 +815,7 @@ export const residual: <
  *   `allowed` is an example of a value that it allows, and `refused` of a
  *   value in the scope that it does not allow.
  * - `Unknown`: the answer needs a predicate, the Schema has an unsupported
- *   shape, or the search went past its fixed limit.
+ *   shape.
  *
  * @stability stable
  * @category models
@@ -828,7 +831,7 @@ export type Coverage<I = unknown, X = never> = Data.TaggedEnum<{
 	}
 	Unknown: {
 		readonly condition: Condition.Condition<I, X>
-		readonly reason: "predicate" | "budget" | "schema"
+		readonly reason: "predicate" | "schema"
 	}
 }>
 
@@ -840,8 +843,7 @@ export type Coverage<I = unknown, X = never> = Data.TaggedEnum<{
  * The answer comes from {@link Condition.satisfiable} with the shape of the
  * Schema of the resource. `All` and `None` hold for every value of the
  * Schema. `Some` gives a value with each answer. Schemas with unknown checks
- * or complex shapes give `Unknown`, as do predicates and a search that goes
- * past its fixed limit.
+ * or complex shapes give `Unknown`, as do predicates.
  *
  * `Some` does not mean that such a value is in your database. To know that,
  * run `condition` as a query.

@@ -1,7 +1,6 @@
 /** A fixed directory of the data fields of a Schema. */
 import * as Arr from "effect/Array"
 import type * as SchemaAST from "effect/SchemaAST"
-import * as Limits from "./limits.ts"
 
 /** The kinds of values that a field may hold. */
 export interface Kinds {
@@ -166,11 +165,8 @@ const classStruct = (
 		: undefined
 }
 
-/** Schema unions are bounded too. A larger shape stays opaque. */
-const shapeOf = (ast: SchemaAST.AST, depth = 0): Shape => {
-	if (depth > Limits.fieldPathParts) {
-		return { kinds: anyKinds, supported: false, inhabited: true }
-	}
+/** Read the known parts of a Schema. Unknown parts stay opaque. */
+const shapeOf = (ast: SchemaAST.AST): Shape => {
 	if (
 		ast.encoding !== undefined &&
 		!(ast._tag === "Declaration" && classStruct(ast) !== undefined)
@@ -214,15 +210,12 @@ const shapeOf = (ast: SchemaAST.AST, depth = 0): Shape => {
 			return struct === undefined
 				? { kinds: anyKinds, supported: false, inhabited: true }
 				: {
-						...shapeOf(struct, depth + 1),
+						...shapeOf(struct),
 						supported: checks.supported && checksOf(struct).supported,
 					}
 		}
 		case "Union": {
-			if (ast.types.length > Limits.catalogFields) {
-				return { kinds: anyKinds, supported: false, inhabited: true }
-			}
-			const parts = Arr.map(ast.types, (member) => shapeOf(member, depth + 1))
+			const parts = Arr.map(ast.types, (member) => shapeOf(member))
 			const kinds = Arr.reduce(parts, noKinds, (all, part) =>
 				joinKinds(all, part.kinds),
 			)
@@ -268,17 +261,8 @@ export const catalogOf = (ast: SchemaAST.AST): Catalog => {
 			state.supported = false
 		}
 		const children = struct?.propertySignatures ?? []
-		const expand = struct !== undefined && path.length < Limits.fieldPathParts
+		const expand = struct !== undefined
 		if (path.length > 0) {
-			if (fields.length >= Limits.catalogFields) {
-				throw Limits.exceeded(
-					"A Schema",
-					"catalogFields",
-					"fields",
-					fields.length + 1,
-					Limits.catalogFields,
-				)
-			}
 			fields.push({
 				path,
 				text: path.join("."),
@@ -290,7 +274,6 @@ export const catalogOf = (ast: SchemaAST.AST): Catalog => {
 			})
 		}
 		if (!expand) {
-			if (struct !== undefined && children.length > 0) state.supported = false
 			return shape.inhabited || optional
 		}
 		const inhabited = Arr.reduce(children, true, (all, child) => {
@@ -317,7 +300,7 @@ export const catalogOf = (ast: SchemaAST.AST): Catalog => {
 	return { fields, supported: state.supported, inhabited }
 }
 
-/** Finds one exact path. The directory has at most 1,000 fields. */
+/** Finds one exact path in the directory. */
 export const lookup = (catalog: Catalog, text: string): Field | undefined =>
 	catalog.fields.find((field) => field.text === text)
 

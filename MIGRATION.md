@@ -1,4 +1,4 @@
-# Move from 2.x to 3.0
+# Move to 3.1
 
 Version 3 has a smaller input contract. It rejects more mistakes in TypeScript
 and checks dynamic data at a few clear boundaries. This is a major version.
@@ -29,7 +29,7 @@ type. Getters, methods, array indices and dynamic record keys are not paths. Use
 a predicate to work with such values. Predicates still get the full class value,
 with its methods, and keep their Effect error and service types.
 
-Paths have at most five parts. `DeepTarget`, `DeepRequest` and the deeper path
+Paths have no library depth cap. `DeepTarget`, `DeepRequest` and the deeper path
 overloads are gone. Give a deeply nested or complex value one stable field, or
 use a predicate for its contents.
 
@@ -62,8 +62,8 @@ const loaded = Schema.decodeSync(codec)(text)
 
 Remove `JSON.stringify` around an encoded policy. Remove `JSON.parse` before the
 decode call. For an old object held in memory, turn it into text once at the
-migration boundary and pass that text to the Codec. It must meet the new field
-and size limits.
+migration boundary and pass that text to the Codec. It must meet the field and
+JSON contracts.
 
 The condition Codec also needs the domain and kind:
 
@@ -82,8 +82,8 @@ Predicates still can not enter a Codec or a synchronous decision.
 ## Meta is JSON data
 
 `Domain.make` no longer takes `meta`. There is no Meta type parameter. A rule
-takes `Schema.Json`, with at most 16 levels. Functions, class instances,
-`undefined`, Effect values and custom codecs are not meta.
+takes `Schema.Json`. Functions, class instances, `undefined`, Effect values and
+custom codecs are not meta.
 
 Check the business shape before making the rule:
 
@@ -135,38 +135,26 @@ proof that ignores relations between fields.
 Condition.satisfiable(condition, { schema: Post })
 ```
 
-It no longer accepts a budget. Coverage and satisfiability use fixed search
-limits. `Unknown` never passes a kind check or calls a fallback decider. HttpApi
-lists with `nonEmpty: true` also reject `Unknown`.
+It no longer accepts a budget. Coverage and satisfiability have no search caps.
+`Unknown` never passes a kind check or calls a fallback decider. HttpApi lists
+with `nonEmpty: true` also reject `Unknown`.
 
 `Authorizer.filter` gives the scoped residual directly. It does no coverage
 search. Do not rely on every always-true or always-false result being reduced to
 a `True` or `False` node. The residual still agrees with concrete decisions,
 including predicate order and failures.
 
-## Fixed limits
+## Resource use belongs to the application
 
-`Domain.limits` and `Limits.ceilings` are gone. The Limits module exports fixed
-values and the limit error. There is no arbitrary-depth promise.
+Version 3.1 removes all runtime size, depth and search caps from 3.0. The
+`Limits` module and `LimitExceeded` error are gone, with no compatibility
+exports. Remove those imports and error handlers. `Unknown.reason` is now
+`"schema" | "predicate"`; remove handlers for `"budget"`.
 
-| Item                         | Limit                             |
-| ---------------------------- | --------------------------------- |
-| Policy depth                 | 32                                |
-| Condition and residual depth | 64                                |
-| Field path                   | 5 parts                           |
-| Meta depth                   | 16                                |
-| Policy or condition size     | 10000 structural units            |
-| Catalog size                 | 1000 fields per Schema            |
-| JSON text                    | 1000000 UTF-16 code units         |
-| JSON containers              | 256 levels and 100000 items       |
-| Analysis                     | 16 fields and 100000 search steps |
+Path types and scalar union checks use tail recursion, without a library depth
+cap. This does not remove the limits of TypeScript or the JavaScript engine.
 
-Rules, condition nodes, operands, list items and meta values count towards size.
-Shared parts count each time they appear. Constructors reject inputs past the
-fixed limits. External JSON fails in the Schema error channel. Search limits
-give `Unknown`.
-
-Types handle names, paths, shapes and value relationships. Dynamic total size,
-JSON contents, finite numbers and the identity of two domains with the same
-shape still need runtime checks. An application should test its stored policies
-against the new Codec before it deploys v3.
+Set input, time and memory budgets in the application where they are needed. A
+coverage search may try many combinations. `filter` and `residual` do not run
+that search. The JSON Codec still checks node shapes, field names, domains and
+finite numbers. Cyclic data is not JSON and is still rejected.

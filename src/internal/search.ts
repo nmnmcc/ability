@@ -15,7 +15,6 @@ import * as Option from "effect/Option"
 import { isObject } from "effect/Predicate"
 import * as Algebra from "./algebra.ts"
 import * as Catalog from "./catalog.ts"
-import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
 
 type Node = Nodes.Node
@@ -33,7 +32,7 @@ export interface Example {
 export type Satisfiability = Data.TaggedEnum<{
 	Satisfiable: { readonly example: Example }
 	Unsatisfiable: {}
-	Unknown: { readonly reason: "predicate" | "budget" | "schema" }
+	Unknown: { readonly reason: "predicate" | "schema" }
 }>
 
 const satisfiability = Data.taggedEnum<Satisfiability>()
@@ -183,8 +182,6 @@ const cellsOf = (
 		...kinds.literals,
 	])
 
-class OutOfBudget extends Data.Error {}
-
 /** What one search keeps for all its steps. It lives only as long as the search. */
 interface Search {
 	readonly cells: (field: string) => ReadonlyArray<unknown>
@@ -203,18 +200,9 @@ interface Search {
 	 * {@link dedupeCells}.
 	 */
 	readonly failed: Set<string | Node>
-	readonly budget: number
 }
 
-/** What a search has done up to now. Each step gives a new one. */
-interface SearchState {
-	readonly steps: number
-}
-
-interface Found {
-	readonly assignment: Option.Option<ReadonlyArray<readonly [string, unknown]>>
-	readonly state: SearchState
-}
+type Assignment = ReadonlyArray<readonly [string, unknown]>
 
 const literalOf = (operand: Nodes.Operand): Nodes.Scalar => {
 	if (operand._tag !== "Literal") {
@@ -354,52 +342,30 @@ const nextField = (node: Node): string => {
 /**
  * Finds values of the fields that make a simple condition true. It splits on
  * one field at a time, and tries one value from each cell of the field. Each
- * step reads the whole condition, so the budget counts its size.
+ * step reads the whole condition.
  */
 const searchNode = (
 	search: Search,
 	node: Node,
-	state: SearchState,
-	assignment: ReadonlyArray<readonly [string, unknown]>,
-): Found => {
-	if (node._tag === "True") {
-		return { assignment: Option.some(assignment), state }
-	}
-	if (node._tag === "False") {
-		return { assignment: Option.none(), state }
-	}
+	assignment: Assignment,
+): Option.Option<Assignment> => {
+	if (node._tag === "True") return Option.some(assignment)
+	if (node._tag === "False") return Option.none()
 	const key = Algebra.keyOf(node)
-	if (search.failed.has(key)) {
-		return { assignment: Option.none(), state }
-	}
-	if (state.steps + node.size > search.budget) {
-		throw new OutOfBudget()
-	}
+	if (search.failed.has(key)) return Option.none()
 	const field = nextField(node)
-	// Each call fixes one field. There are at most 16 fields in a search.
 	const result = Arr.reduce(
 		search.cells(field),
-		{
-			assignment: Option.none(),
-			state: { steps: state.steps + node.size },
-		} as Found,
-		(before, cell): Found => {
-			if (Option.isSome(before.assignment)) {
-				return before
-			}
-			const steps = before.state.steps + node.size
-			if (steps > search.budget) {
-				throw new OutOfBudget()
-			}
-			return searchNode(search, fix(node, field, cell, search), { steps }, [
-				...assignment,
-				[field, cell],
-			])
-		},
+		Option.none<Assignment>(),
+		(before, cell) =>
+			Option.isSome(before)
+				? before
+				: searchNode(search, fix(node, field, cell, search), [
+						...assignment,
+						[field, cell],
+					]),
 	)
-	if (Option.isNone(result.assignment)) {
-		search.failed.add(key)
-	}
+	if (Option.isNone(result)) search.failed.add(key)
 	return result
 }
 
@@ -505,13 +471,8 @@ export const satisfiable = (
 	if (node.opaque) {
 		return satisfiability.Unknown({ reason: "predicate" })
 	}
-	const budget = Limits.searchSteps
-	const fields = Limits.searchFields
 	const constants = constantsOf(node)
-	// The search calls itself one time for each field that it fixes.
-	if (constants.size > fields) {
-		return satisfiability.Unknown({ reason: "budget" })
-	}
+
 	// The cells of each field, in a native `Map` as the constants are.
 	const cells = new Map<string, ReadonlyArray<unknown>>()
 	const search: Search = {
@@ -522,12 +483,8 @@ export const satisfiable = (
 			if (made !== undefined) {
 				return made
 			}
-			// The cells come from the constants, so many constants are work
-			// that the budget must count before the cells are made.
 			const known = constants.get(field) ?? new Set<Nodes.Scalar>()
-			if (known.size > budget) {
-				throw new OutOfBudget()
-			}
+
 			const found = cellsOf(
 				Catalog.lookup(catalog, field)?.kinds ?? Catalog.anyKinds,
 				Array.from(known),
@@ -535,19 +492,11 @@ export const satisfiable = (
 			cells.set(field, found)
 			return found
 		},
-		budget,
 	}
-	try {
-		const found = searchNode(search, Algebra.simplify(node), { steps: 0 }, [])
-		return Option.match(found.assignment, {
-			onNone: () => satisfiability.Unsatisfiable(),
-			onSome: (assignment) =>
-				satisfiability.Satisfiable({ example: exampleOf(assignment) }),
-		})
-	} catch (error) {
-		if (error instanceof OutOfBudget) {
-			return satisfiability.Unknown({ reason: "budget" })
-		}
-		throw error
-	}
+	const found = searchNode(search, Algebra.simplify(node), [])
+	return Option.match(found, {
+		onNone: () => satisfiability.Unsatisfiable(),
+		onSome: (assignment) =>
+			satisfiability.Satisfiable({ example: exampleOf(assignment) }),
+	})
 }

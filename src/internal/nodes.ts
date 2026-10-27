@@ -6,11 +6,6 @@
  * - `depth`: the number of levels;
  * - `opaque`: the node has a predicate.
  *
- * The constructor stops a node that goes past `conditionNodes` or
- * `conditionDepth`. So a walk over any condition visits at most
- * `conditionNodes` nodes and goes at most `conditionDepth` levels down, and it
- * needs no memo.
- *
  * The facts are private fields, so `Equal` and `Hash` do not read them: two
  * nodes with the same data are equal.
  */
@@ -22,7 +17,6 @@ import * as Data from "effect/Data"
 import type * as Effect from "effect/Effect"
 import { hasProperty } from "effect/Predicate"
 import * as Schema from "effect/Schema"
-import * as Limits from "./limits.ts"
 
 /** A value that a condition can compare. */
 export type Scalar = string | number | boolean | null
@@ -88,24 +82,13 @@ export const isScalar = (value: unknown): value is Scalar =>
 	typeof value === "boolean"
 
 /**
- * Checks a field path: a string with at most `fieldPathParts` parts. A longer
- * path is never a field of a resource or of the principal.
+ * Checks the text of a field path. Domain binding checks its fields.
  */
 const checkPath = (path: unknown): string => {
 	if (typeof path !== "string") {
 		throw new Error("A field path must be a string")
 	}
-	const most = Limits.fieldPathParts
-	const parts = path.split(".", most + 1).length
-	if (parts > most) {
-		throw Limits.exceeded(
-			"A field path",
-			"fieldPathParts",
-			"parts",
-			parts,
-			most,
-		)
-	}
+
 	return path
 }
 
@@ -137,7 +120,6 @@ const checkOperands = (values: unknown): ReadonlyArray<Operand> => {
 	if (!Array.isArray(values)) {
 		throw new Error("A list of operands must be an array")
 	}
-	checkWeight({ ...leaf, weight: 1 + values.length })
 	return Object.freeze(Arr.map(values, checkOperand))
 }
 
@@ -152,41 +134,20 @@ const leaf: Facts = { size: 1, weight: 1, depth: 1, opaque: false }
 
 /**
  * The facts of a test with values, as `In` and `Under`. Each value counts in
- * the weight, since a walk that reads the test reads its values too. It stops
- * a test past the limits.
+ * the weight, since a walk that reads the test reads its values too.
  */
-const valuesFacts = (values: ReadonlyArray<Operand>): Facts =>
-	checkWeight({ ...leaf, weight: 1 + values.length })
+const valuesFacts = (values: ReadonlyArray<Operand>): Facts => ({
+	...leaf,
+	weight: 1 + values.length,
+})
 
-const checkWeight = (facts: Facts): Facts => {
-	if (facts.weight > Limits.conditionNodes) {
-		throw Limits.exceeded(
-			"A condition",
-			"conditionNodes",
-			"nodes and values",
-			facts.weight,
-			Limits.conditionNodes,
-		)
-	}
-	return facts
-}
-
-/** The facts of a node with children. It stops a node past the limits. */
+/** The facts of a node with children. */
 const factsOf = (children: ReadonlyArray<Node>): Facts => {
 	const size = Arr.reduce(children, 1, (total, child) => total + child.size)
 	const weight = Arr.reduce(children, 1, (total, child) => total + child.weight)
-	checkWeight({ ...leaf, weight })
 	const depth =
 		1 + Arr.reduce(children, 0, (top, child) => Math.max(top, child.depth))
-	if (depth > Limits.conditionDepth) {
-		throw Limits.exceeded(
-			"A condition",
-			"conditionDepth",
-			"levels",
-			depth,
-			Limits.conditionDepth,
-		)
-	}
+
 	return {
 		size,
 		weight,
@@ -243,7 +204,7 @@ abstract class Base extends Data.Class {
 	/**
 	 * The number of nodes and of the values of their `In` and `Under` tests,
 	 * with a shared child counted for each place. A walk that reads the tests
-	 * does this much work, so the limits of the nodes count it.
+	 * does this much work.
 	 */
 	get weight(): number {
 		return this.#facts.weight
@@ -352,7 +313,6 @@ const checkChildren = (conditions: unknown): ReadonlyArray<Node> => {
 	if (!Array.isArray(conditions)) {
 		throw new Error("The children of a node must be an array")
 	}
-	checkWeight({ ...leaf, weight: 1 + conditions.length })
 	const children = Array.from(conditions as ReadonlyArray<unknown>)
 	if (!Arr.every(children, isNode)) {
 		throw notNode()
@@ -495,7 +455,7 @@ const operandJson = (operand: Operand): unknown => {
 	return { _tag: "Literal", value: operand.value }
 }
 
-/** Gives the JSON form of a bounded condition with no predicate. */
+/** Gives the JSON form of a condition with no predicate. */
 export const toJson = (node: Node): unknown => {
 	switch (node._tag) {
 		case "True":

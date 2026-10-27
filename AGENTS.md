@@ -34,8 +34,8 @@ material. Do not change it unless the user asks.
 - Source files import each other with `.ts` extensions. Node.js runs `.ts` files
   itself, so the examples need no other runner.
 - Public entry points: `src/index.ts`, and one module for each concept:
-  `Resource`, `Domain`, `Condition`, `Policy`, `Decision`, `Authorizer`,
-  `Limits`. The types and the builder of rules are in `Policy`.
+  `Resource`, `Domain`, `Condition`, `Policy`, `Decision`, `Authorizer`. The
+  types and the builder of rules are in `Policy`.
 - `src/HttpApi.ts` is a separate entry point, because `effect/http-api` is not
   stable. Do not export it from `src/index.ts`.
 - A public module in `src/` keeps the public types, the docs, and short exports.
@@ -52,13 +52,13 @@ material. Do not change it unless the user asks.
   resource, and a condition may only use the fields of its resource and of the
   principal. Keep these checks in the types. Every builder is bound to a domain.
 - Read paths come from Schema `fields`, not the type of a class instance. Paths
-  have at most five parts. Getters, methods, array items and dynamic record keys
-  are not read paths. A predicate may use the full class value.
+  have no library depth cap. Getters, methods, array items and dynamic record
+  keys are not read paths. A predicate may use the full class value.
 - Field permissions take a real path, a parent path or `"*"`. Do not add field
   patterns or a second API for deeper paths.
 - A policy or condition Codec reads and writes JSON text only. Bind decoded
-  nodes to the domain before returning them. Rule `meta` is bounded JSON data;
-  the domain has no meta Codec.
+  nodes to the domain before returning them. Rule `meta` is JSON data; the
+  domain has no meta Codec.
 - The caller gives stable, checked principal and resource values. Read only own
   data fields. Do not copy or encode a principal to load its policy. A business
   layer owns any cache, its keys, its expiry and its invalidation.
@@ -93,14 +93,14 @@ material. Do not change it unless the user asks.
     `Data.taggedEnum` for small plain values, and `Schema` classes for errors
     and for data that comes from outside.
   - A node of a condition is a class in `src/internal/nodes.ts`. Only its
-    constructor makes one, also for JSON. The constructor checks the fixed
-    limits. It keeps the size, depth and predicate mark in private fields. Size
-    includes nodes, operands and list items. Copy arrays and JSON meta at this
-    boundary; reuse valid child nodes. A plain object or a spread is not a node.
+    constructor makes one, also for JSON. The constructor checks the node shape.
+    It keeps the size, depth and predicate mark in private fields. Size includes
+    nodes, operands and list items. Copy arrays and JSON meta at this boundary;
+    reuse valid child nodes. A plain object or a spread is not a node.
   - Do not make prototypes by hand. Do not write `Equal.symbol`, `Hash.symbol`
     or `NodeInspectSymbol` methods, and do not use `Object.create`. Effect data
-    types give equality, hashing and `pipe`. The fixed depth limits keep those
-    walks small. Do not add a custom tree hash or equality runner.
+    types give equality, hashing and `pipe`. Do not add a custom tree hash or
+    equality runner.
   - Do not mark values with a `TypeId`. A guard tests the class with
     `instanceof`.
   - Use the tools that Effect gives to its users, such as `Function.dual`,
@@ -111,14 +111,12 @@ material. Do not change it unless the user asks.
   must live longer belongs to a value, such as a layer. A memo that lives for
   one walk is a `Map`, not a `WeakMap`: its keys stay alive until the walk ends,
   and a `WeakMap` is slower.
-- Use bounded recursion for trees and Effect for effectful work. Check depth
-  before going to a child of an external input. Do not add a generic runner or
-  promise to support arbitrary depth.
-- The fixed limits are: policy depth 32; condition and residual depth 64; paths
-  five parts; meta depth 16; 10000 structural units per policy or condition;
-  1000 catalog fields per Schema; JSON text 1000000 UTF-16 code units, depth 256
-  and 100000 items; analysis 16 fields and 100000 steps. Shared parts count each
-  time they appear. A domain may not raise a limit.
+- Use direct tree walks and Effect for effectful work. Do not add a generic
+  runner or promise to support arbitrary depth.
+- The application owns input size, depth, time and memory budgets. Do not add
+  runtime size, depth, field-count or search-step caps. Keep checks for valid
+  JSON, cycles, node shapes, domain identity and fields. Use tail recursion for
+  path types and scalar unions; the compiler sets its own limits.
 - Catalogs describe fixed fields only. Complex Schema parts are opaque: their
   fields are not read by plain conditions. Coverage returns `Unknown` with
   reason `"schema"` when it can not prove a result for a Schema. Unknown never

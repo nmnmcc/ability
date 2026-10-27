@@ -1,6 +1,6 @@
 {
 	"name": "@nmnmcc/ability",
-	"version": "3.0.0",
+	"version": "3.1.0",
 	"description": "Typed, composable authorization policies for Effect programs.",
 	"license": "Apache-2.0",
 	"type": "module",
@@ -25,7 +25,6 @@
 		"./Decision": "./dist/Decision.js",
 		"./Domain": "./dist/Domain.js",
 		"./HttpApi": "./dist/HttpApi.js",
-		"./Limits": "./dist/Limits.js",
 		"./Policy": "./dist/Policy.js",
 		"./Resource": "./dist/Resource.js"
 	},

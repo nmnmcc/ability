@@ -15,7 +15,6 @@ import * as Condition from "../Condition.ts"
 import type * as Domain from "../Domain.ts"
 import type * as Policy from "../Policy.ts"
 import * as Bind from "./bind.ts"
-import * as Limits from "./limits.ts"
 import * as Nodes from "./nodes.ts"
 import * as PolicyJson from "./policy-json.ts"
 import * as PolicyNodes from "./policy-nodes.ts"
@@ -57,33 +56,18 @@ export class PolicyData<
 /** The node of a policy, with no types, for the code below. */
 export const nodeOf = (policy: Any): PolicyNodes.Node => policy.node as never
 
-/** Makes a policy from a tree whose constructors checked the fixed limits. */
+/** Makes a policy from a tree of checked nodes. */
 const fromNode = (domain: Domain.Any, node: PolicyNodes.Node): any =>
 	new PolicyData({ domain, node })
-
-/**
- * The error when a rule does not fit its domain. It gives the first problem with its path.
- */
-export class PolicyError extends Schema.TaggedError<
-	PolicyError,
-	{ readonly brand: unique symbol }
->("@nmnmcc/ability/Policy/PolicyError")("PolicyError", {
-	issues: Schema.Array(
-		Schema.Struct({
-			path: Schema.Array(Schema.Union([Schema.String, Schema.Finite])),
-			message: Schema.String,
-		}),
-	),
-	message: Schema.String,
-}) {}
 
 /** Makes a policy from a list of rules, and binds them to the domain. */
 const fromRules = (
 	domain: Domain.Any,
 	values: ReadonlyArray<RuleData.Rule>,
+	makeError: typeof Policy.PolicyError.make,
 	options?: Options,
 ): Any => {
-	// The constructor takes only rules, and it stops a list past the limits.
+	// The constructor takes only rules.
 	const node = new PolicyNodes.Rules({
 		algorithm: options?.algorithm ?? "denyOverrides",
 		rules: values,
@@ -104,7 +88,7 @@ const fromRules = (
 	// Bind once at the entry to the domain.
 	const issues = Bind.treeIssues(domain, node)
 	if (issues.length > 0) {
-		throw PolicyError.make({
+		throw makeError({
 			issues: Arr.map(issues, (issue) => ({
 				path: Arr.map(issue.path, (part) =>
 					typeof part === "number" ? part : String(part),
@@ -117,38 +101,29 @@ const fromRules = (
 	return fromNode(domain, node)
 }
 
-/** Makes a policy from a generator function that gives rules. */
+/**
+ * Makes a policy from a generator function that gives rules. The public module
+ * gives its error constructor here to avoid a runtime import cycle.
+ */
 export const define =
-	(domain: Domain.Any, options?: Options) =>
+	(
+		domain: Domain.Any,
+		makeError: typeof Policy.PolicyError.make,
+		options?: Options,
+	) =>
 	(body: (builder: unknown) => Generator<unknown, unknown, unknown>): Any => {
 		const iterator = body(RuleData.builder(domain))
 		// Each rule goes back into the generator, as `yield*` gives it.
-		const collected = Arr.unfold(
-			{ result: iterator.next(), units: 1 },
-			({ result, units }) => {
-				if (result.done === true) return Option.none()
-				if (!RuleData.isRule(result.value)) {
-					iterator.return(undefined)
-					throw new globalThis.Error("A policy generator must give rules")
-				}
-				const size = units + result.value.weight
-				if (size > Limits.policyNodes) {
-					iterator.return(undefined)
-					throw Limits.exceeded(
-						"A policy",
-						"policyNodes",
-						"units",
-						size,
-						Limits.policyNodes,
-					)
-				}
-				return Option.some([
-					result.value,
-					{ result: iterator.next(result.value), units: size },
-				] as const)
-			},
-		)
-		return fromRules(domain, collected, options) as never
+		const collected = Arr.unfold(iterator.next(), (result) => {
+			if (result.done === true) return Option.none()
+			if (!RuleData.isRule(result.value)) {
+				iterator.return(undefined)
+				throw new globalThis.Error("A policy generator must give rules")
+			}
+
+			return Option.some([result.value, iterator.next(result.value)] as const)
+		})
+		return fromRules(domain, collected, makeError, options) as never
 	}
 
 const sameDomain = (policies: ReadonlyArray<Any>): Domain.Any => {
@@ -173,8 +148,6 @@ const sameDomain = (policies: ReadonlyArray<Any>): Domain.Any => {
 const fromParts = (policies: ReadonlyArray<Any>, node: PolicyNodes.Node): any =>
 	fromNode(sameDomain(policies), node)
 
-// The constructors of the nodes stop a tree past `policyDepth` or
-// `policyNodes`.
 export const combine =
 	(tag: "All" | "Any" | "FirstOf") =>
 	(policies: ReadonlyArray<Any>): any =>
